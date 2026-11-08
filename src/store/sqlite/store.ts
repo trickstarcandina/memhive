@@ -298,6 +298,17 @@ export class SqliteStore implements Store {
   listRecentSummaries(projectId: string, limit: number): Summary[] {
     return (this.db.prepare('SELECT * FROM summaries WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToSummary);
   }
+  getSummaries(ids: string[]): Summary[] {
+    if (ids.length === 0) return [];
+    const byId = new Map((this.db.prepare(`SELECT * FROM summaries WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as Row[]).map((r) => [r.id, rowToSummary(r)]));
+    return ids.map((id) => byId.get(id)).filter((x): x is Summary => !!x);
+  }
+  resolveSummaryIdPrefix(prefix: string): string | null {
+    if (prefix.length < 4) return null;
+    // shortcut: the tail match scans summaries (about one per session, far fewer than observations); index it like short_id if that grows
+    const rows = this.db.prepare('SELECT id FROM summaries WHERE (id >= @p AND id < @p || char(1114111)) OR substr(id, -length(@p)) = @p LIMIT 2').all({ p: prefix.toLowerCase() }) as Row[];
+    return rows.length === 1 ? rows[0].id : null;
+  }
   searchSummariesFts(query: string, f: SearchFilters): SearchHit[] {
     const q = toFtsQuery(query); if (!q) return [];
     const parts = ['s.project_id = ?']; const params: unknown[] = [f.projectId];

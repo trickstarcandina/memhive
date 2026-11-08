@@ -8,7 +8,7 @@ import { shortId } from '../shared/ids.js';
 import { resolvePaths } from '../shared/paths.js';
 import { envDisabled } from '../shared/optout.js';
 import { VERSION } from '../shared/version.js';
-import { OBSERVATION_TYPES, type Observation } from '../store/types.js';
+import { OBSERVATION_TYPES, type Observation, type SearchResult, type Summary } from '../store/types.js';
 import { formatFull, formatIndex } from './format.js';
 
 // Accepts the `#abcd1234` form the context footer and index print.
@@ -40,15 +40,15 @@ export function createMcpServer(deps: { client: DaemonClient | null; cwd: string
   const tool: typeof server.registerTool = (name, config, cb) => server.registerTool(name, config, (async (...a: unknown[]) => (envDisabled(deps.env ?? process.env) ? textResult('memhive disabled (MEMHIVE_DISABLED is set); nothing was read or saved.') : (cb as (...x: unknown[]) => unknown)(...a))) as typeof cb);
 
   tool('search', {
-    description: 'Step 1 of 3. Search past observations for this project. Returns a compact index (ids, types, titles). Follow with timeline and get_observations.',
+    description: 'Step 1 of 3. Search past observations and session summaries for this project. Returns a compact index (ids, types, titles; summaries have type session-summary). Follow with timeline and get_observations.',
     inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().max(200).optional(), since: z.string().max(64).optional().describe('ISO date or relative like 7d, 12h'), project: z.string().max(1000).optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
   }, async (a) => {
     const q = new URLSearchParams({ q: a.query, project_key: a.project ?? (await projectKey()), limit: String(a.limit) });
     if (a.type) q.set('type', a.type);
     if (a.user) q.set('user', a.user);
     if (a.since) q.set('since', a.since);
-    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/search?${q}`);
-    return textResult(formatIndex(r.observations));
+    const r = await rpc.request<{ results?: SearchResult[]; observations: Observation[] }>('GET', `/v1/search?${q}`);
+    return textResult(formatIndex(r.results ?? r.observations));
   });
 
   tool('timeline', {
@@ -60,11 +60,11 @@ export function createMcpServer(deps: { client: DaemonClient | null; cwd: string
   });
 
   tool('get_observations', {
-    description: 'Step 3 of 3. Fetch full details for selected observation ids (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
+    description: 'Step 3 of 3. Fetch full details for selected observation or session-summary ids (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
     inputSchema: { ids: z.array(id).min(1).max(50) },
   }, async (a) => {
-    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}`);
-    return textResult(formatFull(r.observations));
+    const r = await rpc.request<{ observations: Observation[]; summaries?: Summary[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}`);
+    return textResult(formatFull(r.observations, r.summaries ?? []));
   });
 
   tool('save_memory', {

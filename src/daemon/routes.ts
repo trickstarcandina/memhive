@@ -83,7 +83,8 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const project = store.getProjectByKey(key); if (!project) return ok({ observations: [] });
     const type = q.get('type'); if (type && !OBSERVATION_TYPES.includes(type as ObservationType)) return err(400, 'bad_type', `type must be one of ${OBSERVATION_TYPES.join(', ')}`);
     const f: SearchFilters = { projectId: project.id, type: (type as ObservationType) ?? undefined, userId: q.get('user') ?? undefined, since: parseSince(q.get('since')), limit: Math.min(Math.max(Number(q.get('limit') ?? 20) || 20, 1), 100) };
-    return ok({ observations: await hybridSearch(store, ctx.embedder, q.get('q') ?? '', f) });
+    const results = await hybridSearch(store, ctx.embedder, q.get('q') ?? '', f);
+    return ok({ results, observations: results.filter((r) => r.kind === 'observation') });   // observations: for 0.1 clients
   }
 
   if (method === 'POST' && path === '/v1/observations/pin') {
@@ -94,7 +95,14 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     return ok({ observation: store.getObservations([id])[0] });
   }
 
-  if (method === 'GET' && path === '/v1/observations') return ok({ observations: store.getObservations(resolveIds(ctx, q.get('ids') ?? '')) });
+  if (method === 'GET' && path === '/v1/observations') {
+    const obsIds: string[] = []; const sumIds: string[] = [];
+    for (const id of (q.get('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+      const o = store.resolveIdPrefix(id); const sm = o ? null : store.resolveSummaryIdPrefix(id);
+      if (sm) sumIds.push(sm); else obsIds.push(o ?? id);
+    }
+    return ok({ observations: store.getObservations(obsIds), summaries: store.getSummaries(sumIds) });
+  }
 
   if (method === 'GET' && path === '/v1/timeline') {
     const [anchor] = resolveIds(ctx, q.get('anchor') ?? ''); if (!anchor) return err(400, 'missing_anchor', 'anchor required');

@@ -7,6 +7,8 @@ export type ContextObservation = Observation & { branch: string | null };
 export interface Summary { id: string; projectId: string; sessionId: string; userId: string; request: string; learned: string; completed: string; nextSteps: string; createdAt: string; origin: 'local' | 'hub'; syncedAt: string | null }
 export interface SearchFilters { projectId: string; type?: ObservationType; userId?: string; since?: string; limit: number }
 export interface SearchHit { id: string; score: number }
+/** One search result: an observation or a session summary. */
+export type SearchResult = (Observation & { kind: 'observation' }) | (Summary & { kind: 'summary' });
 /** Per-project sync bookkeeping; times are epoch ms. */
 export interface SyncState { projectId: string; pullCursor: number; hubEpoch: string | null; backoffUntil: number | null; backoffMs: number | null; strikes: number; lastError: string | null; lastErrorAt: number | null; lastPushAt: number | null; lastPullAt: number | null; quarantined: number }
 export type SyncStatePatch = Partial<Pick<SyncState, 'backoffUntil' | 'backoffMs' | 'strikes' | 'lastError' | 'lastErrorAt' | 'lastPushAt' | 'lastPullAt'>>;
@@ -59,6 +61,8 @@ export interface Store {
   getObservationEmbeddings(ids: string[]): Map<string, number[]>;   // only ids that have a vector
   insertSummaries(s: Summary[]): void;
   listRecentSummaries(projectId: string, limit: number): Summary[];
+  getSummaries(ids: string[]): Summary[];                  // order = input order
+  resolveSummaryIdPrefix(prefix: string): string | null;   // unique prefix or 8-char tail of a summary id, else null
   searchSummariesFts(query: string, f: SearchFilters): SearchHit[];
   listUnsynced(table: SyncTable, projectId: string, limit: number, exclude?: Iterable<string>): Array<Session | Observation | Summary>;
   bumpPushAttempts(table: SyncTable, ids: string[]): Map<string, number>;   // returns the new count per id

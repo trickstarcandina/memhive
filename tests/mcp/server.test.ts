@@ -50,6 +50,18 @@ describe('mcp', () => {
     const full = text(await client.callTool({ name: 'get_observations', arguments: { ids: [id8] } }));
     expect(full).toContain('Use pnpm, not npm');
   });
+  it('search and get_observations include session summaries', async () => {
+    const dc = new DaemonClient(h.info);
+    const key = (await dc.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
+    const store = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' }).store;
+    const p = store.getProjectByKey(key)!; const sid = store.getSessionByHost('manual', p.id)!.id;
+    store.insertSummaries([{ id: '0190aaaa-bbbb-7ccc-8ddd-eeee77777777', projectId: p.id, sessionId: sid, userId: 'local', request: 'migrate the quokka service', learned: 'quokka needs node 22', completed: 'done', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null }]);
+    store.close();
+    const idx = text(await client.callTool({ name: 'search', arguments: { query: 'quokka' } }));
+    expect(idx).toContain('session-summary'); expect(idx).toContain('#77777777');
+    const full = text(await client.callTool({ name: 'get_observations', arguments: { ids: ['77777777'] } }));
+    expect(full).toContain('Learned: quokka needs node 22');
+  });
   it('search with no hits says so', async () => {
     expect(text(await client.callTool({ name: 'search', arguments: { query: 'zzzz-nothing' } }))).toContain('No observations');
   });

@@ -4,7 +4,7 @@ import { resolvePaths } from '../../shared/paths.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
 import { DaemonClient } from '../../daemon/client.js';
 import { formatIndex } from '../../mcp/format.js';
-import type { Observation } from '../../store/types.js';
+import type { Observation, SearchResult } from '../../store/types.js';
 
 export async function searchCommand(args: string[], io: CliIo, opts: { home?: string; cwd?: string } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
@@ -19,7 +19,7 @@ export async function searchCommand(args: string[], io: CliIo, opts: { home?: st
   const key = (await client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(cwd)}`)).project.key;
   const q = new URLSearchParams({ q: query, project_key: key, limit: String(limit) });
   for (const k of ['type', 'user', 'since']) if (typeof flags[k] === 'string') q.set(k, flags[k] as string);
-  const r = await client.request<{ observations: Observation[] }>('GET', `/v1/search?${q}`);
-  io.stdout(formatIndex(r.observations) + '\n');
+  const r = await client.request<{ results?: SearchResult[]; observations: Observation[] }>('GET', `/v1/search?${q}`);
+  io.stdout(formatIndex(r.results ?? r.observations) + '\n');
   return 0;
 }
