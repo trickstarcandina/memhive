@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { installCommand } from '../../src/cli/commands/install.js';
@@ -60,5 +60,16 @@ describe('install', () => {
       for (let i = 0; i < 40 && readDaemonInfo(f.home); i++) await new Promise((res) => setTimeout(res, 50));
       expect(readDaemonInfo(f.home)).toBeNull();
     } finally { await h.close(); }
+  });
+});
+
+describe('uninstall', () => {
+  it('removes the rendered plugin marketplace but keeps memory', async () => {
+    const f = fixture(); const r = io();
+    expect(await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], r.io, { home: f.home, env: f.env, run, root: f.root })).toBe(0);
+    const { uninstallCommand } = await import('../../src/cli/commands/uninstall.js');
+    expect(await uninstallCommand([], r.io, { home: f.home, env: f.env, run })).toBe(0);
+    expect(existsSync(path.join(f.home, 'marketplace'))).toBe(false);
+    expect(existsSync(path.join(f.home, 'settings.json'))).toBe(true);
   });
 });
