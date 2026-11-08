@@ -6,7 +6,7 @@ import { VERSION } from '../shared/version.js';
 
 export interface PushBody { projectKey: string; projectName: string; sessions: Session[]; observations: HubObservation[]; summaries: Summary[] }
 export interface PushResult { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> }
-export interface PullResult { sessions: Session[]; observations: HubObservation[]; summaries: Summary[]; next_seq: number; has_more: boolean }
+export interface PullResult { sessions: Session[]; observations: HubObservation[]; summaries: Summary[]; next_seq: number; has_more: boolean; max_seq: number }   // max_seq: highest seq of the project, so a client whose cursor is past it knows the hub was reset
 
 const ok = (body: unknown, status = 200) => ({ status, body });
 const err = (status: number, code: string, message: string) => ({ status, body: { error: { code, message } } });
@@ -76,12 +76,12 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const since = intParam(q.get('since'), 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = intParam(q.get('limit'), 500, 1, 1000);
     const project = await store.getProjectByKey(key);
-    const empty: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false };
+    const empty: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false, max_seq: 0 };
     if (!project) return ok(empty);
     const entries = await store.listSyncLog(project.id, since, limit + 1);
     const page = entries.slice(0, limit);
     const ids = (t: string) => page.filter((e) => e.table === t).map((e) => e.rowId);
-    const result: PullResult = { sessions: await store.getSessions(ids('sessions')), observations: await store.getObservations(ids('observations')), summaries: await store.getSummaries(ids('summaries')), next_seq: page.length ? page[page.length - 1].seq : since, has_more: entries.length > limit };
+    const result: PullResult = { sessions: await store.getSessions(ids('sessions')), observations: await store.getObservations(ids('observations')), summaries: await store.getSummaries(ids('summaries')), next_seq: page.length ? page[page.length - 1].seq : since, has_more: entries.length > limit, max_seq: await store.maxSeq(project.id) };
     return ok(result);
   }
 

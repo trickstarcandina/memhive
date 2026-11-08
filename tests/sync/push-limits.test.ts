@@ -126,6 +126,17 @@ describe('push failure handling', () => {
 });
 
 describe('pull robustness', () => {
+  it('a cursor past the hub max_seq (hub reset) restarts the pull and re-queues local rows for push', async () => {
+    const t = await setup({ dims: null });
+    addObs(t, 1, null);
+    await t.engine.push(t.project);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
+    t.store.setPullCursor(t.project.id, 999);
+    await t.engine.pull(t.project, 2000);
+    expect(t.store.getPullCursor(t.project.id)).toBe(await t.hs.maxSeq((await t.hs.getProjectByKey(t.project.key))!.id));
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
+    expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(1);
+  });
   it('a pulled row that cannot be stored is skipped; the rest apply and the cursor advances', async () => {
     const good = { id: newId(), projectId: 'x', userId: 'bob', host: 'codex', hostSessionId: 'h', cwd: '/b', startedAt: new Date().toISOString(), endedAt: null, syncedAt: null };
     const bad = { ...good, id: newId(), hostSessionId: 'h2', host: null };   // NOT NULL violation locally

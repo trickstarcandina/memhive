@@ -143,6 +143,12 @@ export class SyncEngine implements SyncHooks {
       let page;
       try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now())); }
       catch (e) { this.failed(project, 'pull', e); break; }
+      // A cursor past the hub's last seq means the hub lost its data (restored or recreated): pull from 0 and push local rows again.
+      // An older hub without max_seq skips this check.
+      if (typeof page.max_seq === 'number' && since > page.max_seq) {
+        logger.warn('pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
+        store.resetProjectSync(project.id); since = 0; this.schedulePush(project.id); continue;
+      }
       const now = new Date().toISOString();
       for (const s of page.sessions) if (!store.getSession(s.id) && apply(s.id, () => store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }))) applied++;
       // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.
