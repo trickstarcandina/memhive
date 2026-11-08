@@ -3,6 +3,7 @@ const TAG = /<\s*(\/\s*)?private\b[^>]*>/gi;
 const DATA_IMAGE = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi;
 const MAX_DEPTH = 20;
 const TAIL = 100;
+const PRE_CAP = 256 * 1024;
 
 // Scanner, not regex: nested blocks must not leak their inner text.
 export function stripPrivate(text: string): string {
@@ -35,26 +36,31 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bmh_[A-Za-z0-9_-]{20,}/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
 ];
-// Quantifiers are bounded and the keyword anchors the match, so scanning stays linear (ReDoS).
-// Quoted values are escape-aware; an unclosed quote redacts to end of line.
-// Unquoted values are redacted only after `=` (a `:` is usually a type annotation).
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40}["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|([^\s"'`(),;]{6,512})(?![^\s"'`,;]{0,64}\())/gi;
-// Bare references, not literals: `$VAR`, `process.env.X`, `config.token`.
-const REFERENCE = /^(?:\$|process\.|import\.meta\.|this\.|config\.|env\.|os\.environ)/i;
+// Keyword-anchored, no nested quantifiers: scanning stays linear (ReDoS). Quoted values are
+// escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token.
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|([^\s"'`,;(){}]{4,}))/gi;
+// Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
+const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
+// A TS/JSON-ish type after `name:` (`string`, `Foo`, `Foo[]`, `Map<a,b>`, `a | b`), not a value.
+const TYPE_PART = /^(?:string|number|boolean|any|unknown|object|null|undefined|never|void|[A-Z]\w*(?:<.*)?|\w+\[\])$/;
+const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
 
 export function redactSecrets(text: string): string {
   let out = text;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '<redacted>');
-  return out.replace(SECRET_ASSIGN, (m, pre: string, sep: string, dq?: string, sq?: string, bare?: string) => {
+  return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
     const q = dq ? '"' : sq ? "'" : '';
-    if (q) return `${pre}${q}<redacted>${q}`;
-    if (sep !== '=' || !bare || REFERENCE.test(bare)) return m;
-    return `${pre}<redacted>`;
+    if (q) return `${name}${pre}${q}<redacted>${q}`;
+    if (!bare || REFERENCE.test(bare)) return m;
+    if (str[offset + m.length] === '(') return m; // call, e.g. getToken()
+    if (COUNT_KEY.test(str.slice(Math.max(0, offset - 12), offset) + name)) return m;
+    if (sep === ':' && bare.split('|').every((p) => TYPE_PART.test(p)) && TYPE_FOLLOW.test(str.slice(offset + m.length))) return m;
+    return `${name}${pre}<redacted>`;
   });
 }
 
 const SECRET_KEY = /secret|token|passw(or)?d|api[_-]?key|private[_-]?key|authorization|cookie/i;
-const COUNT_KEY = /(^|_)(count|max|min|limit|len|length)s?$|tokens?_?(count|used)|max_?tokens/i;
+const COUNT_KEY = /(^|_)(count|max|min|limit|len|length)s?$|tokens?_?(count|used)|max_?tokens|(input|output|total)_?tokens/i;
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
@@ -66,8 +72,8 @@ function truncate(s: string, max: number): string {
 
 function sanitizeString(s: string, max: number): string {
   const noImages = stripPrivate(s).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
-  // Cap first so redaction never scans unbounded input.
-  return redactSecrets(truncate(noImages, max));
+  // Hard pre-cap bounds the scan; redact before truncating so a secret is never cut into a fragment.
+  return truncate(redactSecrets(noImages.slice(0, PRE_CAP)), max);
 }
 
 export function sanitizeToolPayload(value: unknown, maxChars = 16000, depth = 0): unknown {

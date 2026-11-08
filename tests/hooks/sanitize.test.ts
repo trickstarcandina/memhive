@@ -96,4 +96,22 @@ describe('redactSecrets', () => {
     expect(sanitizeToolPayload({ password: 'x', n: { apiKey: 5 } })).toEqual({ password: R, n: { apiKey: R } });
     expect(sanitizeToolPayload({ max_tokens: 2048, maxTokens: 2048 })).toEqual({ max_tokens: 2048, maxTokens: 2048 });
   });
+  it('redacts unquoted YAML/.env values but not types', () => {
+    expect(redactSecrets('token: abcdefghij')).toBe('token: ' + R);
+    expect(redactSecrets('password: hunter2hunter')).toBe('password: ' + R);
+    expect(redactSecrets('api_key=abc1')).toBe('api_key=' + R);
+    for (const c of ['password: string;', 'token: string | null,', 'secret: Foo[];', 'maxTokens: number = 100000', 'token: Map<string, number>;', 'TOKEN_COUNT=1000000', 'max_tokens=100000']) expect(redactSecrets(c)).toBe(c);
+  });
+  it('redacts a long bare value to its end and judges references on the whole token', () => {
+    expect(redactSecrets('token=' + 'a'.repeat(900) + ' next')).toBe('token=' + R + ' next');
+    expect(redactSecrets('token=this.x;rm')).toBe('token=this.x;rm');
+    expect(redactSecrets('token=$TOKEN')).toBe('token=$TOKEN');
+    expect(redactSecrets('token=$TOKEN/zzzzzz')).toBe('token=' + R);
+  });
+  it('leaves no fragment of a secret straddling the truncation point', () => {
+    const secret = 'sk-ant-' + 'abcdefghij'.repeat(3);
+    const out = sanitizeToolPayload('x'.repeat(190) + ' ' + secret + ' ' + 'y'.repeat(600), 300) as string;
+    expect(out).not.toMatch(/abcdefgh/);
+    expect(out).toContain('<redacted');
+  });
 });

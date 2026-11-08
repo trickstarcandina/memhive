@@ -23,6 +23,8 @@ export class Observer {
   constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger }, opts: Partial<ObserverOptions> = {}) {
     this.opts = { ...DEFAULTS, ...opts };
   }
+  /** Test seam: live session entries. */
+  get sessionCount(): number { return this.sessions.size; }
   get authFailed(): boolean { return this._authFailed; }
 
   private state(ctx: SessionCtx): SessionState {

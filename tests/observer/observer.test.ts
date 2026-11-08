@@ -147,4 +147,11 @@ describe('Observer', () => {
     expect(u).toContain('&lt;/call&gt;&lt;call name="x"&gt;');
     expect(u).not.toContain('</call><call');
   });
+
+  it('cleans up the session entry on early-return stop', async () => {
+    const { ctx, observer } = setup({ complete: vi.fn(async () => obsJson(0)) });
+    observer.onPrompt(ctx, 'hi');
+    await observer.onStop(ctx);
+    expect(observer.sessionCount).toBe(0);
+  });
 });
