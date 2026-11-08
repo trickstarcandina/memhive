@@ -19,24 +19,25 @@ const iso = z.string().refine(isIso);
 const short = z.string().max(MAX_SHORT);
 const long = z.string().max(MAX_LONG);
 const list = z.array(z.string().max(MAX_ITEM)).max(MAX_LIST);
-const vector = z.array(z.number());   // zod 4 numbers are finite
+const vector = z.array(z.number()).max(16_000);   // zod 4 numbers are finite; the cap (pgvector's max dims) runs before the elements are checked
 const origin = z.enum(['local', 'hub']);
 
-// Fields the hub overwrites on push (project, user, origin, synced) are accepted loosely and defaulted.
-const pushOwned = { projectId: z.string().default(''), userId: z.string().default(''), syncedAt: z.string().nullable().default(null) };
+// Fields the hub overwrites on push are never a reason to reject a row: any value is accepted and replaced.
+const ignored = <T>(v: T) => z.unknown().transform((): T => v);
+const pushOwned = { projectId: ignored(''), userId: ignored(''), syncedAt: ignored<string | null>(null) };
 
 export const PushSessionSchema = z.object({
-  id: uuid, ...pushOwned, origin: origin.optional(),
-  host: short, hostSessionId: short, cwd: short.optional(),   // cwd: accepted from older clients, never stored or relayed
+  id: uuid, ...pushOwned, origin: origin.optional().catch(undefined),
+  host: short, hostSessionId: short, cwd: z.unknown().optional(),   // cwd: older clients send it; never validated, stored or relayed
   startedAt: iso, endedAt: iso.nullable().optional(),
 });
 const obsFields = {
   id: uuid, sessionId: uuid, type: z.enum(OBSERVATION_TYPES), title: short, subtitle: short, facts: list, narrative: long,
   concepts: list, filesRead: list, filesModified: list, createdAt: iso,
 };
-export const PushObservationSchema = z.object({ ...obsFields, ...pushOwned, origin: origin.default('local'), embeddingModel: short.nullable().default(null), embedding: vector.nullable().default(null) });
+export const PushObservationSchema = z.object({ ...obsFields, ...pushOwned, origin: ignored<'local' | 'hub'>('local'), embeddingModel: short.nullable().default(null), embedding: vector.nullable().default(null) });
 const sumFields = { id: uuid, sessionId: uuid, request: long, learned: long, completed: long, nextSteps: long, createdAt: iso };
-export const PushSummarySchema = z.object({ ...sumFields, ...pushOwned, origin: origin.default('local') });
+export const PushSummarySchema = z.object({ ...sumFields, ...pushOwned, origin: ignored<'local' | 'hub'>('local') });
 export const PushBodySchema = z.object({
   projectKey: short.min(1), projectName: short.optional(),
   sessions: z.array(PushSessionSchema).default([]), observations: z.array(PushObservationSchema).default([]), summaries: z.array(PushSummarySchema).default([]),

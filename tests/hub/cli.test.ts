@@ -104,4 +104,24 @@ it.skipIf(!pgUrl)('key rotate against postgres', async () => {
   const st = new PostgresHubStore(env.DATABASE_URL, { dims: 4 });
   expect(await st.authenticate(hashApiKey(old.key))).toBeNull(); expect(await st.authenticate(hashApiKey(rot.key))).toEqual({ keyId: rot.id, userName: 'erin' });
   await st.close();
+  // an admin command with other dims (and a reset flag in its env) neither refuses nor touches the vector column
+  c = cap(); expect(await keyCommand(['list'], c.io, { ...env, MEMHIVE_EMBED_DIMS: '8', MEMHIVE_RESET_VECTORS: '1' })).toBe(0); expect(c.o.err).toBe('');
+  const pool = new Pool({ connectionString: env.DATABASE_URL });
+  expect((await pool.query(`SELECT format_type(atttypid, atttypmod) t FROM pg_attribute WHERE attrelid = 'observations'::regclass AND attname = 'embedding'`)).rows[0].t).toBe('vector(4)');
+  await pool.end();
+});
+it('admin commands skip the dims guard and never reset vectors (sqlite)', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mh-admindims-')); const file = path.join(dir, 'h.db');
+  const { SqliteHubStore } = await import('../../src/hub/store/sqlite.js'); const { hobs, hsess } = await import('./hub-store-contract.js');
+  const st = new SqliteHubStore(file, { dims: 4 }); await st.migrate();
+  const p = await st.getOrCreateProject('k', 'n'); const a = hsess(p.id); await st.upsertSessions([a]);
+  const o = hobs({ projectId: p.id, sessionId: a.id, embedding: [1, 0, 0, 0], embeddingModel: 'm' }); await st.insertObservations([o]); await st.close();
+  const { userCommand, projectCommand } = await import('../../src/cli/commands/hub-admin.js');
+  for (const env of [{ DATABASE_URL: `sqlite:${file}` }, { DATABASE_URL: `sqlite:${file}`, MEMHIVE_EMBED_DIMS: '8', MEMHIVE_RESET_VECTORS: '1' }]) {
+    for (const [fn, args] of [[keyCommand, ['list']], [userCommand, ['list']], [projectCommand, ['list']]] as const) {
+      const c = cap(); expect(await fn([...args], c.io, env)).toBe(0); expect(c.o.err).toBe('');
+    }
+  }
+  const again = new SqliteHubStore(file, { dims: 4 }); await again.migrate();   // still a dims-4 hub, vector kept
+  expect((await again.getObservations([o.id]))[0].embedding).toEqual([1, 0, 0, 0]); await again.close();
 });

@@ -100,6 +100,7 @@ describe('createHubStore', () => {
     expect(() => createHubStore({ DATABASE_URL: 'mysql://x' })).toThrow(/postgres|sqlite/);
     expect(hubConfigFromEnv({ PORT: '8080', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '8' })).toEqual({ port: 8080, host: '127.0.0.1', trustProxy: false, embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
     expect(hubConfigFromEnv({ HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
+    expect(hubConfigFromEnv({ HOST: 'tcsh-hostname', MEMHIVE_HOST: '127.0.0.1' }).host).toBe('127.0.0.1');   // MEMHIVE_HOST wins over the shell's HOST
   });
 });
 
@@ -131,6 +132,7 @@ describe('hub push hardening', () => {
     expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', endedAt: null });
     expect((await store.getObservations([o.id]))[0]).toMatchObject({ userId: 'alice', title: 'alice-obs' });
   });
+  const byIdOf = (r: { json: any }) => new Map<string, unknown>(r.json.rejected.map((x: any) => [x.id, x]));
   it('push rejects oversized observation fields', async () => {
     const sid = newId(); const big = (n: number) => 'x'.repeat(n);
     const cases: Array<[string, Record<string, unknown>]> = [
@@ -141,14 +143,21 @@ describe('hub push hardening', () => {
     const obsRows = cases.map(([, p]) => ({ ...hobs({ projectId: 'x', sessionId: sid }), ...p }));
     const fine = hobs({ projectId: 'x', sessionId: sid, title: big(1000), narrative: big(20_000), facts: Array.from({ length: 100 }, () => big(40)) });
     const sums = (['request', 'learned', 'completed', 'nextSteps'] as const).map((f) => ({ ...sum(sid), [f]: big(20_001) }));
-    const sessions = (['host', 'hostSessionId', 'cwd'] as const).map((f) => hsess('x', { [f]: big(1001) }));
-    const r = await push(aliceKey, { sessions: [hsess('x', { id: sid }), ...sessions], observations: [...obsRows, fine], summaries: sums });
+    const sessions = (['host', 'hostSessionId'] as const).map((f) => hsess('x', { [f]: big(1001) }));
+    const longCwd = hsess('x', { cwd: big(5000) });   // cwd is dropped by the hub, so no length of it may cost the session
+    const hubOwned = { ...hsess('x'), projectId: 7, userId: null, syncedAt: 12, origin: 'elsewhere' };   // overwritten by the hub, never a reason to reject
+    const longVec = hobs({ projectId: 'x', sessionId: sid, embedding: Array.from({ length: 16_001 }, () => 0), embeddingModel: 'bge-m3' });
+    const longId = { ...hobs({ projectId: 'x', sessionId: sid }), id: 'i'.repeat(5000) };
+    const r = await push(aliceKey, { sessions: [hsess('x', { id: sid }), ...sessions, longCwd, hubOwned], observations: [...obsRows, fine, longVec, longId], summaries: sums });
     expect(r.status).toBe(200);
-    expect(r.json.accepted).toEqual({ sessions: 1, observations: 1, summaries: 0 });
+    expect(r.json.accepted).toEqual({ sessions: 3, observations: 1, summaries: 0 });
+    expect(byIdOf(r).get(longVec.id)).toEqual({ id: longVec.id, reason: 'invalid_row', field: 'embedding' });
+    expect(r.json.rejected.find((x: any) => x.reason === 'invalid_id').id.length).toBeLessThanOrEqual(64);   // a bogus id is not echoed whole
     const byId = new Map(r.json.rejected.map((x: any) => [x.id, x]));
     cases.forEach(([field], i) => expect(byId.get(obsRows[i].id)).toEqual({ id: obsRows[i].id, reason: 'invalid_row', field }));
     sums.forEach((m, i) => expect(byId.get(m.id)).toMatchObject({ reason: 'invalid_row', field: ['request', 'learned', 'completed', 'nextSteps'][i] }));
-    sessions.forEach((s, i) => expect(byId.get(s.id)).toMatchObject({ reason: 'invalid_row', field: ['host', 'hostSessionId', 'cwd'][i] }));
+    sessions.forEach((s, i) => expect(byId.get(s.id)).toMatchObject({ reason: 'invalid_row', field: ['host', 'hostSessionId'][i] }));
+    expect(byId.has(longCwd.id)).toBe(false); expect(byId.has(hubOwned.id)).toBe(false);
     expect(JSON.stringify(r.json)).not.toContain('xxxx');   // names the field, never echoes the value
     for (const top of [{ projectKey: big(1001) }, { projectName: big(1001) }, { projectKey: '' }]) {
       const bad = await call(aliceKey, 'POST', '/v1/sync/push', { projectKey: PK, sessions: [], observations: [], summaries: [], ...top });

@@ -22,7 +22,9 @@ export class HubDimsConflict extends Error {
     this.name = 'HubDimsConflict';
   }
 }
-export interface HubStoreOptions { dims: number | null; resetVectors?: boolean }   // resetVectors: on a dims conflict, drop every stored vector instead of refusing to start
+// resetVectors: on a dims conflict, drop every stored vector instead of refusing to start. checkDims false (admin commands, which
+// never write vectors) skips the comparison entirely; only serve enforces or resets.
+export interface HubStoreOptions { dims: number | null; resetVectors?: boolean; checkDims?: boolean }
 // upsertSessions / insertObservations / insertSummaries append the sync_log entries for exactly the rows they wrote, in the same transaction.
 export interface HubStore {
   migrate(): Promise<void>; close(): Promise<void>;

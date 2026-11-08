@@ -10,8 +10,9 @@ import { resolvePaths } from '../../shared/paths.js';
 function writeSecret(file: string, content: string): void {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
-  rmSync(tmp, { force: true });   // a leftover tmp would keep its old mode
-  writeFileSync(tmp, content, { mode: 0o600 }); renameSync(tmp, file);
+  rmSync(tmp, { force: true });   // a leftover from a crash would make the exclusive create below fail
+  writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });   // wx: never write through a file or symlink planted at tmp
+  renameSync(tmp, file);
 }
 
 /** opts.signal stops the hub and returns 0 (tests); without it the hub runs until SIGTERM/SIGINT. */

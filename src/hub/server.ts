@@ -12,13 +12,14 @@ import { VERSION } from '../shared/version.js';
 export interface HubConfig { port: number; host?: string; trustProxy?: boolean; embeddingModel: string | null; embeddingDims: number | null; bodyLimit: number }   // host defaults to loopback
 
 export function hubConfigFromEnv(env: NodeJS.ProcessEnv): HubConfig {
-  return { port: Number(env.PORT ?? 7777) || 7777, host: env.HOST || '127.0.0.1', trustProxy: env.MEMHIVE_TRUST_PROXY === '1', embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
+  return { port: Number(env.PORT ?? 7777) || 7777, host: env.MEMHIVE_HOST || env.HOST || '127.0.0.1', trustProxy: env.MEMHIVE_TRUST_PROXY === '1', embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
 }
 
-export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
+/** admin: for key/user/project commands, which skip the dims guard and can never reset vectors. */
+export function createHubStore(env: NodeJS.ProcessEnv, mode: 'serve' | 'admin' = 'serve'): HubStore {
   const url = env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required (postgres://… or sqlite:<path>)');
-  const opts = { dims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, resetVectors: env.MEMHIVE_RESET_VECTORS === '1' };
+  const opts = { dims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, resetVectors: mode === 'serve' && env.MEMHIVE_RESET_VECTORS === '1', checkDims: mode === 'serve' };
   if (url.startsWith('postgres://') || url.startsWith('postgresql://')) return new PostgresHubStore(url, opts);
   if (url.startsWith('sqlite:')) return new SqliteHubStore(url.slice('sqlite:'.length), opts);
   throw new Error('DATABASE_URL must start with postgres:// or sqlite:');

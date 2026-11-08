@@ -29,7 +29,7 @@ export class SqliteHubStore implements HubStore {
     this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
     const applied = new Set(this.db.prepare('SELECT version FROM schema_migrations').all().map((r: any) => r.version));
     HUB_SQLITE_MIGRATIONS.forEach((sql, i) => { if (!applied.has(i + 1)) this.db.transaction(() => { this.db.exec(sql); this.db.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(i + 1, new Date().toISOString()); })(); });
-    this.checkDims();
+    if (this.opts.checkDims !== false) this.checkDims();
   }
   // Same contract as the Postgres store. A database from before hub_meta existed is judged by a stored vector, if any.
   private checkDims(): void {

@@ -3,9 +3,9 @@ import { parseArgs } from '../args.js';
 import { createHubStore } from '../../hub/server.js';
 import type { HubStore } from '../../hub/store/types.js';
 
-/** Opens the hub DB from DATABASE_URL (like serve), migrates, runs fn, and always closes. */
+/** Opens the hub DB from DATABASE_URL (like serve, minus the dims guard), migrates, runs fn, and always closes. */
 export async function withHubStore(cmd: string, io: CliIo, env: NodeJS.ProcessEnv, fn: (store: HubStore) => Promise<number>): Promise<number> {
-  let store; try { store = createHubStore(env); } catch (e) { io.stderr(`memhive ${cmd}: ${e instanceof Error ? e.message : e}\n`); return 1; }
+  let store; try { store = createHubStore(env, 'admin'); } catch (e) { io.stderr(`memhive ${cmd}: ${e instanceof Error ? e.message : e}\n`); return 1; }
   try { await store.migrate(); return await fn(store); }
   catch (e) { io.stderr(`memhive ${cmd}: ${e instanceof Error ? e.message : e}\n`); return 1; }
   finally { await store.close(); }

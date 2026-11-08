@@ -198,7 +198,7 @@ Hub settings are environment variables:
 | --- | --- | --- |
 | `DATABASE_URL` | none (required) | `postgres://…` or `sqlite:<path>`. Compose sets the Postgres URL. |
 | `PORT` | `7777` | Listen port. |
-| `HOST` | `127.0.0.1` | Listen address. The Docker image sets `0.0.0.0`. |
+| `MEMHIVE_HOST` / `HOST` | `127.0.0.1` | Listen address; `MEMHIVE_HOST` wins (some shells, such as tcsh, export `HOST` as the hostname). The Docker image sets `HOST=0.0.0.0`. |
 | `MEMHIVE_EMBED_MODEL` | none | Embedding model the hub expects. Compose sets `bge-m3`. |
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
 | `MEMHIVE_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. Pull pages are capped to the same size. |
@@ -210,7 +210,7 @@ Hub settings are environment variables:
 
 `POSTGRES_PASSWORD` is required: compose refuses to start without it. Compose reads it from `docker/.env` and passes it to the hub as `PGPASSWORD`, outside the connection URL, so any characters work.
 
-The hub limits each key to 60 requests per minute. After 30 failed authentications in a minute from one client address, that client gets `429` with `retry-after` for keys the hub has not seen succeed, until the minute ends, without a database lookup; keys that authenticated before keep working, and other clients are not affected. Behind a reverse proxy every request comes from the proxy's address, so set `MEMHIVE_TRUST_PROXY=1` to take the client address from the last `X-Forwarded-For` entry (the one your proxy appends). Set it only when the hub is reachable through that proxy alone, since otherwise clients can forge the header.
+The hub limits each key to 60 requests per minute. After 30 failed authentications in a minute from one client address, that client gets `429` with `retry-after` for keys the hub has not seen succeed, until the minute ends, without a database lookup; keys that authenticated before keep working, and other clients are not affected. Behind a reverse proxy every request comes from the proxy's address, so set `MEMHIVE_TRUST_PROXY=1` to take the client address from the last `X-Forwarded-For` entry (the one your proxy appends; with two proxy layers, such as a CDN in front of nginx, that is the outer proxy's address). Set it only when the hub is reachable through that proxy alone, since otherwise clients can forge the header.
 
 ### Add members
 
@@ -226,7 +226,7 @@ docker compose exec hub node dist/memhive.cjs user remove <name>
 docker compose exec hub node dist/memhive.cjs project list
 ```
 
-The new key is printed once and starts with `mh_`. Give it to its owner through a private channel. `key revoke` takes the id shown by `key list`. `key rotate` revokes a key and creates its replacement (same user and label) in one step; it takes a key id, or a user name when that user has one active key. `user list` shows each user's active keys, observation count and last activity. `user remove` revokes every key of a user; their rows stay on the hub and remain visible to the team. `project list` shows each project's row counts and last activity. Every admin command takes `--json`.
+The new key is printed once and starts with `mh_`. Give it to its owner through a private channel. `key revoke` takes the id shown by `key list`. `key rotate` revokes a key and creates its replacement (same user and label) in one step; it takes a key id, or a user name when that user has one active key. `user list` shows each user's active keys, observation count and last activity. `user remove` revokes every key of a user; their rows stay on the hub and remain visible to the team. `project list` shows each project's row counts and last activity. Every admin command takes `--json`. Admin commands need only `DATABASE_URL`: they skip the embedding dims check and never reset vectors.
 
 ### Connect a machine
 

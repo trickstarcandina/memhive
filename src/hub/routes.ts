@@ -16,7 +16,7 @@ type Rejected = PushResult['rejected'][number];
  * row-kind codes (a wrong type, not a length), then invalid_row naming the first bad field (never its value).
  */
 function rejection(row: unknown, issues: z.core.$ZodIssue[], kindFields: string[], kindReason: string): Rejected {
-  const id = String((row as { id?: unknown } | null)?.id);
+  const id = String((row as { id?: unknown } | null)?.id).slice(0, 64);   // a bogus id is not echoed whole
   const top = (i: z.core.$ZodIssue) => String(i.path[0] ?? '');
   if (issues.some((i) => top(i) === 'id' || top(i) === 'sessionId')) return { id, reason: 'invalid_id' };
   if (issues.some((i) => top(i) === 'embedding' && i.code !== 'too_big')) return { id, reason: 'invalid_vector' };

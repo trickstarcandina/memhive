@@ -47,7 +47,7 @@ export class PostgresHubStore implements HubStore {
         try { await c.query('BEGIN'); await c.query(migrations[i]); await c.query('INSERT INTO schema_migrations VALUES ($1, now())', [i + 1]); await c.query('COMMIT'); }
         catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
       }
-      await this.checkDims(c);
+      if (this.opts.checkDims !== false) await this.checkDims(c);
     } finally { await c.query('SELECT pg_advisory_unlock(7346001)').catch((e) => { dead = e; }); c.release(dead); }   // a broken client is destroyed, not pooled
   }
   // The vector column type is fixed when the table is created; a later MEMHIVE_EMBED_DIMS change would make every insert with
