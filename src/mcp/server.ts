@@ -110,9 +110,10 @@ export function mcpCwd(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()
 
 export async function runMcp(): Promise<number> {
   const home = resolvePaths().home;
-  const info = envDisabled() ? null : await ensureDaemon(home, { wait: true, waitMs: 5000 });
+  const warn = (m: string) => { process.stderr.write(m + '\n'); };   // MCP stderr goes to the host's log, not the conversation
+  const info = envDisabled() ? null : await ensureDaemon(home, { wait: true, waitMs: 5000, warn });
   if (!info && !envDisabled()) { process.stderr.write('memhive: daemon could not be started\n'); return 1; }
-  const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000 }); return i ? new DaemonClient(i) : null; };
+  const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000, warn }); return i ? new DaemonClient(i) : null; };
   const server = createMcpServer({ client: info ? new DaemonClient(info) : null, cwd: mcpCwd(), reconnect, currentToken: () => readDaemonInfo(home)?.token ?? null, allowProjects: loadSettings(home).mcp.allowProjects });
   await server.connect(new StdioServerTransport());
   await new Promise(() => {}); // stdio transport keeps the process alive until the host closes it

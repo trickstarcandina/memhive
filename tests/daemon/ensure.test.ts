@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ensureDaemon } from '../../src/daemon/ensure.js';
+import { ensureDaemon, olderThan } from '../../src/daemon/ensure.js';
 import { readDaemonInfo, writeDaemonInfo } from '../../src/daemon/info.js';
 import { SqliteStore, DatabaseNewerThanBinary } from '../../src/store/sqlite/store.js';
 import { VERSION } from '../../src/shared/version.js';
@@ -83,5 +84,40 @@ describe('daemon version', () => {
     await doctorCommand([], { stdout: (x) => out.push(x), stderr: () => {} }, { home, env, ping: false, cwd: home });
     expect(out.join('')).toMatch(/FAIL database: .*schema version 999/);
     expect(readFileSync(path.join(home, 'logs', 'daemon.log'), 'utf8')).toContain('cannot open the database');
+  });
+});
+
+describe('version skew direction and the lock (M1, M4)', () => {
+  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+  it('olderThan compares x.y.z, treats a missing version and pre-releases as older', () => {
+    expect([olderThan('0.1.9', '0.2.0'), olderThan('0.10.0', '0.9.9'), olderThan(undefined, '0.2.0'), olderThan('0.2.0-rc.1', '0.2.0'), olderThan('0.2.0', '0.2.0'), olderThan('0.3.0', '0.2.0')])
+      .toEqual([true, false, true, true, false, false]);
+  });
+  it('an older caller uses a newer daemon as it is, warns once, sends no shutdown', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const h = await startDaemon(createDaemonContext(home, env), { port: 0 });
+    const urls: string[] = []; const warns: string[] = [];
+    const fetchImpl = (async (u: string, i?: RequestInit) => { urls.push(String(u)); return fetch(u, i); }) as typeof fetch;
+    for (let i = 0; i < 2; i++) expect((await ensureDaemon(home, { wait: true, version: '0.0.1', fetchImpl, warn: (m) => warns.push(m), spawn: () => { throw new Error('no spawn'); } }))!.token).toBe(h.info.token);
+    expect(urls.some((u) => u.includes('/v1/shutdown'))).toBe(false);
+    expect(warns).toHaveLength(1);
+    await h.close();
+  });
+  it('a new daemon never breaks the lock of a live daemon that is still shutting down', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const old = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'memhive', 'daemon', 'run'], { env: { ...process.env, MEMHIVE_HOME: home }, stdio: 'ignore' });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      const lock = path.join(home, 'daemon.lock');
+      writeFileSync(lock, String(old.pid)); utimesSync(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+      const c1 = createDaemonContext(home, env);
+      await expect(startDaemon(c1, { port: 0, lockWaitMs: 300 })).rejects.toMatchObject({ name: 'DaemonAlreadyRunning' });
+      c1.store.close();
+      expect(readFileSync(lock, 'utf8')).toBe(String(old.pid));   // not broken
+      setTimeout(() => old.kill('SIGKILL'), 200);
+      const d = await startDaemon(createDaemonContext(home, env), { port: 0, lockWaitMs: 5000 });   // waits, then takes over
+      expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
+      await d.close();
+    } finally { old.kill('SIGKILL'); }
   });
 });

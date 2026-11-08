@@ -17,3 +17,13 @@ export function writeDaemonInfo(home: string, info: DaemonInfo): void {
   renameSync(tmp, p);
 }
 export function removeDaemonInfo(home: string): void { rmSync(resolvePaths(home).daemonInfo, { force: true }); }
+
+const readText = (file: string): string => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
+/** Linux only (/proc): is `pid` a `memhive daemon run` for this home? False when it cannot tell. */
+export function isOurDaemon(home: string, pid: number): boolean {
+  const args = readText(`/proc/${pid}/cmdline`).split('\0');
+  const env = readText(`/proc/${pid}/environ`).split('\0');
+  return args.includes('daemon') && args.includes('run') && args.some((a) => a.includes('memhive')) && env.includes(`MEMHIVE_HOME=${home}`);
+}
+/** Whether /proc can answer for `pid` at all; without it a live holder is never assumed to be someone else's pid. */
+export const procKnows = (pid: number): boolean => readText(`/proc/${pid}/cmdline`) !== '';

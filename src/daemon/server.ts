@@ -1,11 +1,11 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createJsonServer } from './http.js';
 import { handleRoute } from './routes.js';
 import { runMaintenance } from './maintenance.js';
-import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, type DaemonInfo } from './info.js';
+import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, isOurDaemon, procKnows, type DaemonInfo } from './info.js';
 import { DaemonClient, healthProof } from './client.js';
 import type { DaemonContext } from './context.js';
 import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
@@ -100,8 +100,9 @@ function pidAlive(pid: number): boolean { try { process.kill(pid, 0); return tru
 
 // Exclusive lock so two racing spawns cannot both own daemon.json. A holder counts as live if its pid is alive and it
 // either answers an authenticated health check or took the lock under 5 s ago (still starting up).
-async function acquireLock(home: string): Promise<string> {
+async function acquireLock(home: string, lockWaitMs: number): Promise<string> {
   const file = path.join(home, 'daemon.lock');
+  const waitUntil = Date.now() + lockWaitMs;
   for (let attempt = 0; attempt < 5; attempt++) {
     try { writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 }); return file; }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
@@ -110,6 +111,12 @@ async function acquireLock(home: string): Promise<string> {
     if (pidAlive(holder)) {
       const info = readDaemonInfo(home);
       if (Date.now() - mtime < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
+      // Alive but not answering: often a daemon that is shutting down (its HTTP server closes first, the store last).
+      // Wait for it to exit or release the lock; never break the lock under a live memhive daemon.
+      while (Date.now() < waitUntil && pidAlive(holder) && existsSync(file)) await new Promise((r) => setTimeout(r, 100));
+      if (!existsSync(file)) { attempt--; continue; }
+      if (pidAlive(holder) && (isOurDaemon(home, holder) || !procKnows(holder))) throw new DaemonAlreadyRunning();
+      // Dead now, or /proc shows the pid was reused by another program: the lock is stale.
     }
     // Break the stale lock under a second exclusive lock and only if it is still the file judged stale, so two
     // starters cannot both remove it (the second would delete the first one's fresh lock) and both start.
@@ -128,8 +135,8 @@ async function acquireLock(home: string): Promise<string> {
   throw new DaemonAlreadyRunning();
 }
 
-export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idleMs?: number } = {}): Promise<{ info: DaemonInfo; close(): Promise<void> }> {
-  const lock = await acquireLock(ctx.home);
+export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idleMs?: number; lockWaitMs?: number } = {}): Promise<{ info: DaemonInfo; close(): Promise<void> }> {
+  const lock = await acquireLock(ctx.home, opts.lockWaitMs ?? 15_000);
   const token = randomBytes(24).toString('base64url');
   const idleMs = opts.idleMs ?? 30 * 60 * 1000;
   let idleTimer: NodeJS.Timeout | null = null;

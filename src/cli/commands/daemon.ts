@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { CliIo } from '../index.js';
 import { resolvePaths } from '../../shared/paths.js';
-import { readDaemonInfo } from '../../daemon/info.js';
+import { isOurDaemon, readDaemonInfo } from '../../daemon/info.js';
 import { DaemonClient } from '../../daemon/client.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
 import { createDaemonContext, startDaemon, DaemonAlreadyRunning } from '../../daemon/server.js';
@@ -54,8 +54,3 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
 const readText = (file: string): string => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 
 // shortcut: needs /proc (Linux); elsewhere an old daemon is left to its idle timeout.
-function isOurDaemon(home: string, pid: number): boolean {
-  const args = readText(`/proc/${pid}/cmdline`).split('\0');
-  const env = readText(`/proc/${pid}/environ`).split('\0');
-  return args.includes('daemon') && args.includes('run') && args.some((a) => a.includes('memhive')) && env.includes(`MEMHIVE_HOME=${home}`);
-}
