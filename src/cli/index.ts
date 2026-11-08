@@ -14,6 +14,8 @@ usage: memhub <command>
   mcp
   search <query> [--type t] [--limit n]
   embed [--missing|--rebuild]
+  serve
+  key <create|list|revoke>
   version
 `;
 
@@ -26,6 +28,8 @@ const SUB_USAGE: Record<string, string> = {
   mcp: 'usage: memhub mcp\n',
   search: 'usage: memhub search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
   embed: 'usage: memhub embed [--missing|--rebuild]\n',
+  serve: 'usage: memhub serve   (env: DATABASE_URL, PORT, MEMHUB_EMBED_MODEL, MEMHUB_EMBED_DIMS)\n',
+  key: 'usage: memhub key <create --user <name> [--label <text>] | list | revoke <id>>\n',
 };
 
 export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<number> {
@@ -43,6 +47,8 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'embed': return (await import('./commands/embed.js')).embedCommand(rest, { stdout, stderr });
     case 'doctor': return (await import('./commands/doctor.js')).doctorCommand(rest, { stdout, stderr });
     case 'install': return (await import('./commands/install.js')).installCommand(rest, { stdout, stderr });
+    case 'serve': return (await import('./commands/serve.js')).serveCommand(rest, { stdout, stderr });
+    case 'key': return (await import('./commands/key.js')).keyCommand(rest, { stdout, stderr });
     case 'uninstall': return (await import('./commands/uninstall.js')).uninstallCommand(rest, { stdout, stderr });
     default: stderr(`memhub: unknown command "${cmd}"\n${USAGE}`); return 1;
   }
@@ -51,8 +57,8 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
 const isEntry = typeof require !== 'undefined' && require.main === module;
 if (isEntry || process.env.MEMHUB_FORCE_MAIN === '1') {
   const argv = process.argv.slice(2);
-  // daemon run and mcp are long-lived; everything else must not linger on open handles.
-  const longLived = argv[0] === 'mcp' || (argv[0] === 'daemon' && argv[1] === 'run');
+  // daemon run, serve and mcp are long-lived; everything else must not linger on open handles.
+  const longLived = argv[0] === 'mcp' || (argv[0] === 'daemon' && argv[1] === 'run') || argv[0] === 'serve';
   const finish = (code: number) => { process.exitCode = code; if (!longLived) process.stdout.write('', () => process.exit(code)); };
   main(argv).then(finish, (err) => {
     process.stderr.write(`memhub: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
