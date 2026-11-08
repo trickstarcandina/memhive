@@ -1,0 +1,127 @@
+import { Pool, type PoolClient } from 'pg';
+import { HubDimsMismatch } from './types.js';
+import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
+import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
+import { hubPgMigrations } from './migrations-pg.js';
+import { newId } from '../../shared/ids.js';
+
+type Row = Record<string, any>;
+const iso = (v: any): string => (v instanceof Date ? v.toISOString() : String(v));
+const isoOrNull = (v: any): string | null => (v == null ? null : iso(v));
+const arr = (v: any): string[] => (Array.isArray(v) ? v : []);
+const vecParam = (v: number[] | null) => (v ? `[${v.join(',')}]` : null);
+const parseVec = (v: any): number[] | null => (v == null ? null : typeof v === 'string' ? JSON.parse(v) : Array.isArray(v) ? v : null);
+const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: iso(r.started_at), endedAt: isoOrNull(r.ended_at), syncedAt: null });
+const rowToObs = (r: Row): HubObservation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: arr(r.facts), narrative: r.narrative, concepts: arr(r.concepts), filesRead: arr(r.files_read), filesModified: arr(r.files_modified), createdAt: iso(r.created_at), embeddingModel: r.embedding_model ?? null, origin: 'hub', syncedAt: null, embedding: parseVec(r.embedding) });
+const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: iso(r.created_at), origin: 'hub', syncedAt: null });
+const rowToKey = (r: Row): HubApiKey => ({ id: r.id, userName: r.user_name, label: r.label, createdAt: iso(r.created_at), revokedAt: isoOrNull(r.revoked_at) });
+
+/** to_tsquery-safe: tokens joined with & */
+export function toTsQuery(text: string): string {
+  const tokens = [...new Set(text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])].slice(0, 16);
+  return tokens.map((t) => `'${t.replace(/'/g, "''")}'`).join(' & ');
+}
+
+export class PostgresHubStore implements HubStore {
+  private pool: Pool;
+  constructor(databaseUrl: string, private opts: { dims: number | null }) { this.pool = new Pool({ connectionString: databaseUrl, max: 10 }); }
+  private async q(sql: string, params: unknown[] = []): Promise<Row[]> { return (await this.pool.query(sql, params)).rows; }
+
+  async migrate(): Promise<void> {
+    await this.q('CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL)');
+    const applied = new Set((await this.q('SELECT version FROM schema_migrations')).map((r) => Number(r.version)));
+    const migrations = hubPgMigrations(this.opts.dims);
+    for (let i = 0; i < migrations.length; i++) {
+      if (applied.has(i + 1)) continue;
+      const c = await this.pool.connect();
+      try { await c.query('BEGIN'); await c.query(migrations[i]); await c.query('INSERT INTO schema_migrations VALUES ($1, now())', [i + 1]); await c.query('COMMIT'); }
+      catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    }
+  }
+  async close(): Promise<void> { await this.pool.end(); }
+
+  async getProjectByKey(key: string): Promise<Project | null> { const [r] = await this.q('SELECT * FROM projects WHERE key = $1', [key]); return r ? { id: r.id, key: r.key, name: r.name, hubUrl: null, createdAt: iso(r.created_at) } : null; }
+  async getOrCreateProject(key: string, name: string): Promise<Project> {
+    await this.q('INSERT INTO projects(id, key, name, created_at) VALUES ($1, $2, $3, now()) ON CONFLICT (key) DO NOTHING', [newId(), key, name]);
+    return (await this.getProjectByKey(key))!;
+  }
+  private async tx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
+    const c = await this.pool.connect();
+    try { await c.query('BEGIN'); const out = await fn(c); await c.query('COMMIT'); return out; }
+    catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+  }
+  private log(c: PoolClient, projectId: string, table: SyncTable, rowId: string) { return c.query('INSERT INTO sync_log(project_id, tbl, row_id) VALUES ($1, $2, $3)', [projectId, table, rowId]); }
+
+  async upsertSessions(rows: Session[]): Promise<string[]> {
+    const newEnd = 'GREATEST(sessions.ended_at, EXCLUDED.ended_at)'; // GREATEST ignores NULLs
+    return this.tx(async (c) => {
+      const changed: string[] = [];
+      for (const s of rows) {
+        const r = await c.query(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          ON CONFLICT (id) DO UPDATE SET ended_at = ${newEnd}, cwd = EXCLUDED.cwd
+          WHERE sessions.project_id = EXCLUDED.project_id AND sessions.user_id = EXCLUDED.user_id AND (sessions.cwd IS DISTINCT FROM EXCLUDED.cwd OR sessions.ended_at IS DISTINCT FROM ${newEnd}) RETURNING id`,
+          [s.id, s.projectId, s.userId, s.host, s.hostSessionId, s.cwd, s.startedAt, s.endedAt]);
+        if (r.rowCount) { changed.push(s.id); await this.log(c, s.projectId, 'sessions', s.id); }
+      }
+      return changed;
+    });
+  }
+  async insertObservations(rows: HubObservation[]): Promise<string[]> {
+    const dims = this.opts.dims; const inserted: string[] = []; const rejected: HubObservation[] = [];
+    await this.tx(async (c) => {
+      for (const o of rows) {
+        if (dims !== null && o.embedding && o.embedding.length !== dims) { rejected.push(o); continue; }
+        const r = await c.query(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING RETURNING id`,
+          [o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, JSON.stringify(o.facts), o.narrative, JSON.stringify(o.concepts), JSON.stringify(o.filesRead), JSON.stringify(o.filesModified), o.createdAt, o.embeddingModel, vecParam(o.embedding)]);
+        if (r.rowCount) { inserted.push(o.id); await this.log(c, o.projectId, 'observations', o.id); }
+      }
+    });
+    if (rejected.length) throw new HubDimsMismatch(rejected[0].id, dims!, rejected[0].embedding!.length, inserted, rejected.map((o) => o.id));
+    return inserted;
+  }
+  async insertSummaries(rows: Summary[]): Promise<string[]> {
+    return this.tx(async (c) => {
+      const inserted: string[] = [];
+      for (const s of rows) {
+        const r = await c.query(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING RETURNING id`, [s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt]);
+        if (r.rowCount) { inserted.push(s.id); await this.log(c, s.projectId, 'summaries', s.id); }
+      }
+      return inserted;
+    });
+  }
+  async listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]> {
+    return (await this.q('SELECT seq, tbl, row_id FROM sync_log WHERE project_id = $1 AND seq > $2 ORDER BY seq LIMIT $3', [projectId, sinceSeq, limit])).map((r) => ({ seq: Number(r.seq), table: r.tbl, rowId: r.row_id }));
+  }
+  async maxSeq(projectId: string): Promise<number> { const [r] = await this.q('SELECT COALESCE(MAX(seq), 0) m FROM sync_log WHERE project_id = $1', [projectId]); return Number(r.m); }
+  async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (await this.q('SELECT * FROM sessions WHERE id = ANY($1::uuid[])', [ids])).map(rowToSession) : []; }
+  async getObservations(ids: string[]): Promise<HubObservation[]> {
+    if (!ids.length) return [];
+    const by = new Map((await this.q('SELECT *, embedding::text AS embedding FROM observations WHERE id = ANY($1::uuid[])', [ids])).map((r) => [r.id, rowToObs(r)]));
+    return ids.map((id) => by.get(id)).filter((o): o is HubObservation => !!o);
+  }
+  async getSummaries(ids: string[]): Promise<Summary[]> { return ids.length ? (await this.q('SELECT * FROM summaries WHERE id = ANY($1::uuid[])', [ids])).map(rowToSummary) : []; }
+  async searchObservationsFts(query: string, f: SearchFilters): Promise<Observation[]> {
+    const tsq = toTsQuery(query); if (!tsq) return [];
+    const parts = ['project_id = $2', "tsv @@ to_tsquery('simple', $1)"]; const params: unknown[] = [tsq, f.projectId];
+    if (f.type) { params.push(f.type); parts.push(`type = $${params.length}`); }
+    if (f.userId) { params.push(f.userId); parts.push(`user_id = $${params.length}`); }
+    if (f.since) { params.push(f.since); parts.push(`created_at >= $${params.length}`); }
+    params.push(f.limit);
+    const rows = await this.q(`SELECT id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, NULL AS embedding FROM observations WHERE ${parts.join(' AND ')} ORDER BY ts_rank(tsv, to_tsquery('simple', $1)) DESC LIMIT $${params.length}`, params);
+    return rows.map((r) => { const { embedding: _e, ...rest } = rowToObs(r); return rest; });
+  }
+  async countUsers(): Promise<number> { const [r] = await this.q('SELECT COUNT(*) c FROM users'); return Number(r.c); }
+  async createUser(name: string): Promise<void> { await this.q('INSERT INTO users(name, created_at) VALUES ($1, now()) ON CONFLICT DO NOTHING', [name]); }
+  async createApiKey(userName: string, label: string, keyHash: string): Promise<HubApiKey> {
+    const id = newId();
+    const [r] = await this.q('INSERT INTO api_keys(id, user_name, label, key_hash, created_at) VALUES ($1, $2, $3, $4, now()) RETURNING *', [id, userName, label, keyHash]);
+    return rowToKey(r);
+  }
+  async listApiKeys(): Promise<HubApiKey[]> { return (await this.q('SELECT * FROM api_keys ORDER BY created_at')).map(rowToKey); }
+  async revokeApiKey(id: string): Promise<boolean> { return (await this.pool.query('UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [id])).rowCount! > 0; }
+  async authenticate(keyHash: string): Promise<{ keyId: string; userName: string } | null> {
+    const [r] = await this.q('SELECT id, user_name FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL', [keyHash]);
+    return r ? { keyId: r.id, userName: r.user_name } : null;
+  }
+}
