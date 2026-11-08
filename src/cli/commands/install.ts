@@ -66,6 +66,9 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
   rl?.close();
   saveSettings(home, settings);
   io.stdout(`settings written to ${resolvePaths(home).settings}\n`);
+  if (settings.llm.provider === 'anthropic' && !settings.llm.apiKey && env.ANTHROPIC_API_KEY && !env.MEMHUB_ANTHROPIC_API_KEY) {
+    io.stdout('note: ANTHROPIC_API_KEY is set but memhub does not read it; export MEMHUB_ANTHROPIC_API_KEY or run install again and paste the key\n');
+  }
 
   const marketplaceRoot = resolvePaths(home).marketplace;
   renderPluginDir({ templateRoot: root, marketplaceRoot, nodePath: process.execPath, bundlePath: bundle, version: VERSION });

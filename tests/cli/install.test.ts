@@ -33,6 +33,15 @@ describe('install', () => {
     expect(JSON.parse(saved).contextTokens).toBe(2000);
   });
 
+  it('hints when only ANTHROPIC_API_KEY is set: the daemon does not read it', async () => {
+    const f = fixture(); const r = io();
+    expect(await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], r.io, { home: f.home, env: { ...f.env, ANTHROPIC_API_KEY: 'sk-shell' }, run, root: f.root })).toBe(0);
+    expect(r.out.join('')).toContain('ANTHROPIC_API_KEY is set but memhub does not read it');
+    const quiet = io(); const g = fixture();
+    await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], quiet.io, { home: g.home, env: { ...g.env, ANTHROPIC_API_KEY: 'sk-shell', MEMHUB_ANTHROPIC_API_KEY: 'sk-m' }, run, root: g.root });
+    expect(quiet.out.join('')).not.toContain('ANTHROPIC_API_KEY is set');
+  });
+
   it('rejects non-numeric embedding dims instead of silently disabling embeddings', async () => {
     const f = fixture(); const r = io();
     const answers: Record<string, string> = { 'Embeddings base URL': 'http://127.0.0.1:9/v1', 'Embedding dims': 'abc' };
