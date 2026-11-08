@@ -50,4 +50,14 @@ export const SQLITE_MIGRATIONS: string[] = [
   ALTER TABLE sync_state ADD COLUMN last_push_at INTEGER;
   ALTER TABLE sync_state ADD COLUMN last_pull_at INTEGER;
   `,
+  // 5: push attempts per row (rows a hub keeps refusing for size are given up after a bound), when last_error happened, and a
+  // quarantine for pulled rows that could not be stored, so they are kept (bounded) instead of lost behind the cursor.
+  `
+  ALTER TABLE sessions ADD COLUMN push_attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE observations ADD COLUMN push_attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE summaries ADD COLUMN push_attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sync_state ADD COLUMN last_error_at INTEGER;
+  CREATE TABLE sync_quarantine (id TEXT NOT NULL, tbl TEXT NOT NULL, project_id TEXT NOT NULL, seq INTEGER NOT NULL, reason TEXT NOT NULL, raw TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE INDEX sync_quarantine_project ON sync_quarantine(project_id);
+  `,
 ];

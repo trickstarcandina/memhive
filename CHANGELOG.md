@@ -8,6 +8,10 @@ After upgrading, re-run `memhive install`.
 
 ## [Unreleased]
 
+### Changed
+
+- `memhive sync` prints the push or pull error and exits 1 when the sync call failed (it used to exit 0).
+
 ## [0.1.2] - 2026-11-08
 
 ### Changed

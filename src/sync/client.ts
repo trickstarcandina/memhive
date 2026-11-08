@@ -38,7 +38,7 @@ export class HubClient {
       return r.data;
     } finally { clearTimeout(t); }
   }
-  config() { return this.req(ClientHubConfigSchema, 'GET', '/v1/config'); }
+  config(timeoutMs = 10000) { return this.req(ClientHubConfigSchema, 'GET', '/v1/config', undefined, timeoutMs); }
   me() { return this.req(MeResultSchema, 'GET', '/v1/me'); }
   push(body: PushBody, timeoutMs = 15000): Promise<PushResult> { return this.req(PushResultSchema, 'POST', '/v1/sync/push', body, timeoutMs); }
   pull(projectKey: string, since: number, limit = 500, timeoutMs = 10000, vectors = true): Promise<ClientPullResult> { return this.req(ClientPullSchema, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(projectKey)}&since=${since}&limit=${limit}${vectors ? '' : '&vectors=0'}`, undefined, timeoutMs); }

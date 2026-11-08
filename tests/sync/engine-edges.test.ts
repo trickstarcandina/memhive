@@ -15,20 +15,23 @@ const config = { version: 'x', protocol: 1, embedding_model: null, embedding_dim
 const empty = { sessions: [], observations: [], summaries: [] };
 
 // Engine against a scripted hub: pull(since, call#) and push(call#) decide each answer.
-function setup(h: { pull?: (since: number, n: number) => unknown; push?: (n: number) => Response | Promise<Response> }) {
+function setup(h: { pull?: (since: number, n: number, limit: number) => unknown; push?: (n: number, body: any) => Response | Promise<Response>; config?: Record<string, unknown> }) {
   const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
   saveCredentials(home, { hubs: { [hubUrl]: { key: 'mh_' + 'A'.repeat(43), user: 'alice' } } });
   const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
   const p = store.getOrCreateProject('github.com/t/edges', 'edges'); store.setProjectHub(p.id, hubUrl);
-  const pulls: number[] = []; let pushes = 0;
-  const fetchImpl = (async (url: string) => {
+  const pulls: number[] = []; const limits: number[] = []; let pushes = 0;
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
     const u = new URL(String(url));
-    if (u.pathname === '/v1/config') return json(config);
-    if (u.pathname === '/v1/sync/pull') { const since = Number(u.searchParams.get('since')); pulls.push(since); const r = h.pull!(since, pulls.length); if (r instanceof Error) throw r; return json(r); }
-    pushes++; return h.push!(pushes);
+    if (u.pathname === '/v1/config') return json(h.config ?? config);
+    if (u.pathname === '/v1/sync/pull') {
+      const since = Number(u.searchParams.get('since')); const limit = Number(u.searchParams.get('limit')); pulls.push(since); limits.push(limit);
+      const r = h.pull!(since, pulls.length, limit); if (r instanceof Error) throw r; return r instanceof Response ? r : json(r);
+    }
+    pushes++; return h.push!(pushes, JSON.parse(String(init?.body)));
   }) as unknown as typeof fetch;
   const engine = new SyncEngine({ store, home, logger: silent, embedDims: null, fetchImpl });
-  return { store, project: store.getProject(p.id)!, engine, pulls, pushes: () => pushes };
+  return { home, store, project: store.getProject(p.id)!, engine, pulls, limits, pushes: () => pushes, fetchImpl };
 }
 const hubSess = () => ({ ...sess('x', { userId: 'bob' }), cwd: '' });
 const hubObs = (sessionId: string) => ({ ...obs({ projectId: 'x', sessionId, userId: 'bob' }), embedding: null });
@@ -96,6 +99,104 @@ describe('push failure backoff', () => {
     expect(steps.map((ms) => ms / 1000)).toEqual([30, 60, 120, 240, 480, 600, 600]);
     expect(t.pushes()).toBe(7);
     expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(1);
+  });
+});
+
+describe('review follow-ups', () => {
+  it('an oversized pull response halves the limit within the call; nothing is stored until a page fits', async () => {
+    const s = hubSess(); const o = hubObs(s.id);
+    // a 0.1-style hub: ignores the byte budget, so only a small limit gives a page under 4 x body_limit (4000 bytes)
+    const t = setup({ config: { ...config, body_limit: 1000 }, pull: (_since, _n, limit) => limit > 100 ? { ...empty, pad: 'x'.repeat(5000), next_seq: 9, has_more: false, max_seq: 9 } : { sessions: [s], observations: [o], summaries: [], next_seq: 9, has_more: false, max_seq: 9 } });
+    expect(await t.engine.pull(t.project, 2000)).toBe(2);
+    expect(t.limits).toEqual([500, 250, 125, 62]);
+    expect(t.store.getPullCursor(t.project.id)).toBe(9);
+    expect(t.store.getSyncState(t.project.id)).toMatchObject({ backoffUntil: null, lastError: null });
+  });
+  it('still oversized at the floor of 25 rows: backs off, cursor kept', async () => {
+    const t = setup({ config: { ...config, body_limit: 1000 }, pull: () => ({ ...empty, pad: 'x'.repeat(5000), next_seq: 9, has_more: false, max_seq: 9 }) });
+    expect(await t.engine.pull(t.project, 2000)).toBe(0);
+    expect(t.limits).toEqual([500, 250, 125, 62, 31, 25]);
+    expect(t.store.getPullCursor(t.project.id)).toBe(0);
+    expect(t.store.getSyncState(t.project.id)).toMatchObject({ backoffMs: 30_000, lastError: expect.stringContaining('response') });
+  });
+  it('a malformed pulled row is quarantined; the other rows and the cursor apply', async () => {
+    const s = hubSess(); const good = hubObs(s.id);
+    const badType = { ...hubObs(s.id), type: 'brand-new-type' }; const badId = { ...hubObs(s.id), id: 'x'.repeat(300) }; const badDate = { ...hubObs(s.id), createdAt: 'yesterday' };
+    const orphan = hubObs('0f0f0f0f-0000-4000-8000-000000000000');
+    const t = setup({ pull: () => ({ sessions: [s], observations: [good, badType, badId, badDate, orphan], summaries: [], next_seq: 4, has_more: false, max_seq: 4 }) });
+    expect(await t.engine.pull(t.project, 2000)).toBe(2);
+    expect(t.store.getObservations([good.id])).toHaveLength(1);
+    expect(t.store.getPullCursor(t.project.id)).toBe(4);
+    expect(t.store.getSyncState(t.project.id).quarantined).toBe(4);
+    const q = t.store.listQuarantine(t.project.id, 10);
+    expect(q.map((r) => r.reason).sort()).toEqual(['malformed: createdAt', 'malformed: id', 'malformed: type', 'unknown session'].sort());
+    expect(JSON.parse(q.find((r) => r.reason === 'malformed: type')!.raw)).toMatchObject({ id: badType.id, type: 'brand-new-type' });
+    expect(q.every((r) => r.seq === 4 && r.tbl === 'observations')).toBe(true);
+  });
+  it('the quarantine keeps the newest 1000 rows per project', () => {
+    const t = setup({});
+    t.store.quarantine(t.project.id, Array.from({ length: 1005 }, (_, i) => ({ id: 'r' + i, tbl: 'observations' as const, seq: i, reason: 'x', raw: '{}' })));
+    expect(t.store.getSyncState(t.project.id).quarantined).toBe(1000);
+    expect(t.store.listQuarantine(t.project.id, 1)[0].id).toBe('r1004');
+    expect(t.store.listQuarantine(t.project.id, 1000).some((r) => r.id === 'r4')).toBe(false);
+  });
+  it('a SQLite error other than a constraint aborts the page: nothing applied, cursor kept, backoff', async () => {
+    const s = hubSess(); const o = hubObs(s.id);
+    const t = setup({ pull: () => ({ sessions: [s], observations: [o], summaries: [], next_seq: 4, has_more: false, max_seq: 4 }) });
+    vi.spyOn(t.store, 'insertObservations').mockImplementation(() => { throw Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' }); });
+    expect(await t.engine.pull(t.project, 2000)).toBe(0);
+    expect(t.store.getPullCursor(t.project.id)).toBe(0);
+    expect(t.store.getSession(s.id)).toBeNull();   // rolled back with the page
+    expect(t.store.getSyncState(t.project.id)).toMatchObject({ quarantined: 0, backoffMs: 30_000 });
+  });
+  it('pulled userId is redacted, stripped of control characters and capped', async () => {
+    const s = { ...hubSess(), userId: '\u001b[31m' + 'u'.repeat(500) };
+    const t = setup({ pull: () => ({ sessions: [s], observations: [], summaries: [], next_seq: 1, has_more: false, max_seq: 1 }) });
+    await t.engine.pull(t.project, 2000);
+    const got = t.store.getSession(s.id)!.userId;
+    expect(got.length).toBe(200); expect(got).not.toMatch(/[\u0000-\u001f]/);
+  });
+  it('last_error is cleared by the next success and carries last_error_at', async () => {
+    let fail = true;
+    const t = setup({ pull: () => (fail ? new TypeError('fetch failed') : { ...empty, next_seq: 1, has_more: false, max_seq: 1 }) });
+    await t.engine.pull(t.project, 2000);
+    expect(t.store.getSyncState(t.project.id)).toMatchObject({ lastError: expect.stringContaining('fetch failed'), lastErrorAt: expect.any(Number) });
+    fail = false; await t.engine.pull(t.project, 2000);
+    expect(t.store.getSyncState(t.project.id)).toMatchObject({ lastError: null, lastErrorAt: null });
+  });
+  it('rows a hub keeps refusing for size: skipped after 5 tries (rows behind them go), given up after 20', async () => {
+    const t = setup({ push: (_n, b) => json({ accepted: { sessions: b.sessions.length, observations: 0, summaries: 0 }, rejected: b.observations.filter((o: any) => o.title.startsWith('BIG')).map((o: any) => ({ id: o.id, reason: 'invalid_row', field: 'narrative' })) }) });
+    const s = sess(t.project.id, { userId: 'alice' }); t.store.upsertSession(s); t.store.markSynced('sessions', [s.id], 'x');
+    const big = Array.from({ length: 200 }, (_, i) => obs({ projectId: t.project.id, sessionId: s.id, userId: 'alice', title: 'BIG ' + i }));
+    const ok = obs({ projectId: t.project.id, sessionId: s.id, userId: 'alice', title: 'ok' });
+    t.store.insertObservations([...big, ok]);
+    for (let i = 0; i < 5; i++) await t.engine.push(t.project);
+    expect(t.store.getObservations([ok.id])[0].syncedAt).toBeNull();   // starved behind 200 refused rows
+    await t.engine.push(t.project);
+    expect(t.store.getObservations([ok.id])[0].syncedAt).not.toBeNull();
+    expect(t.store.listUnsynced('observations', t.project.id, 500)).toHaveLength(200);
+    // past 5 tries a new process (daemon restart) tries once more, then skips them again; 20 tries in total give them up
+    let last;
+    for (let r = 0; r < 15; r++) {
+      const e = new SyncEngine({ store: t.store, home: t.home, logger: silent, embedDims: null, fetchImpl: t.fetchImpl });
+      for (let i = 0; i < 2; i++) { const r2 = await e.push(t.project); if (r2?.rejected.length) last = r2; }
+      if (r < 14) expect(t.store.listUnsynced('observations', t.project.id, 500)).toHaveLength(200);
+    }
+    expect(t.store.listUnsynced('observations', t.project.id, 500)).toHaveLength(0);
+    expect(last!.rejected.filter((x) => x.reason === 'given_up')).toHaveLength(200);
+  });
+  it('close() waits at most 10 s for a hung background pull; the config fetch counts against the pull deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      // a hub that never answers and ignores aborts
+      const t = setup({ pull: () => new Promise(() => {}) as never });
+      (t.engine as unknown as { deps: { fetchImpl: typeof fetch } }).deps.fetchImpl = (() => new Promise(() => {})) as unknown as typeof fetch;
+      t.store.setPullCursor(t.project.id, 1);
+      await t.engine.startPull(t.project);
+      let closed = false; const c = t.engine.close().then(() => { closed = true; });
+      await vi.advanceTimersByTimeAsync(9_900); expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(200); await c; expect(closed).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 });
 

@@ -7,8 +7,11 @@ export interface Summary { id: string; projectId: string; sessionId: string; use
 export interface SearchFilters { projectId: string; type?: ObservationType; userId?: string; since?: string; limit: number }
 export interface SearchHit { id: string; score: number }
 /** Per-project sync bookkeeping; times are epoch ms. */
-export interface SyncState { projectId: string; pullCursor: number; hubEpoch: string | null; backoffUntil: number | null; backoffMs: number | null; strikes: number; lastError: string | null; lastPushAt: number | null; lastPullAt: number | null }
-export type SyncStatePatch = Partial<Pick<SyncState, 'backoffUntil' | 'backoffMs' | 'strikes' | 'lastError' | 'lastPushAt' | 'lastPullAt'>>;
+export interface SyncState { projectId: string; pullCursor: number; hubEpoch: string | null; backoffUntil: number | null; backoffMs: number | null; strikes: number; lastError: string | null; lastErrorAt: number | null; lastPushAt: number | null; lastPullAt: number | null; quarantined: number }
+export type SyncStatePatch = Partial<Pick<SyncState, 'backoffUntil' | 'backoffMs' | 'strikes' | 'lastError' | 'lastErrorAt' | 'lastPushAt' | 'lastPullAt'>>;
+export type SyncTable = 'sessions' | 'observations' | 'summaries';
+/** A pulled row that could not be stored; raw is the row as received (JSON, without its vector). */
+export interface QuarantineRow { id: string; tbl: SyncTable; seq: number; reason: string; raw: string; createdAt?: string }
 export interface Store {
   migrate(): void;
   close(): void;
@@ -39,7 +42,10 @@ export interface Store {
   insertSummaries(s: Summary[]): void;
   listRecentSummaries(projectId: string, limit: number): Summary[];
   searchSummariesFts(query: string, f: SearchFilters): SearchHit[];
-  listUnsynced(table: 'sessions' | 'observations' | 'summaries', projectId: string, limit: number): Array<Session | Observation | Summary>;
+  listUnsynced(table: SyncTable, projectId: string, limit: number, exclude?: Iterable<string>): Array<Session | Observation | Summary>;
+  bumpPushAttempts(table: SyncTable, ids: string[]): Map<string, number>;   // returns the new count per id
+  quarantine(projectId: string, rows: QuarantineRow[]): void;   // keeps the newest 1000 per project
+  listQuarantine(projectId: string, limit: number): QuarantineRow[];
   markSynced(table: 'sessions' | 'observations' | 'summaries', ids: string[], at: string): void;
   getPullCursor(projectId: string): number;
   setPullCursor(projectId: string, cursor: number): void;

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -34,6 +34,14 @@ describe('session start context', () => {
     expect(r2.context).not.toContain('Mallory note'); expect(r2.context).toContain('Alice note');
     on.ctx.store.close(); off.ctx.store.close();
   });
+  it('includeOtherUsers=false keeps own rows captured under another name (before login, or renamed)', async () => {
+    const off = seeded({ MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' });
+    const old = sess(off.project.id, { userId: 'local' }); off.ctx.store.upsertSession(old);
+    off.ctx.store.insertObservations([obs({ projectId: off.project.id, sessionId: old.id, userId: 'local', title: 'Before login note' })]);
+    const r = (await handleRoute(off.ctx, 'POST', new URL('http://x/v1/sessions/start'), start(off.home))).body as { context: string };
+    expect(r.context).toContain('Before login note'); expect(r.context).not.toContain('Mallory note');
+    off.ctx.store.close();
+  });
 });
 
 describe('session start pull', () => {
@@ -48,6 +56,7 @@ describe('session start pull', () => {
     (s.ctx.sync as any).deps.fetchImpl = (async (url: string) => {
       await new Promise((r) => setTimeout(r, delayMs));
       if (String(url).includes('/v1/sync/pull')) { pulls++; return new Response(JSON.stringify(page), { status: 200 }); }
+      if (String(url).endsWith('/v1/config')) return new Response(JSON.stringify({ version: 'x', protocol: 1, embedding_model: null, embedding_dims: null, body_limit: 2_000_000 }), { status: 200 });
       return new Response(JSON.stringify({ accepted: { sessions: 0, observations: 0, summaries: 0 }, rejected: [] }), { status: 200 });
     }) as typeof fetch;
     return { ...s, pulls: () => pulls };
@@ -58,23 +67,45 @@ describe('session start pull', () => {
   };
 
   it('session start does not wait for a slow hub', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const s = linked(5000); s.ctx.store.setPullCursor(s.project.id, 1);   // pulled before
-    const r = await startAt(s);
-    expect(r.ms).toBeLessThan(500);
-    expect(s.pulls()).toBe(0);   // still in flight
-    s.ctx.sync!.close(); s.ctx.store.close();   // close() is awaited by the daemon; here the store just goes away
+    let r;
+    try {
+      r = await startAt(s);   // resolves with no timer advanced: the route does not wait on the hub
+      expect(r.ms).toBe(0);
+      expect(s.pulls()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20_000); await s.ctx.sync!.close();
+    } finally { vi.useRealTimers(); }
+    s.ctx.store.close();
   });
   it('first pull waits up to 1 s', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const slow = linked(5000);
-    let r = await startAt(slow);
-    expect(r.ms).toBeGreaterThanOrEqual(950); expect(r.ms).toBeLessThan(1500);
+    try {
+      let done = false; const p = startAt(slow).then((x) => { done = true; return x; });
+      await vi.advanceTimersByTimeAsync(990); expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(20); expect(done).toBe(true);
+      expect((await p).ms).toBe(1000);
+      await vi.advanceTimersByTimeAsync(20_000); await slow.ctx.sync!.close();   // let the slow pull finish before the store goes
+    } finally { vi.useRealTimers(); }
+    slow.ctx.store.close();
     const fast = linked(20);
+    let r;
     r = await startAt(fast);
     expect(r.ms).toBeLessThan(900);
     expect(r.context).toContain('Pulled from hub');
     await fast.ctx.sync!.close(); fast.ctx.store.close();
   });
   it('no pull while backing off or logged out; close() awaits a background pull', async () => {
+    const out = linked(10); out.ctx.store.setPullCursor(out.project.id, 1);
+    saveCredentials(out.home, { hubs: {} });   // logged out
+    await startAt(out); await out.ctx.sync!.close();
+    expect(out.pulls()).toBe(0);
+    const failed = linked(10); failed.ctx.store.setPullCursor(failed.project.id, 1);
+    saveCredentials(failed.home, { hubs: { [hubUrl]: { key: 'mh_' + 'A'.repeat(43), user: 'alice', authFailed: true } } });
+    await startAt(failed); await failed.ctx.sync!.close();
+    expect(failed.pulls()).toBe(0);
+    out.ctx.store.close(); failed.ctx.store.close();
     const s = linked(100); s.ctx.store.setPullCursor(s.project.id, 1);
     (s.ctx.sync as any).backoff.set(s.project.id, { until: Date.now() + 60_000, delayMs: 30_000, strikes: 0 });
     await startAt(s); await s.ctx.sync!.close();

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { Observation, Project, Prompt, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch } from '../types.js';
+import type { Observation, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable } from '../types.js';
 import { SQLITE_MIGRATIONS } from './migrations.js';
 import { toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
@@ -13,8 +13,8 @@ const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); re
 const rowToProject = (r: Row): Project => ({ id: r.id, key: r.key, name: r.name, hubUrl: r.hub_url ?? null, createdAt: r.created_at });
 const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: r.synced_at ?? null, origin: r.origin });
 const rowToObservation = (r: Row): Observation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: r.origin, syncedAt: r.synced_at ?? null });
-const rowToSyncState = (r: Row): SyncState => ({ projectId: r.project_id, pullCursor: Number(r.pull_cursor), hubEpoch: r.hub_epoch ?? null, backoffUntil: r.backoff_until ?? null, backoffMs: r.backoff_ms ?? null, strikes: Number(r.strikes ?? 0), lastError: r.last_error ?? null, lastPushAt: r.last_push_at ?? null, lastPullAt: r.last_pull_at ?? null });
-const SYNC_COLS: Record<keyof SyncStatePatch, string> = { backoffUntil: 'backoff_until', backoffMs: 'backoff_ms', strikes: 'strikes', lastError: 'last_error', lastPushAt: 'last_push_at', lastPullAt: 'last_pull_at' };
+const rowToSyncState = (r: Row): SyncState => ({ projectId: r.project_id, pullCursor: Number(r.pull_cursor), hubEpoch: r.hub_epoch ?? null, backoffUntil: r.backoff_until ?? null, backoffMs: r.backoff_ms ?? null, strikes: Number(r.strikes ?? 0), lastError: r.last_error ?? null, lastErrorAt: r.last_error_at ?? null, lastPushAt: r.last_push_at ?? null, lastPullAt: r.last_pull_at ?? null, quarantined: Number(r.quarantined ?? 0) });
+const SYNC_COLS: Record<keyof SyncStatePatch, string> = { backoffUntil: 'backoff_until', backoffMs: 'backoff_ms', strikes: 'strikes', lastError: 'last_error', lastErrorAt: 'last_error_at', lastPushAt: 'last_push_at', lastPullAt: 'last_pull_at' };
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: r.origin, syncedAt: r.synced_at ?? null });
 
 function filterSql(f: SearchFilters, alias: string): { sql: string; params: unknown[] } {
@@ -204,8 +204,9 @@ export class SqliteStore implements Store {
     return rows.map((r) => ({ id: r.id, score: -r.score }));
   }
 
-  listUnsynced(table: 'sessions' | 'observations' | 'summaries', projectId: string, limit: number): Array<Session | Observation | Summary> {
-    const rows = this.db.prepare(`SELECT * FROM ${table} WHERE project_id = ? AND synced_at IS NULL AND origin = 'local' ORDER BY rowid LIMIT ?`).all(projectId, limit) as Row[];
+  listUnsynced(table: SyncTable, projectId: string, limit: number, exclude: Iterable<string> = []): Array<Session | Observation | Summary> {
+    const ex = [...exclude];   // shortcut: one bound parameter per excluded id, fine while only rows a hub keeps refusing land here
+    const rows = this.db.prepare(`SELECT * FROM ${table} WHERE project_id = ? AND synced_at IS NULL AND origin = 'local'${ex.length ? ` AND id NOT IN (${ex.map(() => '?').join(',')})` : ''} ORDER BY rowid LIMIT ?`).all(projectId, ...ex, limit) as Row[];
     const conv: (r: Row) => Session | Observation | Summary = table === 'sessions' ? rowToSession : table === 'observations' ? rowToObservation : rowToSummary;
     return rows.map(conv);
   }
@@ -223,7 +224,8 @@ export class SqliteStore implements Store {
   }
   getSyncState(projectId: string): SyncState {
     const r = this.db.prepare('SELECT * FROM sync_state WHERE project_id = ?').get(projectId) as Row | undefined;
-    return r ? rowToSyncState(r) : rowToSyncState({ project_id: projectId, pull_cursor: 0 });
+    const quarantined = (this.db.prepare('SELECT COUNT(*) c FROM sync_quarantine WHERE project_id = ?').get(projectId) as Row).c;
+    return rowToSyncState({ ...(r ?? { project_id: projectId, pull_cursor: 0 }), quarantined });
   }
   updateSyncState(projectId: string, patch: SyncStatePatch): void {
     const keys = (Object.keys(patch) as Array<keyof SyncStatePatch>).filter((k) => k in SYNC_COLS);
@@ -232,7 +234,25 @@ export class SqliteStore implements Store {
     this.db.prepare(`INSERT INTO sync_state(project_id, ${cols.join(', ')}) VALUES (?, ${cols.map(() => '?').join(', ')})
       ON CONFLICT(project_id) DO UPDATE SET ${cols.map((c) => `${c} = excluded.${c}`).join(', ')}`).run(projectId, ...keys.map((k) => patch[k] ?? null));
   }
-  listSyncStates(): SyncState[] { return (this.db.prepare('SELECT * FROM sync_state').all() as Row[]).map(rowToSyncState); }
+  listSyncStates(): SyncState[] { return (this.db.prepare('SELECT s.*, (SELECT COUNT(*) FROM sync_quarantine q WHERE q.project_id = s.project_id) AS quarantined FROM sync_state s').all() as Row[]).map(rowToSyncState); }
+  bumpPushAttempts(table: SyncTable, ids: string[]): Map<string, number> {
+    const out = new Map<string, number>(); if (!ids.length) return out;
+    const stmt = this.db.prepare(`UPDATE ${table} SET push_attempts = push_attempts + 1 WHERE id = ? RETURNING push_attempts`);
+    this.db.transaction(() => { for (const id of ids) { const r = stmt.get(id) as Row | undefined; if (r) out.set(id, Number(r.push_attempts)); } })();
+    return out;
+  }
+  quarantine(projectId: string, rows: QuarantineRow[]): void {
+    if (!rows.length) return;
+    const ins = this.db.prepare('INSERT INTO sync_quarantine(id, tbl, project_id, seq, reason, raw, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    const at = new Date().toISOString();
+    this.db.transaction(() => {
+      for (const q of rows) ins.run(q.id, q.tbl, projectId, q.seq, q.reason, q.raw, q.createdAt ?? at);
+      this.db.prepare('DELETE FROM sync_quarantine WHERE project_id = ? AND rowid NOT IN (SELECT rowid FROM sync_quarantine WHERE project_id = ? ORDER BY rowid DESC LIMIT 1000)').run(projectId, projectId);
+    })();
+  }
+  listQuarantine(projectId: string, limit: number): QuarantineRow[] {
+    return (this.db.prepare('SELECT * FROM sync_quarantine WHERE project_id = ? ORDER BY rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, seq: r.seq, reason: r.reason, raw: r.raw, createdAt: r.created_at }));
+  }
   getHubEpoch(projectId: string): string | null { const r = this.db.prepare('SELECT hub_epoch FROM sync_state WHERE project_id = ?').get(projectId) as Row | undefined; return (r?.hub_epoch as string | null | undefined) ?? null; }
   setHubEpoch(projectId: string, epoch: string): void {
     this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor, hub_epoch) VALUES (?, 0, ?) ON CONFLICT(project_id) DO UPDATE SET hub_epoch = excluded.hub_epoch').run(projectId, epoch);

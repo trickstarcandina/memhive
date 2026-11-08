@@ -1,5 +1,5 @@
 import type { Logger } from '../shared/logger.js';
-import type { Observation, Project, Session, Store, Summary } from '../store/types.js';
+import type { Observation, Project, QuarantineRow, Session, Store, Summary, SyncTable } from '../store/types.js';
 import type { SyncHooks } from '../daemon/context.js';
 import { z } from 'zod';
 import { HUB_PROTOCOL, HubObservationSchema, HubSessionSchema, HubSummarySchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
@@ -15,10 +15,21 @@ const BACKOFF_START_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60_000;
 const MAX_STRIKES = 5;   // 404 / bare-4xx failures in a row before the bounded policy in pushOnce kicks in
 const FIRST_PULL_WAIT_MS = 1000;
+const CLOSE_WAIT_MS = 10_000;   // close() waits this long at most for background pulls
+const SKIP_AFTER = 5;   // size refusals of one row before this process stops sending it
+const GIVE_UP_AFTER = 20;   // size refusals of one row, across restarts, before it is marked synced (given up)
+const PULL_LIMIT = 500; const PULL_LIMIT_MIN = 25;   // rows per pull page; halved on an oversized response
 const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes its embedder is noticed without a daemon restart
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
-// cwd is no longer relayed (hubs send ''), so it is optional here.
-const PulledSession = HubSessionSchema.extend({ cwd: z.string().optional() });
+// Pulled rows: ids must look like ids and dates must parse, or the row is quarantined. cwd is no longer relayed (hubs send '').
+const pid = z.string().regex(/^[0-9a-f-]{8,64}$/i);
+const pdate = z.string().max(64).refine((v) => Number.isFinite(Date.parse(v)));
+const PulledSession = HubSessionSchema.extend({ id: pid, cwd: z.string().optional(), startedAt: pdate, endedAt: pdate.nullable() });
+const PulledObservation = HubObservationSchema.extend({ id: pid, sessionId: pid, createdAt: pdate });
+const PulledSummary = HubSummarySchema.extend({ id: pid, sessionId: pid, createdAt: pdate });
+const safeText = (v: string, n: number) => v.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, n);
+// The author name is shown in context and MCP output: no control characters, bounded.
+const cleanUser = (v: string) => safeText(redactSecrets(v), 200);
 // Pulled rows come from other clients (or anyone with a key and curl): redact and clip them again with the hub's caps,
 // clipping rather than rejecting so an older hub's longer rows still arrive.
 const cut = (v: string, n: number) => redactSecrets(v).slice(0, n);
@@ -54,16 +65,15 @@ export class SyncEngine implements SyncHooks {
     // A hub's retry-after (auth throttle, 429) is honored, within the ladder's cap.
     return Math.min(Math.max(next, e instanceof HubError ? e.retryAfterMs ?? 0 : 0), BACKOFF_MAX_MS);
   }
-  private badPulled = new Set<string>();
+  private badPulled = new Set<string>();   // ids already logged as quarantined
+  private skipPush = new Set<string>();   // row ids a hub refused SKIP_AFTER times for size: not listed again in this process
   constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null; embedModel?: string | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
 
   private clientFor(project: Project): HubClient | null {
     if (!project.hubUrl) return null;
     const cred = loadCredentials(this.deps.home).hubs[project.hubUrl];
     if (!cred || cred.authFailed) return null;
-    const client = new HubClient(project.hubUrl, cred.key, this.deps.fetchImpl);
-    const limit = this.hubCfg.get(project.hubUrl)?.cfg.body_limit; if (limit && limit > 0) client.maxBytes = limit * 4;
-    return client;
+    return new HubClient(project.hubUrl, cred.key, this.deps.fetchImpl);
   }
   private markAuthFailed(project: Project): void {
     const c = loadCredentials(this.deps.home);
@@ -74,27 +84,30 @@ export class SyncEngine implements SyncHooks {
   /** Records a failure for `memhive sync` and sync_state.last_error (redacted, no control chars, bounded). */
   private noteError(projectId: string, msg: string): void {
     const clean = redactSecrets(msg).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, 500);
-    this.lastError.set(projectId, clean); this.deps.store.updateSyncState(projectId, { lastError: clean });
+    this.lastError.set(projectId, clean); this.deps.store.updateSyncState(projectId, { lastError: clean, lastErrorAt: Date.now() });
   }
+  private succeeded(projectId: string, at: 'lastPushAt' | 'lastPullAt'): void { this.deps.store.updateSyncState(projectId, { [at]: Date.now(), lastError: null, lastErrorAt: null }); }
   private failed(project: Project, what: string, e: unknown): void {
     this.noteError(project.id, `${what}: ${e instanceof Error ? e.message : String(e)}`);
     if (e instanceof HubError && e.status === 401) this.markAuthFailed(project);
     else this.deps.logger.warn(`${what} failed, will retry on next trigger`, { hub: project.hubUrl, error: e instanceof Error ? e.message : String(e) });
   }
 
-  private async hubConfig(client: HubClient, hubUrl: string, refresh = false): Promise<HubConfigInfo | null> {
+  /** Also sets the client's response cap from the hub's body_limit, before the client's first large request. */
+  private async hubConfig(client: HubClient, hubUrl: string, refresh = false, timeoutMs = 10000): Promise<HubConfigInfo | null> {
+    const fits = (c: HubConfigInfo) => { if (c.body_limit && c.body_limit > 0) client.maxBytes = c.body_limit * 4; return c; };
     const hit = this.hubCfg.get(hubUrl);
-    if (!refresh && hit && Date.now() - hit.at < CONFIG_TTL_MS) return hit.cfg;
+    if (!refresh && hit && Date.now() - hit.at < CONFIG_TTL_MS) return fits(hit.cfg);
     try {
-      const c = await client.config(); this.hubCfg.set(hubUrl, { cfg: c, at: Date.now() });
+      const c = fits(await client.config(timeoutMs)); this.hubCfg.set(hubUrl, { cfg: c, at: Date.now() });
       if ((c.protocol ?? 0) < HUB_PROTOCOL && !this.oldHubWarned.has(hubUrl)) { this.oldHubWarned.add(hubUrl); this.deps.logger.warn('hub is older than this client (no or lower protocol); syncing anyway, upgrade the hub', { hub: hubUrl, protocol: c.protocol ?? null }); }
       return c;
     } catch { return null; }   // unknown: send vectors, the reject path resends without
   }
   private oldHubWarned = new Set<string>();
   /** A hub newer than this client may send or expect shapes we do not know: refuse to sync with it. */
-  private async protocolError(client: HubClient, project: Project): Promise<string | null> {
-    const p = (await this.hubConfig(client, project.hubUrl!))?.protocol;
+  private async protocolError(client: HubClient, project: Project, timeoutMs?: number): Promise<string | null> {
+    const p = (await this.hubConfig(client, project.hubUrl!, false, timeoutMs))?.protocol;
     if (p === undefined || p <= HUB_PROTOCOL) return null;
     const msg = `hub_protocol: the hub speaks sync protocol ${p}, this memhive speaks ${HUB_PROTOCOL}; upgrade memhive`;
     this.noteError(project.id, msg);
@@ -143,11 +156,11 @@ export class SyncEngine implements SyncHooks {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const client = this.clientFor(project); if (!client) return round === 0 ? null : total;
       const { store, logger } = this.deps;
-      const sessions = (store.listUnsynced('sessions', project.id, cap) as Session[]).map(clipSess);
+      const sessions = (store.listUnsynced('sessions', project.id, cap, this.skipPush) as Session[]).map(clipSess);
       // A full session batch goes alone so no observation can reference a session that is still queued.
       const sessionsFirst = sessions.length === cap;
-      const observations = sessionsFirst ? [] : store.listUnsynced('observations', project.id, cap) as Observation[];
-      const summaries = sessionsFirst ? [] : (store.listUnsynced('summaries', project.id, cap) as Summary[]).map(clipSum);
+      const observations = sessionsFirst ? [] : store.listUnsynced('observations', project.id, cap, this.skipPush) as Observation[];
+      const summaries = sessionsFirst ? [] : (store.listUnsynced('summaries', project.id, cap, this.skipPush) as Summary[]).map(clipSum);
       if (!sessions.length && !observations.length && !summaries.length) { this.backoff.delete(project.id); return total; }
       const cfg = await this.hubConfig(client, project.hubUrl!);
       const vecs = store.getObservationEmbeddings(observations.map((o) => o.id));
@@ -197,16 +210,31 @@ export class SyncEngine implements SyncHooks {
       }
       // While isolating, a passing row keeps the strike count so the refused row is given up when it comes up.
       if (!isolating) this.backoff.delete(project.id);
-      store.updateSyncState(project.id, { lastPushAt: Date.now() });
+      this.succeeded(project.id, 'lastPushAt');
       // Rejected rows are marked synced too (retrying the same invalid row would loop forever), except size refusals on clipped fields.
       const now = new Date().toISOString();
       const kept = new Set(result.rejected.filter((r) => r.reason === 'invalid_row' && r.field && CLIPPED.has(r.field)).map((r) => r.id));
-      if (kept.size) logger.warn('hub refused rows over its size caps; they stay queued', { hub: project.hubUrl, fields: [...new Set(result.rejected.filter((r) => kept.has(r.id)).map((r) => r.field))] });
+      if (kept.size) {
+        // Bounded: after SKIP_AFTER attempts a row is left out for the rest of this process (rows behind it still go), and after
+        // GIVE_UP_AFTER attempts in total (across restarts) it is given up like any other refused row.
+        const fields = [...new Set(result.rejected.filter((r) => kept.has(r.id)).map((r) => r.field))];
+        const tables: Array<[SyncTable, string[]]> = [['sessions', sessions.map((x) => x.id)], ['observations', hubObs.map((x) => x.id)], ['summaries', sums.map((x) => x.id)]];
+        const givenUp: string[] = [];
+        for (const [table, ids] of tables) for (const [id, n] of store.bumpPushAttempts(table, ids.filter((id) => kept.has(id)))) {
+          if (n >= GIVE_UP_AFTER) { kept.delete(id); givenUp.push(id); this.skipPush.delete(id); } else if (n >= SKIP_AFTER) this.skipPush.add(id);
+        }
+        logger.warn('hub refused rows over its size caps; they stay queued', { hub: project.hubUrl, fields, count: kept.size });
+        if (givenUp.length) {
+          logger.warn('hub kept refusing rows over its size caps; given up', { hub: project.hubUrl, fields, count: givenUp.length });
+          const g = new Set(givenUp);
+          result = { ...result, rejected: result.rejected.map((r) => (g.has(r.id) ? { ...r, reason: 'given_up' } : r)) };
+        }
+      }
       const done = (ids: string[]) => ids.filter((id) => !kept.has(id));
       store.markSynced('sessions', done(sessions.map((s) => s.id)), now);
       store.markSynced('observations', done(hubObs.map((o) => o.id)), now);
       store.markSynced('summaries', done(sums.map((s) => s.id)), now);
-      const lost = result.rejected.filter((r) => !kept.has(r.id));
+      const lost = result.rejected.filter((r) => !kept.has(r.id) && r.reason !== 'given_up');
       if (lost.length) logger.warn('hub rejected rows; they will not be retried', { hub: project.hubUrl, count: lost.length, sample: lost.slice(0, 5) });
       total.accepted.sessions += result.accepted.sessions; total.accepted.observations += result.accepted.observations; total.accepted.summaries += result.accepted.summaries;
       total.rejected.push(...result.rejected);
@@ -236,25 +264,23 @@ export class SyncEngine implements SyncHooks {
   }
 
   private async pullOnce(project: Project, timeoutMs: number): Promise<number> {
+    const deadline = Date.now() + timeoutMs; const left = () => Math.max(1, deadline - Date.now());   // config fetch included
     const client = this.clientFor(project); if (!client) return 0;
-    if (await this.protocolError(client, project)) return 0;
+    if (await this.protocolError(client, project, left())) return 0;
     const { store, embedDims, embedModel, logger } = this.deps;
     // Vectors we would drop anyway (no local embedder, or another model/dims) are not downloaded; unknown hub config: ask for them.
-    const cfg = await this.hubConfig(client, project.hubUrl!);
+    const cfg = await this.hubConfig(client, project.hubUrl!, false, left());
     const vectors = !cfg || (!!embedDims && !!embedModel && cfg.embedding_model === embedModel && cfg.embedding_dims === embedDims);
     let applied = 0; let since = store.getPullCursor(project.id);
-    const deadline = Date.now() + timeoutMs; let wasReset = false;
-    // One bad row must not stall the cursor: it is logged (once per id) and skipped.
-    const apply = (id: string, fn: () => void): boolean => {
-      try { fn(); return true; }
-      catch (e) { if (!this.badPulled.has(id)) { this.badPulled.add(id); logger.warn('pulled row could not be stored; skipped', { id, error: String(e) }); } return false; }
-    };
+    let wasReset = false; let limit = PULL_LIMIT;
     for (;;) {
+      if (Date.now() >= deadline) break;
       let page;
-      try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now()), vectors); }
+      try { page = await client.pull(project.key, since, limit, left(), vectors); }
       catch (e) {
-        this.failed(project, 'pull', e);
-        if (transient(e)) { const prev = this.backoff.get(project.id); const delayMs = this.ladder(prev, e); this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes: prev?.strikes ?? 0 }); }
+        // A hub that does not cap pages by bytes (0.1.x) can send more than our cap: ask for fewer rows, nothing is stored yet.
+        if (e instanceof HubError && e.code === 'response_too_large' && limit > PULL_LIMIT_MIN) { limit = Math.max(PULL_LIMIT_MIN, Math.floor(limit / 2)); continue; }
+        this.pullFailed(project, e);
         break;
       }
       // A cursor past the hub's last seq, or a new hub epoch (project id), means the hub lost its data (restored or recreated):
@@ -268,7 +294,6 @@ export class SyncEngine implements SyncHooks {
         logger.warn(newEpoch ? 'hub epoch changed (hub recreated?); resyncing project' : 'pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
         store.resetProjectSync(project.id); since = 0; wasReset = true; this.schedulePush(project.id);
         if (epoch) store.setHubEpoch(project.id, epoch);
-        if (Date.now() > deadline) break;
         continue;
       }
       // Changed again after this call's reset: no second reset in one call. The epoch is not stored, so the next pull resets.
@@ -276,43 +301,72 @@ export class SyncEngine implements SyncHooks {
       if (epoch && knownEpoch === null) store.setHubEpoch(project.id, epoch);   // first seen
       const now = new Date().toISOString();
       const progressed = page.next_seq > since;
-      // Rows are checked one by one: a malformed row is logged once and skipped like a row the store refuses.
-      const rows = <T>(list: unknown[], schema: z.ZodType<T>): T[] => list.flatMap((raw) => {
-        const r = schema.safeParse(raw); if (r.success) return [r.data];
-        apply(String((raw as { id?: unknown } | null)?.id ?? '?'), () => { throw new Error(`malformed row: ${r.error.issues[0]?.path.join('.')}`); });
-        return [];
+      // A row that cannot be stored (malformed, unknown session, refused by a constraint) is quarantined, not lost behind the cursor.
+      const quarantine: QuarantineRow[] = [];
+      const hold = (tbl: SyncTable, raw: unknown, reason: string) => {
+        const { embedding: _v, ...rest } = (raw && typeof raw === 'object' ? raw : { value: raw }) as Record<string, unknown>;
+        const id = String(rest.id ?? '?').slice(0, 100);
+        quarantine.push({ id, tbl, seq: page.next_seq, reason: safeText(reason, 200), raw: JSON.stringify(rest) });
+        if (!this.badPulled.has(id)) { this.badPulled.add(id); logger.warn('pulled row could not be stored; quarantined', { id, table: tbl, reason: safeText(reason, 200) }); }
+      };
+      const rows = <T>(tbl: SyncTable, list: unknown[], schema: z.ZodType<T>): Array<{ row: T; raw: unknown }> => list.flatMap((raw) => {
+        const r = schema.safeParse(raw); if (r.success) return [{ row: r.data, raw }];
+        hold(tbl, raw, `malformed: ${r.error.issues[0]?.path.join('.') ?? '?'}`); return [];
       });
-      const sessions = rows(page.sessions, PulledSession).map((s) => ({ ...s, host: cut(s.host, MAX_SHORT), hostSessionId: cut(s.hostSessionId, MAX_SHORT), cwd: '' }));
-      const observations = rows(page.observations, HubObservationSchema).map((o) => ({ ...o, title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) }));
-      const summaries = rows(page.summaries, HubSummarySchema).map((m) => ({ ...m, request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) }));
+      // Only constraint errors are about the row; any other SQLite error (disk full, I/O, busy) may have rolled the page back,
+      // so it aborts the page and the cursor stays put.
+      const apply = (tbl: SyncTable, raw: unknown, fn: () => void): boolean => {
+        try { fn(); return true; }
+        catch (e) {
+          const code = String((e as { code?: unknown })?.code ?? '');
+          if (code.startsWith('SQLITE_') && !code.startsWith('SQLITE_CONSTRAINT')) throw e;
+          hold(tbl, raw, `store: ${e instanceof Error ? e.message : String(e)}`); return false;
+        }
+      };
+      const sessions = rows('sessions', page.sessions, PulledSession).map(({ row: s, raw }) => ({ raw, row: { ...s, userId: cleanUser(s.userId), host: cut(s.host, MAX_SHORT), hostSessionId: cut(s.hostSessionId, MAX_SHORT), cwd: '' } }));
+      const observations = rows('observations', page.observations, PulledObservation).map(({ row: o, raw }) => ({ raw, row: { ...o, userId: cleanUser(o.userId), title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) } }));
+      const summaries = rows('summaries', page.summaries, PulledSummary).map(({ row: m, raw }) => ({ raw, row: { ...m, userId: cleanUser(m.userId), request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) } }));
+      let pageApplied = 0;
       // One transaction per page: a page applies whole with its cursor, and SQLite commits once instead of per row.
-      store.transaction(() => {
-        for (const s of sessions) {
-          // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
-          // session of another project or user that happens to share the id, are never overwritten.
-          const cur = store.getSession(s.id);
-          if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || cur.endedAt === s.endedAt)) continue;
-          if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
-        }
-        // A row for an unknown session is skipped, not fatal.
-        const haveObs = store.hasObservations(observations.map((o) => o.id)); const haveSums = store.hasSummaries(summaries.map((m) => m.id));
-        for (const o of observations) {
-          if (haveObs.has(o.id) || !store.getSession(o.sessionId)) continue;
-          const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
-          if (!apply(o.id, () => store.insertObservations([row]))) continue;
-          applied++;
-          if (o.embedding && embedDims && o.embedding.length === embedDims && o.embeddingModel && o.embeddingModel === embedModel) {
-            try { store.setObservationEmbedding(o.id, o.embedding, o.embeddingModel); } catch (e) { logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) }); }
+      try {
+        store.transaction(() => {
+          for (const { row: s, raw } of sessions) {
+            // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
+            // session of another project or user that happens to share the id, are never overwritten.
+            const cur = store.getSession(s.id);
+            if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || cur.endedAt === s.endedAt)) continue;
+            if (apply('sessions', raw, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) pageApplied++;
           }
-        }
-        for (const s of summaries) if (!haveSums.has(s.id) && store.getSession(s.sessionId) && apply(s.id, () => store.insertSummaries([{ ...s, projectId: project.id, origin: 'hub', syncedAt: now }]))) applied++;
-        if (page.next_seq > since) { since = page.next_seq; store.setPullCursor(project.id, since); }
-      });
-      store.updateSyncState(project.id, { lastPullAt: Date.now() });
+          const haveObs = store.hasObservations(observations.map(({ row }) => row.id)); const haveSums = store.hasSummaries(summaries.map(({ row }) => row.id));
+          for (const { row: o, raw } of observations) {
+            if (haveObs.has(o.id)) continue;
+            if (!store.getSession(o.sessionId)) { hold('observations', raw, 'unknown session'); continue; }
+            const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
+            if (!apply('observations', raw, () => store.insertObservations([row]))) continue;
+            pageApplied++;
+            if (o.embedding && embedDims && o.embedding.length === embedDims && o.embeddingModel && o.embeddingModel === embedModel) {
+              try { store.setObservationEmbedding(o.id, o.embedding, o.embeddingModel); } catch (e) { logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) }); }
+            }
+          }
+          for (const { row: m, raw } of summaries) {
+            if (haveSums.has(m.id)) continue;
+            if (!store.getSession(m.sessionId)) { hold('summaries', raw, 'unknown session'); continue; }
+            if (apply('summaries', raw, () => store.insertSummaries([{ ...m, projectId: project.id, origin: 'hub', syncedAt: now }]))) pageApplied++;
+          }
+          store.quarantine(project.id, quarantine);
+          if (progressed) { since = page.next_seq; store.setPullCursor(project.id, since); }
+        });
+      } catch (e) { since = store.getPullCursor(project.id); this.pullFailed(project, e); break; }
+      applied += pageApplied;
+      this.succeeded(project.id, 'lastPullAt');
       // has_more without a higher next_seq (a buggy hub) would re-request the same page until the deadline.
-      if (!page.has_more || !progressed || Date.now() > deadline) break;
+      if (!page.has_more || !progressed) break;
     }
     return applied;
+  }
+  private pullFailed(project: Project, e: unknown): void {
+    this.failed(project, 'pull', e);
+    if (transient(e)) { const prev = this.backoff.get(project.id); const delayMs = this.ladder(prev, e); this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes: prev?.strikes ?? 0 }); }
   }
 
   // Session start must not wait on the hub: the pull runs in the background (close() awaits it). A project never pulled
@@ -333,5 +387,10 @@ export class SyncEngine implements SyncHooks {
     const error = this.lastError.get(project.id);
     return error ? { pushed, pulled, error } : { pushed, pulled };
   }
-  async close(): Promise<void> { for (const t of this.timers.values()) clearTimeout(t); this.timers.clear(); await Promise.allSettled([...this.background]); }
+  async close(): Promise<void> {
+    for (const t of this.timers.values()) clearTimeout(t); this.timers.clear();
+    let t: NodeJS.Timeout | undefined;
+    await Promise.race([Promise.allSettled([...this.background]), new Promise<void>((r) => { t = setTimeout(r, CLOSE_WAIT_MS); t.unref?.(); })]);
+    clearTimeout(t);
+  }
 }
