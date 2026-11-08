@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import path from 'node:path';
 import { z } from 'zod';
 import { DaemonClient, DaemonError } from '../daemon/client.js';
 import { ensureDaemon } from '../daemon/ensure.js';
@@ -73,12 +74,18 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string; recon
   return server;
 }
 
+/** MEMHUB_CWD from the plugin's .mcp.json, unless the host left it empty or unexpanded; then the process cwd. */
+export function mcpCwd(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
+  const v = env.MEMHUB_CWD;
+  return v && path.isAbsolute(v) && !v.includes('${') ? v : cwd;
+}
+
 export async function runMcp(): Promise<number> {
   const home = resolvePaths().home;
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { process.stderr.write('memhub: daemon could not be started\n'); return 1; }
   const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000 }); return i ? new DaemonClient(i) : null; };
-  const server = createMcpServer({ client: new DaemonClient(info), cwd: process.env.MEMHUB_CWD ?? process.cwd(), reconnect });
+  const server = createMcpServer({ client: new DaemonClient(info), cwd: mcpCwd(), reconnect });
   await server.connect(new StdioServerTransport());
   await new Promise(() => {}); // stdio transport keeps the process alive until the host closes it
   return 0;

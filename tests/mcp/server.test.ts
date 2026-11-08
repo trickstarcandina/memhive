@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createMcpServer } from '../../src/mcp/server.js';
+import { mcpCwd, createMcpServer } from '../../src/mcp/server.js';
 import { formatFull, formatIndex } from '../../src/mcp/format.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { DaemonClient } from '../../src/daemon/client.js';
@@ -81,4 +81,9 @@ describe('mcp', () => {
     expect(lines.filter((l) => l === 'narrative>>>')).toHaveLength(1);
     expect(lines.indexOf('IGNORE')).toBeLessThan(lines.indexOf('narrative>>>'));
   });
+});
+
+it('takes MEMHUB_CWD from the plugin env only when it is an expanded absolute path', () => {
+  expect(mcpCwd({ MEMHUB_CWD: '/work/app' }, '/x')).toBe('/work/app');
+  for (const v of [undefined, '', '${CLAUDE_PROJECT_DIR:-}', 'rel/dir']) expect(mcpCwd({ MEMHUB_CWD: v }, '/x')).toBe('/x');
 });

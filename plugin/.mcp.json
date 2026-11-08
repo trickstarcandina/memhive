@@ -1,1 +1,1 @@
-{ "mcpServers": { "memhub": { "type": "stdio", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "mcp"] } } }
+{ "mcpServers": { "memhub": { "type": "stdio", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "mcp"], "env": { "MEMHUB_CWD": "${CLAUDE_PROJECT_DIR:-}" } } } }
