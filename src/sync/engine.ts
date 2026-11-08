@@ -239,6 +239,9 @@ export class SyncEngine implements SyncHooks {
     const client = this.clientFor(project); if (!client) return 0;
     if (await this.protocolError(client, project)) return 0;
     const { store, embedDims, embedModel, logger } = this.deps;
+    // Vectors we would drop anyway (no local embedder, or another model/dims) are not downloaded; unknown hub config: ask for them.
+    const cfg = await this.hubConfig(client, project.hubUrl!);
+    const vectors = !cfg || (!!embedDims && !!embedModel && cfg.embedding_model === embedModel && cfg.embedding_dims === embedDims);
     let applied = 0; let since = store.getPullCursor(project.id);
     const deadline = Date.now() + timeoutMs; let wasReset = false;
     // One bad row must not stall the cursor: it is logged (once per id) and skipped.
@@ -248,7 +251,7 @@ export class SyncEngine implements SyncHooks {
     };
     for (;;) {
       let page;
-      try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now())); }
+      try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now()), vectors); }
       catch (e) {
         this.failed(project, 'pull', e);
         if (transient(e)) { const prev = this.backoff.get(project.id); const delayMs = this.ladder(prev, e); this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes: prev?.strikes ?? 0 }); }
@@ -279,27 +282,29 @@ export class SyncEngine implements SyncHooks {
       const sessions = rows(page.sessions, PulledSession).map((s) => ({ ...s, host: cut(s.host, MAX_SHORT), hostSessionId: cut(s.hostSessionId, MAX_SHORT), cwd: '' }));
       const observations = rows(page.observations, HubObservationSchema).map((o) => ({ ...o, title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) }));
       const summaries = rows(page.summaries, HubSummarySchema).map((m) => ({ ...m, request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) }));
-      for (const s of sessions) {
-        // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
-        // session of another project or user that happens to share the id, are never overwritten.
-        const cur = store.getSession(s.id);
-        if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || cur.endedAt === s.endedAt)) continue;
-        if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
-      }
-      // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.
-      const fresh = observations.filter((o) => store.getObservations([o.id]).length === 0 && store.getSession(o.sessionId));
-      for (const o of fresh) {
-        const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
-        if (!apply(o.id, () => store.insertObservations([row]))) continue;
-        applied++;
-        if (o.embedding && embedDims && o.embedding.length === embedDims && o.embeddingModel && o.embeddingModel === embedModel) {
-          try { store.setObservationEmbedding(o.id, o.embedding, o.embeddingModel); } catch (e) { logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) }); }
+      // One transaction per page: a page applies whole with its cursor, and SQLite commits once instead of per row.
+      store.transaction(() => {
+        for (const s of sessions) {
+          // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
+          // session of another project or user that happens to share the id, are never overwritten.
+          const cur = store.getSession(s.id);
+          if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || cur.endedAt === s.endedAt)) continue;
+          if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
         }
-      }
-      // shortcut: O(n) summary dedupe per pull page, add Store.hasSummary when projects exceed ~10k summaries
-      const known = new Set(store.listRecentSummaries(project.id, 10_000).map((x) => x.id));
-      for (const s of summaries) if (!known.has(s.id) && store.getSession(s.sessionId) && apply(s.id, () => store.insertSummaries([{ ...s, projectId: project.id, origin: 'hub', syncedAt: now }]))) applied++;
-      if (page.next_seq > since) { since = page.next_seq; store.setPullCursor(project.id, since); }
+        // A row for an unknown session is skipped, not fatal.
+        const haveObs = store.hasObservations(observations.map((o) => o.id)); const haveSums = store.hasSummaries(summaries.map((m) => m.id));
+        for (const o of observations) {
+          if (haveObs.has(o.id) || !store.getSession(o.sessionId)) continue;
+          const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
+          if (!apply(o.id, () => store.insertObservations([row]))) continue;
+          applied++;
+          if (o.embedding && embedDims && o.embedding.length === embedDims && o.embeddingModel && o.embeddingModel === embedModel) {
+            try { store.setObservationEmbedding(o.id, o.embedding, o.embeddingModel); } catch (e) { logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) }); }
+          }
+        }
+        for (const s of summaries) if (!haveSums.has(s.id) && store.getSession(s.sessionId) && apply(s.id, () => store.insertSummaries([{ ...s, projectId: project.id, origin: 'hub', syncedAt: now }]))) applied++;
+        if (page.next_seq > since) { since = page.next_seq; store.setPullCursor(project.id, since); }
+      });
       store.updateSyncState(project.id, { lastPullAt: Date.now() });
       if (!page.has_more || Date.now() > deadline) break;
     }

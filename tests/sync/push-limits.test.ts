@@ -242,6 +242,30 @@ describe('persisted backoff', () => {
 });
 
 describe('pull robustness', () => {
+  it('pull requests vectors=0 when embedder differs', async () => {
+    const urls: string[] = [];
+    const spy = (inner: typeof fetch): typeof fetch => async (url, init) => { urls.push(String(url)); return inner(url, init); };
+    const same = await setup({ dims: 2, fetchImpl: spy });   // hub m/2, client m/2
+    await same.engine.pull(same.project, 2000);
+    expect(urls.filter((u) => u.includes('/v1/sync/pull')).every((u) => !u.includes('vectors=0'))).toBe(true);
+    urls.length = 0;
+    const other = await setup({ dims: 2, fetchImpl: spy });
+    (other.engine as any).deps.embedModel = 'another-model';
+    await other.engine.pull(other.project, 2000);
+    expect(urls.filter((u) => u.includes('/v1/sync/pull')).every((u) => u.includes('vectors=0'))).toBe(true);
+    urls.length = 0;
+    const none = await setup({ dims: null, fetchImpl: spy });
+    await none.engine.pull(none.project, 2000);
+    expect(urls.some((u) => u.includes('/v1/sync/pull') && u.includes('vectors=0'))).toBe(true);
+  });
+  it('one store transaction per pulled page', async () => {
+    const t = await setup({ dims: null });
+    addObs(t, 3, null); await t.engine.push(t.project);
+    t.store.resetProjectSync(t.project.id);
+    const tx = vi.spyOn(t.store, 'transaction');
+    await t.engine.pull(t.project, 2000);
+    expect(tx).toHaveBeenCalledTimes(1);
+  });
   it('a cursor past the hub max_seq (hub reset) restarts the pull and re-queues local rows for push', async () => {
     const t = await setup({ dims: null });
     addObs(t, 1, null);

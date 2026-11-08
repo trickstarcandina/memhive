@@ -41,5 +41,5 @@ export class HubClient {
   config() { return this.req(ClientHubConfigSchema, 'GET', '/v1/config'); }
   me() { return this.req(MeResultSchema, 'GET', '/v1/me'); }
   push(body: PushBody, timeoutMs = 15000): Promise<PushResult> { return this.req(PushResultSchema, 'POST', '/v1/sync/push', body, timeoutMs); }
-  pull(projectKey: string, since: number, limit = 500, timeoutMs = 10000): Promise<ClientPullResult> { return this.req(ClientPullSchema, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(projectKey)}&since=${since}&limit=${limit}`, undefined, timeoutMs); }
+  pull(projectKey: string, since: number, limit = 500, timeoutMs = 10000, vectors = true): Promise<ClientPullResult> { return this.req(ClientPullSchema, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(projectKey)}&since=${since}&limit=${limit}${vectors ? '' : '&vectors=0'}`, undefined, timeoutMs); }
 }

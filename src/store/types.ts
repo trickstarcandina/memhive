@@ -24,6 +24,9 @@ export interface Store {
   latestPrompt(sessionId: string): Prompt | null;
   insertObservations(obs: Observation[]): void;           // ignores ids that already exist
   getObservations(ids: string[]): Observation[];           // order = input order
+  hasObservations(ids: string[]): Set<string>;             // the ids that exist
+  hasSummaries(ids: string[]): Set<string>;
+  transaction<T>(fn: () => T): T;                          // nests (savepoint); a throw rolls back only its own level
   resolveIdPrefix(prefix: string): string | null;          // unique prefix of an observation id, else null
   listRecentObservations(projectId: string, limit: number): Observation[];
   listSessionObservations(sessionId: string, limit: number): Observation[];

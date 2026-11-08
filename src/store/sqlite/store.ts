@@ -115,6 +115,17 @@ export class SqliteStore implements Store {
     const byId = new Map(rows.map((r) => [r.id, rowToObservation(r)]));
     return ids.map((id) => byId.get(id)).filter((o): o is Observation => !!o);
   }
+  hasObservations(ids: string[]): Set<string> { return this.existing('observations', ids); }
+  hasSummaries(ids: string[]): Set<string> { return this.existing('summaries', ids); }
+  private existing(table: 'observations' | 'summaries', ids: string[]): Set<string> {
+    const out = new Set<string>();
+    for (let i = 0; i < ids.length; i += 500) {   // stays far below SQLite's bound-parameter limit
+      const part = ids.slice(i, i + 500);
+      for (const r of this.db.prepare(`SELECT id FROM ${table} WHERE id IN (${part.map(() => '?').join(',')})`).all(...part) as Row[]) out.add(r.id);
+    }
+    return out;
+  }
+  transaction<T>(fn: () => T): T { return this.db.transaction(fn)(); }
   resolveIdPrefix(prefix: string): string | null {
     if (prefix.length < 4) return null;
     // shortcut: suffix match scans the table, add an index on a reversed id if stores grow past ~1M rows
