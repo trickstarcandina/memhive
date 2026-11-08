@@ -1,11 +1,11 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createJsonServer } from './http.js';
 import { handleRoute } from './routes.js';
 import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, type DaemonInfo } from './info.js';
-import { DaemonClient } from './client.js';
+import { DaemonClient, healthProof } from './client.js';
 import type { DaemonContext } from './context.js';
 import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
 import { loadSettings } from '../shared/settings.js';
@@ -24,6 +24,11 @@ function tokenOk(got: string | string[] | undefined, want: string): boolean {
   if (typeof got !== 'string') return false;
   const a = Buffer.from(got); const b = Buffer.from(want);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// DNS rebinding: a browser page whose name resolves to 127.0.0.1 still sends its own Host, so only loopback names pass.
+function hostOk(host: string | undefined, port: number): boolean {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`;
 }
 
 export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = process.env): DaemonContext {
@@ -72,16 +77,28 @@ function pidAlive(pid: number): boolean { try { process.kill(pid, 0); return tru
 // either answers an authenticated health check or took the lock under 5 s ago (still starting up).
 async function acquireLock(home: string): Promise<string> {
   const file = path.join(home, 'daemon.lock');
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try { writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 }); return file; }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
-    let holder = NaN; let age = Infinity;
-    try { holder = Number(readFileSync(file, 'utf8')); age = Date.now() - statSync(file).mtimeMs; } catch { continue; }   // vanished: retry
+    let holder = NaN; let mtime = 0;
+    try { holder = Number(readFileSync(file, 'utf8')); mtime = statSync(file).mtimeMs; } catch { continue; }   // vanished: retry
     if (pidAlive(holder)) {
       const info = readDaemonInfo(home);
-      if (age < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
+      if (Date.now() - mtime < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
     }
-    rmSync(file, { force: true });
+    // Break the stale lock under a second exclusive lock and only if it is still the file judged stale, so two
+    // starters cannot both remove it (the second would delete the first one's fresh lock) and both start.
+    const breaker = `${file}.break`;
+    try { writeFileSync(breaker, String(process.pid), { flag: 'wx', mode: 0o600 }); }
+    catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      try { if (Date.now() - statSync(breaker).mtimeMs > 5000) rmSync(breaker, { force: true }); } catch { /* gone */ }   // breaker left by a crash
+      await new Promise((r) => setTimeout(r, 50));
+      continue;
+    }
+    try { if (statSync(file).mtimeMs === mtime && Number(readFileSync(file, 'utf8')) === holder) rmSync(file, { force: true }); }
+    catch { /* already gone */ }
+    finally { rmSync(breaker, { force: true }); }
   }
   throw new DaemonAlreadyRunning();
 }
@@ -98,13 +115,14 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
   const server = createJsonServer(async (method, url, body) => {
     if (url.pathname === '/healthz') {
       const nonce = url.searchParams.get('nonce') ?? '';
-      return { status: 200, body: { ok: true, pid: process.pid, proof: createHmac('sha256', token).update(nonce).digest('hex') } };
+      return { status: 200, body: { ok: true, proof: healthProof(token, nonce, process.pid) } };   // pid is bound in the proof, not disclosed
     }
     touch();
     if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(closeSafe, 10); return { status: 200, body: {} }; }
     try { return await handleRoute(ctx, method, url, body); }
     catch (e) { ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
-  }, (url, headers) => url.pathname === '/healthz' || tokenOk(headers['x-memhub-daemon-token'], token));
+  }, (url, headers) => hostOk(headers.host, port()) && (url.pathname === '/healthz' || tokenOk(headers['x-memhub-daemon-token'], token)));
+  const port = () => (server.address() as AddressInfo | null)?.port ?? -1;
   try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(opts.port ?? 0, '127.0.0.1', resolve); }); }
   catch (e) { rmSync(lock, { force: true }); throw e; }
   const info: DaemonInfo = { port: (server.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString() };

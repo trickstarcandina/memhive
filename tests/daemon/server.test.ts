@@ -1,5 +1,5 @@
-import { existsSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { existsSync, utimesSync, writeFileSync } from 'node:fs';
+import { createServer, request as httpRequest } from 'node:http';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,6 +25,20 @@ describe('daemon', () => {
   it('writes daemon.json and answers healthz', async () => {
     expect(readDaemonInfo(home)!.port).toBe(handle.info.port);
     expect(await client.health()).toBe(true);
+  });
+  it('healthz does not reveal the pid, and the proof still binds it', async () => {
+    const j = await (await fetch(`http://127.0.0.1:${handle.info.port}/healthz?nonce=n`)).json();
+    expect(j).not.toHaveProperty('pid');
+    expect(await new DaemonClient({ ...handle.info, pid: handle.info.pid + 1 }).health()).toBe(false);
+  });
+  it('rejects a foreign Host header even with the token (DNS rebinding)', async () => {
+    const status = (host: string) => new Promise<number>((resolve, reject) => {
+      const r = httpRequest({ host: '127.0.0.1', port: handle.info.port, path: '/v1/status', headers: { host, 'x-memhub-daemon-token': handle.info.token } }, (res) => { res.resume(); resolve(res.statusCode!); });
+      r.on('error', reject); r.end();
+    });
+    expect(await status(`evil.example:${handle.info.port}`)).toBe(401);
+    expect(await status(`localhost:${handle.info.port}`)).toBe(200);
+    expect(await status(`127.0.0.1:${handle.info.port}`)).toBe(200);
   });
   it('rejects requests without token', async () => {
     const res = await fetch(`http://127.0.0.1:${handle.info.port}/v1/search?q=x&project_key=k`);
@@ -80,6 +94,24 @@ describe('daemon lock and authenticated health', () => {
   it('replaces a stale lock from a dead pid', async () => {
     const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
     writeFileSync(path.join(h2, 'daemon.lock'), '999999');
+    const d = await startDaemon(createDaemonContext(h2, env), { port: 0 });
+    await d.close();
+  });
+  it('two starters on one stale lock: exactly one daemon wins, the breaker lock is cleaned up', async () => {
+    const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(h2, 'daemon.lock'), '999999');
+    const c1 = createDaemonContext(h2, env); const c2 = createDaemonContext(h2, env);
+    const r = await Promise.allSettled([startDaemon(c1, { port: 0 }), startDaemon(c2, { port: 0 })]);
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+    expect(existsSync(path.join(h2, 'daemon.lock.break'))).toBe(false);
+    for (const x of r) if (x.status === 'fulfilled') await x.value.close();
+    for (const [i, x] of r.entries()) if (x.status === 'rejected') [c1, c2][i].store.close();
+  });
+  it('a breaker lock left by a crash does not block startup forever', async () => {
+    const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(h2, 'daemon.lock'), '999999');
+    writeFileSync(path.join(h2, 'daemon.lock.break'), '999998');
+    utimesSync(path.join(h2, 'daemon.lock.break'), new Date(Date.now() - 60000), new Date(Date.now() - 60000));
     const d = await startDaemon(createDaemonContext(h2, env), { port: 0 });
     await d.close();
   });
