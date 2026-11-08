@@ -40,6 +40,15 @@ export function storeContract(name: string, open: () => Store): void {
       expect(s.countSessions(p.id)).toBe(1);
     });
 
+    it('sessions: an upsert with another project or user never touches the existing row', () => {
+      const p = s.getOrCreateProject('k', 'n'); const q = s.getOrCreateProject('k2', 'n2');
+      const a = sess(p.id, { hostSessionId: 'own', userId: 'alice' });
+      s.upsertSession(a);
+      s.upsertSession({ ...a, projectId: q.id, cwd: '/forged', endedAt: '2026-01-01T00:00:00.000Z' });
+      s.upsertSession({ ...a, userId: 'mallory', cwd: '/forged', endedAt: '2026-01-01T00:00:00.000Z' });
+      expect(s.getSession(a.id)).toMatchObject({ projectId: p.id, userId: 'alice', cwd: a.cwd, endedAt: null });
+    });
+
     it('prompts: latest', () => {
       const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id); s.upsertSession(a);
       s.insertPrompt({ id: newId(), sessionId: a.id, text: 'one', createdAt: '2026-01-01T00:00:00Z' });

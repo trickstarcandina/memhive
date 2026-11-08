@@ -89,7 +89,8 @@ export class SqliteStore implements Store {
   upsertSession(s: Session): void {
     this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at, synced_at, origin)
       VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt, @syncedAt, @origin)
-      ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL`).run({ ...s, origin: s.origin ?? 'local' });
+      ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL
+      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id`).run({ ...s, origin: s.origin ?? 'local' });
   }
   getSession(id: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined; return r ? rowToSession(r) : null; }
   getSessionByHost(host: string, hostSessionId: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE host = ? AND host_session_id = ?').get(host, hostSessionId) as Row | undefined; return r ? rowToSession(r) : null; }
