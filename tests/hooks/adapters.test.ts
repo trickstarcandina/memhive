@@ -44,11 +44,12 @@ describe('claude-code adapter', () => {
 
 describe('codex adapter', () => {
   const a = getAdapter('codex')!;
-  it('PostCompact maps to session-start with source compact', () => {
-    const e = a.parse(fx('codex', 'post-compact'), now)!;
+  it('PostCompact is ignored: Codex re-runs SessionStart with source compact after compacting', () => {
+    expect(a.parse(fx('codex', 'post-compact'), now)).toBeNull();
+    const e = a.parse({ session_id: 'cx-1', cwd: '/work/app', hook_event_name: 'SessionStart', source: 'compact' }, now)!;
     expect(e.event).toBe('session-start');
     expect(e.source).toBe('compact');
-    expect(JSON.parse(a.formatContext(e, 'C')).hookSpecificOutput.hookEventName).toBe('PostCompact');
+    expect(JSON.parse(a.formatContext(e, 'C')).hookSpecificOutput.hookEventName).toBe('SessionStart');
   });
   it('apply_patch tool use', () => {
     const e = a.parse(fx('codex', 'post-tool-use'), now)!;

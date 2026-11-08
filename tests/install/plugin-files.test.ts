@@ -31,3 +31,12 @@ it('renders a single shell-quoted command string for Codex hooks', () => {
   expect(h.args).toBeUndefined();
   expect(h.command).toBe("'/usr/bin/node' '/my dir/it'\\''s/memhub.cjs' hook codex Stop");
 });
+
+it('renders a cmd.exe-quoted commandWindows for every Codex hook, and no PostCompact hook', () => {
+  const mk = path.join(mkdtempSync(path.join(tmpdir(), 'mh-')), 'mk');
+  renderPluginDir({ templateRoot: path.resolve('.'), marketplaceRoot: mk, nodePath: 'C:\\Program Files\\nodejs\\node.exe', bundlePath: 'C:\\Users\\a b\\memhub.cjs', version: '1.0.0' });
+  const hooks = JSON.parse(readFileSync(path.join(mk, 'plugin', 'hooks', 'codex-hooks.json'), 'utf8')).hooks;
+  expect(Object.keys(hooks).sort()).toEqual(['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+  expect(hooks.Stop[0].hooks[0].commandWindows).toBe('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\a b\\memhub.cjs" hook codex Stop');
+  for (const [ev, groups] of Object.entries<any>(hooks)) expect(groups[0].hooks[0].commandWindows).toMatch(new RegExp(` hook codex ${ev}$`));
+});

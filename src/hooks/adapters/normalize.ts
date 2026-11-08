@@ -2,7 +2,7 @@ import type { Host, HookEvent, HookEventKind, SessionSource } from '../types.js'
 import { sanitizePrompt, sanitizeToolPayload } from '../sanitize.js';
 
 const KIND: Record<string, HookEventKind> = {
-  SessionStart: 'session-start', PostCompact: 'session-start',
+  SessionStart: 'session-start',
   UserPromptSubmit: 'prompt', PostToolUse: 'tool', PostToolUseFailure: 'tool',
   Stop: 'stop', SessionEnd: 'session-end',
 };
@@ -20,8 +20,7 @@ export function normalizeHookPayload(raw: unknown, host: Host, allowed: Readonly
 
   const ev: HookEvent = { host, hostEvent, hostSessionId, cwd, event: kind, at: now.toISOString() };
   if (kind === 'session-start') {
-    const src = hostEvent === 'PostCompact' ? 'compact' : r.source;
-    if (typeof src === 'string' && SOURCES.has(src as SessionSource)) ev.source = src as SessionSource;
+    if (typeof r.source === 'string' && SOURCES.has(r.source as SessionSource)) ev.source = r.source as SessionSource;
   }
   if (kind === 'prompt' && typeof r.prompt === 'string') ev.prompt = sanitizePrompt(r.prompt);
   if (kind === 'tool') {

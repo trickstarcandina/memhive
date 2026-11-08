@@ -1,6 +1,5 @@
 { "description": "memhub memory hooks", "hooks": {
-  "SessionStart": [{ "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex SessionStart", "timeout": 10 }] }],
-  "PostCompact": [{ "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex PostCompact", "timeout": 10 }] }],
-  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex UserPromptSubmit", "timeout": 5 }] }],
-  "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex PostToolUse", "timeout": 5 }] }],
-  "Stop": [{ "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex Stop", "timeout": 5 }] }] } }
+  "SessionStart": [{ "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex SessionStart", "commandWindows": "{{NODE_CMD}} {{BUNDLE_CMD}} hook codex SessionStart", "timeout": 10 }] }],
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex UserPromptSubmit", "commandWindows": "{{NODE_CMD}} {{BUNDLE_CMD}} hook codex UserPromptSubmit", "timeout": 5 }] }],
+  "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex PostToolUse", "commandWindows": "{{NODE_CMD}} {{BUNDLE_CMD}} hook codex PostToolUse", "timeout": 5 }] }],
+  "Stop": [{ "hooks": [{ "type": "command", "command": "{{NODE_SH}} {{BUNDLE_SH}} hook codex Stop", "commandWindows": "{{NODE_CMD}} {{BUNDLE_CMD}} hook codex Stop", "timeout": 5 }] }] } }
