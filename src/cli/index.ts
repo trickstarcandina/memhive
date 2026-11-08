@@ -37,8 +37,12 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
 
 const isEntry = typeof require !== 'undefined' && require.main === module;
 if (isEntry || process.env.MEMHUB_FORCE_MAIN === '1') {
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (err) => {
+  const argv = process.argv.slice(2);
+  // daemon run and mcp are long-lived; everything else must not linger on open handles.
+  const longLived = argv[0] === 'mcp' || (argv[0] === 'daemon' && argv[1] === 'run');
+  const finish = (code: number) => { process.exitCode = code; if (!longLived) process.stdout.write('', () => process.exit(code)); };
+  main(argv).then(finish, (err) => {
     process.stderr.write(`memhub: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-    process.exitCode = 1;
+    finish(1);
   });
 }

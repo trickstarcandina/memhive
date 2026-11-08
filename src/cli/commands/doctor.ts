@@ -1,5 +1,30 @@
 import type { CliIo } from '../index.js';
+import { resolvePaths } from '../../shared/paths.js';
+import { loadSettings } from '../../shared/settings.js';
+import { readDaemonInfo } from '../../daemon/info.js';
+import { DaemonClient } from '../../daemon/client.js';
+import { createEmbedder, createProvider } from '../../providers/factory.js';
+import { VERSION } from '../../shared/version.js';
 
-export async function doctorCommand(_args: string[], _io: CliIo): Promise<number> {
-  return 1; // not implemented (later task)
+// Never prints secrets: API keys and the daemon token are reported only as set / not set.
+export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: string; env?: NodeJS.ProcessEnv; ping?: boolean } = {}): Promise<number> {
+  const home = opts.home ?? resolvePaths().home; const env = opts.env ?? process.env;
+  let problems = 0;
+  const line = (ok: boolean, text: string) => { io.stdout(`${ok ? 'ok  ' : 'FAIL'} ${text}\n`); if (!ok) problems++; };
+  io.stdout(`memhub ${VERSION} · home ${home}\n`);
+  const s = loadSettings(home, env);
+  line(true, `provider ${s.llm.provider} model ${s.llm.model}${s.llm.baseUrl ? ` at ${s.llm.baseUrl}` : ''} (api key ${s.llm.apiKey ? 'set' : 'not set'})`);
+  line(!!s.embed, s.embed ? `embedder ${s.embed.model} (${s.embed.dims} dims) at ${s.embed.baseUrl} (api key ${s.embed.apiKey ? 'set' : 'not set'})` : 'embedder not configured (keyword search only)');
+  let provider; try { provider = createProvider(s); line(true, 'provider credentials present'); } catch (e) { line(false, `provider: ${e instanceof Error ? e.message : e}`); }
+  if (opts.ping !== false && provider) {
+    try { const t = await provider.complete({ system: 'Reply with the JSON {"ok":true}', user: 'ping', maxTokens: 20 }); line(t.includes('ok'), `provider ping: ${t.slice(0, 40).replace(/\n/g, ' ')}`); }
+    catch (e) { line(false, `provider ping failed: ${e instanceof Error ? e.message : e}`); }
+    const emb = createEmbedder(s);
+    if (emb) { try { const [v] = await emb.embed(['ping']); line(v.length === emb.dims, `embedder ping: ${v.length} dims`); } catch (e) { line(false, `embedder ping failed: ${e instanceof Error ? e.message : e}`); } }
+  }
+  const info = readDaemonInfo(home);
+  const alive = info ? await new DaemonClient(info).health() : false;
+  line(true, alive ? `daemon running on port ${info!.port}` : 'daemon not running (starts on first hook)');
+  io.stdout(problems ? `${problems} problem(s) found\n` : 'all good\n');
+  return problems ? 1 : 0;
 }
