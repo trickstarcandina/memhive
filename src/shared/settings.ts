@@ -39,13 +39,12 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
     if (env.MEMHUB_LLM_MODEL) llm.model = env.MEMHUB_LLM_MODEL;
   }
   const fe: Partial<EmbedSettings> = isObj(file.embed) ? (file.embed as Partial<EmbedSettings>) : {};
+  // An empty env url/model wins (that disables embeddings); a config missing url, model or a positive dims is none.
   const dims = posInt(env.MEMHUB_EMBED_DIMS) ?? posInt(fe.dims);
-  const embed: EmbedSettings | null = dims === undefined ? null : {
-    baseUrl: env.MEMHUB_EMBED_BASE_URL ?? fe.baseUrl ?? '',
-    apiKey: env.MEMHUB_EMBED_API_KEY ?? fe.apiKey,
-    model: env.MEMHUB_EMBED_MODEL ?? fe.model ?? '',
-    dims,
-  };
+  const baseUrl = env.MEMHUB_EMBED_BASE_URL ?? fe.baseUrl ?? '';
+  const model = env.MEMHUB_EMBED_MODEL ?? fe.model ?? '';
+  const embed: EmbedSettings | null = dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model ? null
+    : { baseUrl, apiKey: env.MEMHUB_EMBED_API_KEY ?? fe.apiKey, model, dims };
   const contextTokens = Number(env.MEMHUB_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
   return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens };
 }

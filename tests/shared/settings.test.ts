@@ -51,6 +51,17 @@ describe('settings', () => {
     writeFileSync(path.join(home, 'settings.json'), '5');
     expect(loadSettings(home, {})).toEqual(DEFAULT_SETTINGS);
   });
+  it('treats a partial embed config as unconfigured (empty url or model, dims 0)', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'bge-m3', dims: 768 } }));
+    expect(loadSettings(home, { MEMHUB_EMBED_BASE_URL: '' }).embed).toBeNull();
+    expect(loadSettings(home, { MEMHUB_EMBED_MODEL: '' }).embed).toBeNull();
+    const h0 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(h0, 'settings.json'), JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'bge-m3', dims: 0 } }));
+    expect(loadSettings(h0, {}).embed).toBeNull();
+    expect(loadSettings(mkdtempSync(path.join(tmpdir(), 'mh-')), { MEMHUB_EMBED_DIMS: '1024' }).embed).toBeNull();
+    expect(loadSettings(home, {}).embed).toMatchObject({ dims: 768 });
+  });
   it('treats embed as unconfigured when dims is not a positive integer', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const s = loadSettings(home, { MEMHUB_EMBED_BASE_URL: 'http://e/v1', MEMHUB_EMBED_MODEL: 'bge-m3', MEMHUB_EMBED_DIMS: 'abc' });
