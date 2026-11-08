@@ -24,16 +24,16 @@ describe('readStdin', () => {
     fakeStdin({ isTTY: true });
     expect(await readStdin()).toBe('');
   });
-  it('truncates input beyond the limit', async () => {
+  it('keeps limit + 1 bytes so the caller can tell the input was over the limit', async () => {
     const s = fakeStdin(); const p = readStdin(5);
     s.write('abc'); s.write('defgh'); s.write('zzz'); s.end();
-    expect(await p).toBe('abcde');
+    expect(await p).toBe('abcdef');
   });
   it('default limit is 2 MiB', async () => {
     expect(STDIN_LIMIT).toBe(2 * 1024 * 1024);
     const s = fakeStdin(); const p = readStdin();
     s.end(Buffer.alloc(STDIN_LIMIT + 1000, 'x'));
-    expect((await p).length).toBe(STDIN_LIMIT);
+    expect((await p).length).toBe(STDIN_LIMIT + 1);
   });
   it('resolves empty on stream error', async () => {
     const s = fakeStdin(); const p = readStdin();
