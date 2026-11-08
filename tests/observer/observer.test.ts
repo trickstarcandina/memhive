@@ -155,3 +155,47 @@ describe('Observer', () => {
     expect(observer.sessionCount).toBe(0);
   });
 });
+
+describe('Observer summaries', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('a SessionEnd that races an in-flight Stop summary does not write a second one (no prompt row)', async () => {
+    let release!: (v: string) => void;
+    const complete = vi.fn().mockResolvedValueOnce(obsJson(1)).mockImplementationOnce(() => new Promise<string>((r) => { release = r; })).mockResolvedValue(sumJson);
+    const { store, ctx, observer } = setup({ complete });
+    observer.onTool(ctx, tool(0));
+    const stop = observer.onStop(ctx);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    const end = observer.onSessionEnd(ctx);
+    release(sumJson);
+    await Promise.all([stop, end]);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(store.listRecentSummaries(ctx.projectId, 5)).toHaveLength(1);
+  });
+
+  it('retries a failed Stop summary at SessionEnd, with the turn observations', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(obsJson(1)).mockRejectedValueOnce(new ProviderError('boom', 'transport')).mockResolvedValueOnce(sumJson);
+    const { store, ctx, observer } = setup({ complete });
+    observer.onPrompt(ctx, 'implement the login flow please');
+    observer.onTool(ctx, tool(0));
+    await observer.onStop(ctx);
+    expect(store.listRecentSummaries(ctx.projectId, 5)).toHaveLength(0);
+    await observer.onSessionEnd(ctx);
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect((complete.mock.calls[2] as any)[0].user).toContain('obs 0');
+    expect(store.listRecentSummaries(ctx.projectId, 5)).toHaveLength(1);
+    expect(observer.sessionCount).toBe(0);
+  });
+
+  it('prunes summary markers of sessions that never send SessionEnd (Codex)', async () => {
+    const complete = vi.fn(async () => sumJson);
+    const { ctx, observer } = setup({ complete });
+    observer.onPrompt(ctx, 'implement the login flow please');
+    await observer.onStop(ctx);
+    expect(observer.summaryMarkerCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+    observer.onTool({ ...ctx, sessionId: 'other' }, tool(1));
+    expect(observer.summaryMarkerCount).toBe(0);
+  });
+});
