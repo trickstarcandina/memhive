@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +14,7 @@ import { newId } from '../../src/shared/ids.js';
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 const DEFAULT_LIMIT = 2 * 1024 * 1024;
 const closers: Array<() => Promise<void> | void> = [];
-afterEach(async () => { for (const c of closers.splice(0)) await c(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const c of closers.splice(0)) await c(); });
 
 async function setup(opts: { dims: number | null; bodyLimit?: number; fetchImpl?: (real: typeof fetch) => typeof fetch }) {
   const hs = new SqliteHubStore(':memory:', { dims: opts.dims }); await hs.migrate();
@@ -81,6 +81,24 @@ describe('push batch sizing', () => {
     expect(r!.rejected).toEqual([{ id: huge.id, reason: 'too_large' }]);
     expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
     expect(await t.hs.getObservations([huge.id])).toEqual([]);
+  });
+});
+
+describe('hub config cache', () => {
+  it('is refreshed after a while: a hub that gains an embedder gets vectors without a daemon restart', async () => {
+    let hubHasEmbedder = false;
+    const t = await setup({ dims: 2, fetchImpl: (inner) => async (url, init) => {
+      if (!String(url).endsWith('/v1/config') || hubHasEmbedder) return inner(url, init);
+      return new Response(JSON.stringify({ embedding_model: null, embedding_dims: null }), { status: 200 });
+    } });
+    const [first] = addObs(t, 1, 2);
+    await t.engine.push(t.project);
+    expect((await t.hs.getObservations([first.id]))[0].embedding).toBeNull();
+    hubHasEmbedder = true;
+    const later = Date.now() + 11 * 60_000; vi.spyOn(Date, 'now').mockReturnValue(later);
+    const [second] = addObs(t, 1, 2);
+    await t.engine.push(t.project);
+    expect((await t.hs.getObservations([second.id]))[0].embedding).toHaveLength(2);
   });
 });
 

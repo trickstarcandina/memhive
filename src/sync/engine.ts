@@ -11,12 +11,13 @@ const MAX_ROUNDS = 20;   // bounds one push() call (hub allows 60 requests/min/k
 const MAX_BODY_BYTES = 1.5 * 1024 * 1024;   // hub default limit is 2 MB; used when the hub does not report body_limit
 const BACKOFF_START_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60_000;
+const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes its embedder is noticed without a daemon restart
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
 
 export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
-  private hubCfg = new Map<string, HubConfigInfo>();
+  private hubCfg = new Map<string, { cfg: HubConfigInfo; at: number }>();
   private backoff = new Map<string, { until: number; delayMs: number }>();   // project id -> next push allowed after 5xx/429
   private badPulled = new Set<string>();
   constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null; embedModel?: string | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
@@ -38,8 +39,9 @@ export class SyncEngine implements SyncHooks {
   }
 
   private async hubConfig(client: HubClient, hubUrl: string, refresh = false): Promise<HubConfigInfo | null> {
-    if (!refresh && this.hubCfg.has(hubUrl)) return this.hubCfg.get(hubUrl)!;
-    try { const c = await client.config(); this.hubCfg.set(hubUrl, c); return c; } catch { return null; }   // unknown: send vectors, the reject path resends without
+    const hit = this.hubCfg.get(hubUrl);
+    if (!refresh && hit && Date.now() - hit.at < CONFIG_TTL_MS) return hit.cfg;
+    try { const c = await client.config(); this.hubCfg.set(hubUrl, { cfg: c, at: Date.now() }); return c; } catch { return null; }   // unknown: send vectors, the reject path resends without
   }
 
   schedulePush(projectId: string): void {
