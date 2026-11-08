@@ -12,7 +12,7 @@ export const ClientHubConfigSchema = HubConfigInfoSchema.partial({ version: true
 export type HubConfigInfo = z.infer<typeof ClientHubConfigSchema>;
 // The envelope is checked here; rows are checked one by one in the engine, so one bad row cannot stall the cursor.
 // max_seq and epoch are optional for older hubs.
-const ClientPullSchema = PullResultSchema.extend({ sessions: z.array(z.unknown()), observations: z.array(z.unknown()), summaries: z.array(z.unknown()), max_seq: z.number().optional() });
+const ClientPullSchema = PullResultSchema.extend({ sessions: z.array(z.unknown()), observations: z.array(z.unknown()), summaries: z.array(z.unknown()), tombstones: z.array(z.unknown()).default([]), max_seq: z.number().optional() });   // tombstones: protocol 2
 export type ClientPullResult = z.infer<typeof ClientPullSchema>;
 
 export class HubClient {

@@ -2,7 +2,7 @@ import type { Logger } from '../shared/logger.js';
 import type { Observation, Project, QuarantineRow, Session, Store, Summary, SyncTable } from '../store/types.js';
 import type { SyncHooks } from '../daemon/context.js';
 import { z } from 'zod';
-import { HUB_PROTOCOL, HubObservationSchema, HubSessionSchema, HubSummarySchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
+import { HUB_PROTOCOL, HubObservationSchema, HubSessionSchema, HubSummarySchema, HubTombstoneSchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
 import { redactSecrets } from '../hooks/sanitize.js';
 import type { HubObservation } from '../hub/store/types.js';
 import { HubClient, HubError, type HubConfigInfo } from './client.js';
@@ -27,6 +27,8 @@ const pdate = z.string().max(64).refine((v) => Number.isFinite(Date.parse(v)));
 const PulledSession = HubSessionSchema.extend({ id: pid, cwd: z.string().optional(), startedAt: pdate, endedAt: pdate.nullable() });
 const PulledObservation = HubObservationSchema.extend({ id: pid, sessionId: pid, createdAt: pdate });
 const PulledSummary = HubSummarySchema.extend({ id: pid, sessionId: pid, createdAt: pdate });
+const PulledTombstone = HubTombstoneSchema.extend({ id: pid });
+const TOMBSTONES_FROM = 2;   // the first hub protocol that accepts and relays tombstones
 const safeText = (v: string, n: number) => v.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, n);
 // The author name is shown in context and MCP output: no control characters, bounded.
 const cleanUser = (v: string) => safeText(redactSecrets(v), 200);
@@ -117,6 +119,12 @@ export class SyncEngine implements SyncHooks {
     return msg;
   }
   /** Hubs whose protocol is newer than this client, with the error (shown by doctor). */
+  /** The linked hub's protocol (cached config), or null when unknown or unreachable. */
+  async hubProtocol(project: Project): Promise<number | null> {
+    const c = this.clientFor(project); if (!c) return null;
+    return (await this.hubConfig(c, project.hubUrl!, false, 3000))?.protocol ?? null;
+  }
+  private tombWarned = new Set<string>();
   hubErrors(): Array<{ hub: string; error: string }> {
     return [...this.hubCfg].filter(([, h]) => (h.cfg.protocol ?? 0) > HUB_PROTOCOL).map(([hub, h]) => ({ hub, error: `hub_protocol: hub speaks protocol ${h.cfg.protocol}, this memhive speaks ${HUB_PROTOCOL}` }));
   }
@@ -134,7 +142,7 @@ export class SyncEngine implements SyncHooks {
     const mismatched = new Set(result.rejected.filter((r) => r.reason === 'embedding_model_mismatch').map((r) => r.id));
     if (mismatched.size) {
       await this.hubConfig(client, project.hubUrl!, true);
-      const again = await client.push({ ...body, sessions: [], summaries: [], observations: body.observations.filter((o) => mismatched.has(o.id)).map(noVec) });
+      const again = await client.push({ ...body, sessions: [], summaries: [], tombstones: [], observations: body.observations.filter((o) => mismatched.has(o.id)).map(noVec) });
       result = { accepted: { sessions: result.accepted.sessions, observations: result.accepted.observations + again.accepted.observations, summaries: result.accepted.summaries }, rejected: [...result.rejected.filter((r) => r.reason !== 'embedding_model_mismatch'), ...again.rejected] };
     }
     return result;
@@ -163,8 +171,14 @@ export class SyncEngine implements SyncHooks {
       const sessionsFirst = sessions.length === cap;
       const observations = sessionsFirst ? [] : store.listUnsynced('observations', project.id, cap, this.skipPush) as Observation[];
       const summaries = sessionsFirst ? [] : (store.listUnsynced('summaries', project.id, cap, this.skipPush) as Summary[]).map(clipSum);
-      if (!sessions.length && !observations.length && !summaries.length) { this.backoff.delete(project.id); return total; }
+      const pending = sessionsFirst ? [] : store.listPendingTombstones(project.id, BATCH);
+      if (!sessions.length && !observations.length && !summaries.length && !pending.length) { this.backoff.delete(project.id); return total; }
       const cfg = await this.hubConfig(client, project.hubUrl!);
+      // An older hub would drop the unknown field silently: tombstones stay queued until the hub speaks protocol 2.
+      const canForget = (cfg?.protocol ?? 0) >= TOMBSTONES_FROM;
+      if (pending.length && !canForget && !this.tombWarned.has(project.hubUrl!)) { this.tombWarned.add(project.hubUrl!); logger.warn('hub does not accept tombstones (protocol < 2); forgotten rows stay queued until the hub is upgraded', { hub: project.hubUrl, count: pending.length }); }
+      const tombstones = canForget ? pending.map((t) => ({ id: t.id, tbl: t.tbl, deleted_at: t.deletedAt })) : [];
+      if (!sessions.length && !observations.length && !summaries.length && !tombstones.length) { this.backoff.delete(project.id); return total; }
       const vecs = store.getObservationEmbeddings(observations.map((o) => o.id));
       const toHub = (o: Observation): HubObservation => {
         const v = vecs.get(o.id);
@@ -180,7 +194,7 @@ export class SyncEngine implements SyncHooks {
         return out;
       };
       const hubObs = fit(observations.map((o) => toHub(clipObs(o)))); const sums = fit(summaries);
-      const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: hubObs, summaries: sums, tombstones: [] };
+      const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: hubObs, summaries: sums, tombstones };   // tombstones are tiny: left out of the byte budget
       let result: PushResult;
       try { result = await this.send(client, project, body); }
       catch (e) {
@@ -236,11 +250,13 @@ export class SyncEngine implements SyncHooks {
       store.markSynced('sessions', done(sessions.map((s) => s.id)), now);
       store.markSynced('observations', done(hubObs.map((o) => o.id)), now);
       store.markSynced('summaries', done(sums.map((s) => s.id)), now);
+      store.markTombstonesSynced(project.id, tombstones.map((t) => t.id), now);   // a refused one (not_owner) is not retried either
       const lost = result.rejected.filter((r) => !kept.has(r.id) && r.reason !== 'given_up');
       if (lost.length) logger.warn('hub rejected rows; they will not be retried', { hub: project.hubUrl, count: lost.length, sample: lost.slice(0, 5) });
       total.accepted.sessions += result.accepted.sessions; total.accepted.observations += result.accepted.observations; total.accepted.summaries += result.accepted.summaries;
+      if (result.accepted.tombstones) total.accepted.tombstones = (total.accepted.tombstones ?? 0) + result.accepted.tombstones;
       total.rejected.push(...result.rejected);
-      if (kept.size >= sessions.length + hubObs.length + sums.length) break;   // only queued-again rows left: the next round would resend them
+      if (kept.size >= sessions.length + hubObs.length + sums.length + tombstones.length) break;   // only queued-again rows left: the next round would resend them
     }
     return total;
   }
@@ -329,10 +345,17 @@ export class SyncEngine implements SyncHooks {
       const observations = rows('observations', page.observations, PulledObservation).map(({ row: o, raw }) => ({ raw, row: { ...o, userId: cleanUser(o.userId), title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) } }));
       const summaries = rows('summaries', page.summaries, PulledSummary).map(({ row: m, raw }) => ({ raw, row: { ...m, userId: cleanUser(m.userId), request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) } }));
       let pageApplied = 0;
+      const tombs = page.tombstones.flatMap((raw) => { const r = PulledTombstone.safeParse(raw); if (r.success) return [r.data]; logger.warn('pulled tombstone is malformed; skipped', { hub: project.hubUrl }); return []; });
       // One transaction per page: a page applies whole with its cursor, and SQLite commits once instead of per row.
       try {
         store.transaction(() => {
+          // Tombstones first (the hub checked the owner); then rows forgotten here, by a tombstone or locally, are not stored again.
+          // Scoped to this project, so another project's row with the same id is left alone.
+          const del = { syncedAt: now, projectId: project.id };
+          for (const t of tombs) pageApplied += t.tbl === 'observation' ? store.deleteObservations([t.id], del) : t.tbl === 'summary' ? store.deleteSummaries([t.id], del) : store.deleteSession(t.id, del);
+          const dead = store.forgottenIds(project.id, [...sessions, ...observations, ...summaries].map(({ row }) => row.id));
           for (const { row: s, raw } of sessions) {
+            if (dead.has(s.id)) continue;
             // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
             // session of another project or user that happens to share the id, are never overwritten.
             const cur = store.getSession(s.id);
@@ -341,7 +364,7 @@ export class SyncEngine implements SyncHooks {
           }
           const haveObs = store.hasObservations(observations.map(({ row }) => row.id)); const haveSums = store.hasSummaries(summaries.map(({ row }) => row.id));
           for (const { row: o, raw } of observations) {
-            if (haveObs.has(o.id)) continue;
+            if (haveObs.has(o.id) || dead.has(o.id)) continue;
             if (!store.getSession(o.sessionId)) { hold('observations', raw, 'unknown session'); continue; }
             const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
             if (!apply('observations', raw, () => store.insertObservations([row]))) continue;
@@ -351,7 +374,7 @@ export class SyncEngine implements SyncHooks {
             }
           }
           for (const { row: m, raw } of summaries) {
-            if (haveSums.has(m.id)) continue;
+            if (haveSums.has(m.id) || dead.has(m.id)) continue;
             if (!store.getSession(m.sessionId)) { hold('summaries', raw, 'unknown session'); continue; }
             if (apply('summaries', raw, () => store.insertSummaries([{ ...m, projectId: project.id, origin: 'hub', syncedAt: now }]))) pageApplied++;
           }
