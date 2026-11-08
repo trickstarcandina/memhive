@@ -101,7 +101,9 @@ export class SqliteStore implements Store {
     return ids.map((id) => byId.get(id)).filter((o): o is Observation => !!o);
   }
   resolveIdPrefix(prefix: string): string | null {
-    const rows = this.db.prepare('SELECT id FROM observations WHERE id LIKE ? LIMIT 2').all(prefix.replace(/[%_]/g, '') + '%') as Row[];
+    if (prefix.length < 4) return null;
+    // shortcut: suffix match scans the table, add an index on a reversed id if stores grow past ~1M rows
+    const rows = this.db.prepare('SELECT id FROM observations WHERE substr(id, 1, length(?)) = ? OR substr(id, -length(?)) = ? LIMIT 2').all(prefix, prefix, prefix, prefix) as Row[];
     return rows.length === 1 ? rows[0].id : null;
   }
   listRecentObservations(projectId: string, limit: number): Observation[] {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Store, Observation, Session, Summary } from '../../src/store/types.js';
-import { newId } from '../../src/shared/ids.js';
+import { newId, shortId } from '../../src/shared/ids.js';
 
 export const obs = (p: Partial<Observation> & { projectId: string; sessionId: string }): Observation => ({
   id: newId(), userId: 'local', type: 'discovery', title: 'T', subtitle: 'S', facts: ['f1'], narrative: 'N', concepts: ['c'],
@@ -55,11 +55,21 @@ export function storeContract(name: string, open: () => Store): void {
       s.insertObservations([{ ...o1, title: 'dup' }]);
       expect(s.getObservations([o2.id, o1.id]).map((o) => o.title)).toEqual(['second', 'first']);
       expect(s.resolveIdPrefix(o1.id.slice(0, 30))).toBe(o1.id);
+      expect(s.resolveIdPrefix(shortId(o1.id))).toBe(o1.id);
+      expect(s.resolveIdPrefix('abc')).toBeNull();
       expect(s.resolveIdPrefix('zzzzzzzz')).toBeNull();
       expect(s.countObservations(p.id)).toBe(2);
       expect(s.lastActivity(p.id)).toBe(o2.createdAt);
       expect(s.listRecentObservations(p.id, 1)[0].id).toBe(o2.id);
       expect(s.listSessionObservations(a.id, 10)).toHaveLength(2);
+    });
+
+    it('resolveIdPrefix: ambiguous prefix returns null', () => {
+      const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id); s.upsertSession(a);
+      const [x, y] = ['0190aaaa-0000-7000-8000-000000000001', '0190aaaa-0000-7000-8000-000000000002'];
+      s.insertObservations([obs({ projectId: p.id, sessionId: a.id, id: x }), obs({ projectId: p.id, sessionId: a.id, id: y })]);
+      expect(s.resolveIdPrefix('0190aaaa')).toBeNull();
+      expect(s.resolveIdPrefix(x)).toBe(x);
     });
 
     it('fts search with filters', () => {
