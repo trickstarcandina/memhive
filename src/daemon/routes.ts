@@ -81,6 +81,8 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
 
   if (method === 'POST' && path === '/v1/memories') {
     const b = (body ?? {}) as { projectKey?: string; text?: string; title?: string; type?: string };
+    // Same caps as the MCP save_memory schema; the route is reachable without MCP.
+    if ((typeof b.text === 'string' && b.text.length > 20000) || (typeof b.title === 'string' && b.title.length > 2000)) return err(400, 'too_long', 'text max 20000 chars, title max 2000');
     const clean = (v: string) => redactSecrets(stripPrivate(v)).trim();
     const text = typeof b.text === 'string' ? clean(b.text) : '';
     const title = typeof b.title === 'string' ? clean(b.title) : '';

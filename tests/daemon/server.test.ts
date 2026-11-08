@@ -54,6 +54,11 @@ describe('daemon', () => {
     expect(r.observation.type).toBe('discovery');
     expect(r.observation.facts).toEqual(['Always run migrations before tests']);
   });
+  it('save_memory rejects text or title over the MCP caps', async () => {
+    const key = (await client.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
+    await expect(client.request('POST', '/v1/memories', { projectKey: key, text: 'x'.repeat(20001) })).rejects.toMatchObject({ status: 400 });
+    await expect(client.request('POST', '/v1/memories', { projectKey: key, text: 'ok', title: 't'.repeat(2001) })).rejects.toMatchObject({ status: 400 });
+  });
   it('unknown route is 404', async () => {
     await expect(client.request('GET', '/nope')).rejects.toMatchObject({ status: 404 });
   });
