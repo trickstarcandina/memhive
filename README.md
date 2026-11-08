@@ -65,7 +65,81 @@ Settings live in `~/.memhub/settings.json` (mode 0600). Environment variables ov
 
 ## Team hub
 
-Coming in the hub release: `memhub login` and `memhub link` will share observations with a team server. Nothing is uploaded in v0.1.
+A hub shares the observations, summaries and session records of linked projects across a team. Personal memory stays local unless a project is linked.
+
+### Run the hub
+
+The hub is a Node service backed by Postgres with pgvector. The compose stack in `docker/` runs both.
+
+```sh
+cd docker
+printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env   # once; never commit .env
+docker compose up -d
+docker compose logs hub
+```
+
+On first start the hub creates user `admin` and prints its API key once. The line is in `docker compose logs hub`. Store it somewhere safe; it cannot be shown again.
+
+The hub speaks plain HTTP on port 7777. Put it behind a TLS reverse proxy (Caddy, nginx, a cloud load balancer) that serves `https://hub.example.com` and forwards to the hub. Clients refuse any `http://` hub except `localhost`, `127.0.0.1` and `::1`. Compose publishes the hub on `127.0.0.1:7777` only, so the plain HTTP port is not reachable from the network. The proxy must run on the same host. If it runs elsewhere, change the port mapping in `docker/compose.yml` to a reachable address, and keep the hub behind TLS.
+
+Hub settings are environment variables:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DATABASE_URL` | none (required) | `postgres://…` or `sqlite:<path>`. Compose sets the Postgres URL. |
+| `PORT` | `7777` | Listen port. |
+| `MEMHUB_EMBED_MODEL` | none | Embedding model the hub expects. Compose sets `bge-m3`. |
+| `MEMHUB_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
+| `MEMHUB_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. |
+| `MEMHUB_HOME` | `~/.memhub` | Directory for hub logs. Compose sets `/data`. |
+
+`POSTGRES_PASSWORD` is required: compose refuses to start without it. Compose reads it from `docker/.env` and passes it to the hub as `PGPASSWORD`, outside the connection URL, so any characters work.
+
+The hub limits each key to 60 requests per minute.
+
+### Add members
+
+Create one key per person or machine. Run these from `docker/`:
+
+```sh
+docker compose exec hub node dist/memhub.cjs key create --user alice --label laptop
+docker compose exec hub node dist/memhub.cjs key list
+docker compose exec hub node dist/memhub.cjs key revoke <id>
+```
+
+The new key is printed once and starts with `mh_`. Give it to its owner through a private channel. `key revoke` takes the id shown by `key list`.
+
+### Connect a machine
+
+On each machine, log in once. The command asks for the key without echoing it:
+
+```sh
+memhub login https://hub.example.com
+```
+
+To script it, pipe the key on stdin. Never pass the key as a command-line argument, because arguments show up in shell history and process listings:
+
+```sh
+printf '%s' "$MEMHUB_KEY" | memhub login https://hub.example.com --key-stdin
+```
+
+Then, inside each project you want to share:
+
+```sh
+memhub link https://hub.example.com
+```
+
+`link` runs an initial pull. `memhub sync` pushes and pulls the current project now. `memhub unlink` stops syncing the current project; its local memory stays.
+
+### What syncs
+
+Observations, summaries and session records of linked projects are pushed to the hub. Prompts and raw tool output never leave the machine, and `<private>` blocks and redacted secrets are removed before anything is stored.
+
+### Embedding model must match
+
+Clients that embed must use the same embedding model and vector size as the hub. Set `MEMHUB_EMBED_MODEL` and `MEMHUB_EMBED_DIMS` on the hub to the `embed` model and dims in each client's `~/.memhub/settings.json`. The hub rejects a pushed row whose embedding model differs from its own, or whose vector length differs from `MEMHUB_EMBED_DIMS`, with `422 embedding_model_mismatch`. Rows without a vector are accepted. `memhub login` warns when the local settings differ from the hub's.
+
+Hub-side search is full-text only, because the hub runs no embedder. Client search stays hybrid over local rows, including rows pulled from the hub.
 
 ## Troubleshooting
 
