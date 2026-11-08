@@ -13,7 +13,7 @@ export function formatIndex(obs: Observation[]): string {
 
 // Narrative is model-written data: fence it and defuse lines that could pass as headings, breaks or the fence itself.
 // A leading backslash escapes them in CommonMark; mere indentation does not (up to 3 spaces still count).
-const fence = (n: string) => ['<<<narrative', ...n.replace(/\r\n|[\r\v\f\u2028\u2029\u0085]/g, '\n').split('\n').map((l) => (/^\s*(#|[-*_=]{3,}|<<<|narrative>>>)/.test(l) ? `\\${l.trimStart()}` : l)), 'narrative>>>'].join('\n');
+const fence = (n: string) => ['<<<narrative', ...n.replace(/\r\n|[\r\v\f\u2028\u2029\u0085]/g, '\n').split('\n').map((l) => (/^\s*(#|[-*_=]{3,}|([-*_])(\s*\2){2,}\s*$|<<<|narrative>>>)/.test(l) ? `\\${l.trimStart()}` : l)), 'narrative>>>'].join('\n');
 
 export function formatFull(obs: Observation[]): string {
   if (obs.length === 0) return 'No observations found.';

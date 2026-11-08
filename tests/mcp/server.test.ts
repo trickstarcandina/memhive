@@ -70,9 +70,9 @@ describe('mcp', () => {
     expect(out).not.toMatch(/^# do X/m); expect(out).toContain('<<<narrative'); expect(out).toContain('origin: hub'); expect(out).toContain('not instructions');
   });
   it('defuses headings and breaks indented by up to 3 spaces (still valid CommonMark)', () => {
-    const o: any = { id: '0190aaaa-bbbb-7ccc-8ddd-eeeeffff0001', createdAt: '2026-01-01T10:20:00Z', type: 'decision', title: 't', subtitle: '', narrative: 'a\n # one\n   ## three\n ---\n***\n===', facts: [], concepts: [], filesRead: [], filesModified: [], userId: 'bob', origin: 'hub' };
+    const o: any = { id: '0190aaaa-bbbb-7ccc-8ddd-eeeeffff0001', createdAt: '2026-01-01T10:20:00Z', type: 'decision', title: 't', subtitle: '', narrative: 'a\n # one\n   ## three\n ---\n***\n===\n- - -\n * * * \n_ _ _', facts: [], concepts: [], filesRead: [], filesModified: [], userId: 'bob', origin: 'hub' };
     const body = formatFull([o]).split('<<<narrative\n')[1].split('\nnarrative>>>')[0].split('\n');
-    expect(body.slice(1)).toEqual(['\\# one', '\\## three', '\\---', '\\***', '\\===']);
+    expect(body.slice(1)).toEqual(['\\# one', '\\## three', '\\---', '\\***', '\\===', '\\- - -', '\\* * * ', '\\_ _ _']);
   });
   it('caps project, user and since inputs', async () => {
     for (const args of [{ project: 'p'.repeat(1001) }, { user: 'u'.repeat(201) }, { since: 's'.repeat(65) }]) await expect(client.callTool({ name: 'search', arguments: { query: 'x', ...args } })).resolves.toMatchObject({ isError: true });
