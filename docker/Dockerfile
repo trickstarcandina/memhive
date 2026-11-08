@@ -1,9 +1,9 @@
 FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS build
 WORKDIR /app
-# better-sqlite3 compiles from source here; the toolchain stays out of the runtime image.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+# No compiler toolchain: better-sqlite3 and sqlite-vec load prebuilt binaries shipped in their
+# packages. --ignore-scripts stops npm from running node-gyp anyway because binding.gyp exists.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
