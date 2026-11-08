@@ -56,4 +56,13 @@ describe('observation dedupe', () => {
     const rows = t.store.listRecentObservations(t.p.id, 10);
     expect(rows).toHaveLength(1); expect(rows[0].seenCount).toBe(2);
   });
+  it('an old row seen again lately is still a candidate; the query needs the two longest tokens', () => {
+    const t = setup([]);
+    const old = obs({ projectId: t.p.id, sessionId: t.s.id, type: 'config', title: 'Raise nginx keepalive timeout', createdAt: new Date(Date.now() - 90 * 864e5).toISOString() });
+    t.store.insertObservations([old]);
+    const since = new Date(Date.now() - 30 * 864e5).toISOString();
+    expect(t.store.findDuplicate({ projectId: t.p.id, type: 'config', title: 'Raise nginx keepalive timeout' }, null, since)).toBeNull();
+    t.store.bumpSeen(old.id, new Date().toISOString());
+    expect(t.store.findDuplicate({ projectId: t.p.id, type: 'config', title: 'raise NGINX keepalive timeout!' }, null, since)).toBe(old.id);
+  });
 });

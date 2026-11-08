@@ -166,12 +166,15 @@ export class SqliteStore implements Store {
   findDuplicate(o: Pick<Observation, 'projectId' | 'type' | 'title'>, vec: number[] | null, since: string): string | null {
     // Only this machine's own rows are candidates: a pushed hub row whose title holds every likely token must not be able
     // to swallow the local user's future observations.
-    const mine = `o.project_id = ? AND o.origin = 'local' AND COALESCE(o.last_seen_at, o.created_at) >= ?`;
+    const mine = `o.project_id = @p AND o.origin = 'local' AND (o.created_at >= @since OR o.last_seen_at >= @since)`;
     const words = ftsTokens(o.title);
     if (words.length) {
-      // Two-way match: the title token sets must overlap with Jaccard >= 0.8, so neither side can be a mere superset.
+      // Candidates must hold the title's two longest tokens (the likeliest rare ones): a small match set, no bm25 sort.
+      // Jaccard >= 0.8 then needs most of the rest too, so a candidate missing one of them is rarely a real duplicate.
+      const keys = [...words].sort((x, y) => y.length - x.length).slice(0, 2);
       const cands = this.db.prepare(`SELECT o.id, o.title FROM observations_fts JOIN observations o ON o.rowid = observations_fts.rowid
-        WHERE observations_fts MATCH ? AND o.type = ? AND ${mine} ORDER BY bm25(observations_fts) LIMIT 20`).all(`title : (${toFtsQuery(o.title, ' OR ')})`, o.type, o.projectId, since) as Row[];
+        WHERE observations_fts MATCH @q AND o.type = @type AND ${mine} LIMIT 20`).all({ q: `title : (${keys.map((k) => `"${k}"`).join(' ')})`, type: o.type, p: o.projectId, since }) as Row[];
+      // Two-way match: the title token sets must overlap with Jaccard >= 0.8, so neither side can be a mere superset.
       const a = new Set(words);
       for (const c of cands) {
         const b = ftsTokens(c.title); const inter = b.filter((t) => a.has(t)).length;
@@ -181,7 +184,7 @@ export class SqliteStore implements Store {
     if (!vec || !this.dims || vec.length !== this.dims) return null;
     const near = this.db.prepare('SELECT id FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = 20 ORDER BY distance').all(Buffer.from(new Float32Array(vec).buffer), o.projectId) as Row[];
     if (!near.length) return null;
-    const recent = new Set((this.db.prepare(`SELECT o.id FROM observations o WHERE o.id IN (${near.map(() => '?').join(',')}) AND ${mine}`).all(...near.map((n) => n.id), o.projectId, since) as Row[]).map((r) => r.id));
+    const recent = new Set((this.db.prepare(`SELECT o.id FROM observations o WHERE o.id IN (${near.map((_, i) => `@i${i}`).join(',')}) AND ${mine}`).all({ ...Object.fromEntries(near.map((n, i) => [`i${i}`, n.id])), p: o.projectId, since }) as Row[]).map((r) => r.id));
     const vecs = this.getObservationEmbeddings([...recent]);
     for (const n of near) { const v = vecs.get(n.id); if (v && cosine(vec, v) >= 0.92) return n.id; }
     return null;
