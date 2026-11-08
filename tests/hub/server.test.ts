@@ -164,6 +164,7 @@ describe('hub isolated servers', () => {
     const url = `http://127.0.0.1:${h.port}/v1/sync/push`; const big = JSON.stringify({ pad: 'x'.repeat(500) });
     expect((await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: big })).status).toBe(413);
     expect((await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: big })).status).toBe(401);
+    expect((await fetch(url, { method: 'POST', headers: { authorization: `Bearer mh_${'B'.repeat(43)}`, 'content-type': 'application/json' }, body: big })).status).toBe(401);   // well-formed but unknown: refused before the body is read
     await fetch(url, { method: 'POST', headers: { authorization: 'Bearer mh_secretwrongkey', 'content-type': 'application/json' }, body: '{}' });
     expect(JSON.stringify(logs)).not.toContain(key); expect(JSON.stringify(logs)).not.toContain('mh_secretwrongkey');
     await h.close();
