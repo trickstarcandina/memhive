@@ -73,6 +73,12 @@ if (!url) {
       expect(await typ()).toBe('real[]');
       await pool.end();
     });
+    it('indexes sessions and summaries by project', async () => {
+      const s = await open(4)(); await s.migrate(); await s.close();
+      const pool = new Pool({ connectionString: url });
+      const names = (await pool.query(`SELECT indexname FROM pg_indexes WHERE schemaname = 'public'`)).rows.map((r) => r.indexname); await pool.end();
+      expect(names).toEqual(expect.arrayContaining(['summaries_project', 'sessions_project', 'sync_log_project']));
+    });
     it('rejects non-finite vectors', async () => {
       const s = await open(4)(); await s.migrate();
       const { hsess, hobs } = await import('./hub-store-contract.js');

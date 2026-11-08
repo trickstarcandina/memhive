@@ -33,9 +33,6 @@ export class PostgresHubStore implements HubStore {
     // idle-client errors (e.g. server restart) would otherwise crash the process; never log the URL
     this.pool.on('error', (e) => console.error(`[memhive-hub] postgres pool error: ${e.message}`));
   }
-  // pgvector takes its text form; the real[] fallback takes a JS array
-  private get vecCast(): string { return this.opts.dims ? '$15::vector' : '$15::real[]'; }
-  private vecParam(v: number[] | null): string | number[] | null { return v && this.opts.dims ? `[${v.join(',')}]` : v; }
   private async q(sql: string, params: unknown[] = []): Promise<Row[]> { return (await this.pool.query(sql, params)).rows; }
 
   async migrate(): Promise<void> {
@@ -92,45 +89,63 @@ export class PostgresHubStore implements HubStore {
       const out = await fn(c); await c.query('COMMIT'); return out;
     } catch (e) { await c.query('ROLLBACK').catch((re) => { dead = re; }); throw e; } finally { c.release(dead); }
   }
-  private log(c: PoolClient, projectId: string, table: SyncTable, rowId: string) { return c.query('INSERT INTO sync_log(project_id, tbl, row_id) VALUES ($1, $2, $3)', [projectId, table, rowId]); }
+  // One statement per batch: the project lock is held for a few round trips, not one per row. Rows are logged in input order
+  // (WITH ORDINALITY), so seq order matches what the caller passed whatever order RETURNING uses.
+  private async log(c: PoolClient, table: SyncTable, rows: Array<{ id: string; projectId: string }>): Promise<void> {
+    if (!rows.length) return;
+    await c.query('INSERT INTO sync_log(project_id, tbl, row_id) SELECT p, $2, r FROM unnest($1::uuid[], $3::uuid[]) WITH ORDINALITY AS t(p, r, n) ORDER BY n', [rows.map((r) => r.projectId), table, rows.map((r) => r.id)]);
+  }
+  /** Input rows whose id came back from RETURNING, first occurrence only, in input order. */
+  private static written<T extends { id: string }>(rows: T[], returned: Array<{ id: string }>): T[] {
+    const ids = new Set(returned.map((r) => r.id)); return rows.filter((r) => ids.delete(r.id));
+  }
 
   async upsertSessions(rows: Session[]): Promise<string[]> {
+    if (!rows.length) return [];
     const newEnd = 'GREATEST(sessions.ended_at, EXCLUDED.ended_at)'; // GREATEST ignores NULLs
-    return this.tx(rows.map((r) => r.projectId), async (c) => {
-      const changed: string[] = [];
-      for (const s of rows) {
-        const r = await c.query(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-          ON CONFLICT (id) DO UPDATE SET ended_at = ${newEnd}, cwd = EXCLUDED.cwd
-          WHERE sessions.project_id = EXCLUDED.project_id AND sessions.user_id = EXCLUDED.user_id AND (sessions.cwd IS DISTINCT FROM EXCLUDED.cwd OR sessions.ended_at IS DISTINCT FROM ${newEnd}) RETURNING id`,
-          [s.id, s.projectId, s.userId, s.host, s.hostSessionId, s.cwd, s.startedAt, s.endedAt]);
-        if (r.rowCount) { changed.push(s.id); await this.log(c, s.projectId, 'sessions', s.id); }
-      }
-      return changed;
+    // ON CONFLICT DO UPDATE cannot touch a row twice in one statement: the last copy of an id wins, as a row-by-row upsert would
+    const uniq = [...new Map(rows.map((r) => [r.id, r])).values()];
+    return this.tx(uniq.map((r) => r.projectId), async (c) => {
+      const { rows: ret } = await c.query(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at)
+        SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::timestamptz[])
+        ON CONFLICT (id) DO UPDATE SET ended_at = ${newEnd}, cwd = EXCLUDED.cwd
+        WHERE sessions.project_id = EXCLUDED.project_id AND sessions.user_id = EXCLUDED.user_id AND (sessions.cwd IS DISTINCT FROM EXCLUDED.cwd OR sessions.ended_at IS DISTINCT FROM ${newEnd}) RETURNING id`,
+        [uniq.map((s) => s.id), uniq.map((s) => s.projectId), uniq.map((s) => s.userId), uniq.map((s) => s.host), uniq.map((s) => s.hostSessionId), uniq.map((s) => s.cwd), uniq.map((s) => s.startedAt), uniq.map((s) => s.endedAt)]);
+      const changed = PostgresHubStore.written(uniq, ret); await this.log(c, 'sessions', changed);
+      return changed.map((s) => s.id);
     });
   }
   async insertObservations(rows: HubObservation[]): Promise<string[]> {
     for (const o of rows) if (o.embedding && !o.embedding.every(Number.isFinite)) throw new HubInvalidVector(o.id);
-    const dims = this.opts.dims; const inserted: string[] = []; const rejected: HubObservation[] = [];
-    await this.tx(rows.map((r) => r.projectId), async (c) => {
-      for (const o of rows) {
-        if (dims !== null && o.embedding && o.embedding.length !== dims) { rejected.push(o); continue; }
-        const r = await c.query(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,${this.vecCast}) ON CONFLICT (id) DO NOTHING RETURNING id`,
-          [o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, JSON.stringify(o.facts), o.narrative, JSON.stringify(o.concepts), JSON.stringify(o.filesRead), JSON.stringify(o.filesModified), o.createdAt, o.embeddingModel, this.vecParam(o.embedding)]);
-        if (r.rowCount) { inserted.push(o.id); await this.log(c, o.projectId, 'observations', o.id); }
-      }
+    const dims = this.opts.dims;
+    const rejected = rows.filter((o) => dims !== null && o.embedding && o.embedding.length !== dims);
+    const ok = rows.filter((o) => !rejected.includes(o));
+    const inserted = !ok.length ? [] : await this.tx(ok.map((r) => r.projectId), async (c) => {
+      const col = <K extends keyof HubObservation>(k: K) => ok.map((o) => o[k]);
+      const json = (k: 'facts' | 'concepts' | 'filesRead' | 'filesModified') => ok.map((o) => JSON.stringify(o[k]));
+      // vectors travel as text and are cast per row: pgvector parses '[1,2]', real[] parses '{1,2}'
+      const vecs = ok.map((o) => (o.embedding ? (dims ? `[${o.embedding.join(',')}]` : `{${o.embedding.join(',')}}`) : null));
+      const { rows: ret } = await c.query(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding)
+        SELECT id, project_id, session_id, user_id, type, title, subtitle, facts::jsonb, narrative, concepts::jsonb, files_read::jsonb, files_modified::jsonb, created_at, embedding_model, embedding::${dims ? 'vector' : 'real[]'}
+        FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[], $13::timestamptz[], $14::text[], $15::text[])
+          AS t(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding)
+        ON CONFLICT (id) DO NOTHING RETURNING id`,
+        [col('id'), col('projectId'), col('sessionId'), col('userId'), col('type'), col('title'), col('subtitle'), json('facts'), col('narrative'), json('concepts'), json('filesRead'), json('filesModified'), col('createdAt'), col('embeddingModel'), vecs]);
+      const done = PostgresHubStore.written(ok, ret); await this.log(c, 'observations', done);
+      return done.map((o) => o.id);
     });
     if (rejected.length) throw new HubDimsMismatch(rejected[0].id, dims!, rejected[0].embedding!.length, inserted, rejected.map((o) => o.id));
     return inserted;
   }
   async insertSummaries(rows: Summary[]): Promise<string[]> {
+    if (!rows.length) return [];
     return this.tx(rows.map((r) => r.projectId), async (c) => {
-      const inserted: string[] = [];
-      for (const s of rows) {
-        const r = await c.query(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING RETURNING id`, [s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt]);
-        if (r.rowCount) { inserted.push(s.id); await this.log(c, s.projectId, 'summaries', s.id); }
-      }
-      return inserted;
+      const col = <K extends keyof Summary>(k: K) => rows.map((s) => s[k]);
+      const { rows: ret } = await c.query(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at)
+        SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::timestamptz[]) ON CONFLICT (id) DO NOTHING RETURNING id`,
+        [col('id'), col('projectId'), col('sessionId'), col('userId'), col('request'), col('learned'), col('completed'), col('nextSteps'), col('createdAt')]);
+      const done = PostgresHubStore.written(rows, ret); await this.log(c, 'summaries', done);
+      return done.map((s) => s.id);
     });
   }
   async listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]> {

@@ -36,3 +36,9 @@ describe('sqlite hub dims guard', () => {
     const other = new SqliteHubStore(f, { dims: 8 }); await expect(other.migrate()).rejects.toThrow(/dims is 4 in the database/); await other.close();
   });
 });
+
+it('sqlite hub indexes sessions and summaries by project', async () => {
+  const f = path.join(mkdtempSync(path.join(tmpdir(), 'mh-hubidx-')), 'hub.db'); const s = new SqliteHubStore(f, { dims: null }); await s.migrate(); await s.close();
+  const db = new Database(f); const names = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`).all() as any[]).map((r) => r.name); db.close();
+  expect(names).toEqual(expect.arrayContaining(['summaries_project', 'sessions_project', 'sync_log_project']));
+});

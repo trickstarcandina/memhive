@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Pool } from 'pg';
 import { PostgresHubStore, toTsQuery } from '../../src/hub/store/postgres.js';
 import { hobs, hsess } from './hub-store-contract.js';
+import { newId } from '../../src/shared/ids.js';
 
 describe('toTsQuery (pure)', () => {
   it.each([
@@ -72,6 +73,28 @@ if (!url) {
       expect(await s.searchObservationsFts('!!! ???', f)).toEqual([]);   // no tokens -> empty, no SQL error
       expect(await s.searchObservationsFts('', f)).toEqual([]);
       expect(await s.searchObservationsFts('unrelated bug', f)).toEqual([]);   // AND semantics
+      await s.close();
+    });
+  });
+
+  describe('postgres batch insert', () => {
+    it('500-row push: sessions, observations and summaries in order, sync_log in input order (timing logged)', async () => {
+      const s = await fresh();
+      const p = await s.getOrCreateProject('k', 'n'); const q = await s.getOrCreateProject('k2', 'n2');
+      const sessions = Array.from({ length: 50 }, (_, i) => hsess(i % 2 ? p.id : q.id));
+      const obs = Array.from({ length: 500 }, (_, i) => hobs({ projectId: sessions[i % 50].projectId, sessionId: sessions[i % 50].id, title: 'b' + i, facts: ["it's", 'two'], embedding: i % 3 ? [i, 0, 0, 1] : null, embeddingModel: i % 3 ? 'm' : null }));
+      const sums = sessions.map((x) => ({ id: newId(), projectId: x.projectId, sessionId: x.id, userId: 'alice', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local' as const, syncedAt: null }));
+      const t0 = performance.now();
+      expect(await s.upsertSessions(sessions)).toEqual(sessions.map((x) => x.id));
+      expect(await s.insertObservations([...obs, obs[0]])).toEqual(obs.map((o) => o.id));
+      expect(await s.insertSummaries(sums)).toEqual(sums.map((x) => x.id));
+      console.log(`[bench] hub postgres push of 50 sessions + 500 observations + 50 summaries: ${(performance.now() - t0).toFixed(0)} ms`);
+      const log = [...await s.listSyncLog(p.id, 0, 1000), ...await s.listSyncLog(q.id, 0, 1000)].sort((a, b) => a.seq - b.seq);
+      expect(log.map((e) => e.rowId)).toEqual([...sessions, ...obs, ...sums].map((x) => x.id));
+      const got = await s.getObservations([obs[1].id, obs[3].id]);
+      expect(got[0]).toMatchObject({ title: 'b1', facts: ["it's", 'two'], embedding: [1, 0, 0, 1], embeddingModel: 'm' }); expect(got[1].embedding).toBeNull();
+      expect(await s.upsertSessions([{ ...sessions[0], endedAt: '2030-01-01T00:00:00.000Z' }, sessions[1], { ...sessions[0], endedAt: '2030-01-01T00:00:00.000Z' }])).toEqual([sessions[0].id]);
+      expect(await s.upsertSessions([])).toEqual([]); expect(await s.insertObservations([])).toEqual([]); expect(await s.insertSummaries([])).toEqual([]);
       await s.close();
     });
   });

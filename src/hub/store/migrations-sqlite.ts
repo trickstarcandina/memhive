@@ -16,4 +16,6 @@ export const HUB_SQLITE_MIGRATIONS: string[] = [
   `,
   // Vectors are untyped blobs here, so the dims the hub was set up for live only in this table (checked at every start).
   `CREATE TABLE hub_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  `CREATE INDEX summaries_project ON summaries(project_id);
+  CREATE INDEX sessions_project ON sessions(project_id);`,
 ];

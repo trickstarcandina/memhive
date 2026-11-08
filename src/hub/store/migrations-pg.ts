@@ -25,5 +25,9 @@ export function hubPgMigrations(dims: number | null): string[] {
     `,
     // Records the embedding dims the hub was set up for (checked at every start, see migrate()).
     `CREATE TABLE hub_meta (key text PRIMARY KEY, value text NOT NULL);`,
+    // Pull and the admin commands look rows up by project. sync_log(project_id, seq) exists since migration 1.
+    // No HNSW index on embedding: the hub relays vectors to clients and never searches them (hub search is full-text).
+    `CREATE INDEX summaries_project ON summaries(project_id);
+    CREATE INDEX sessions_project ON sessions(project_id);`,
   ];
 }
