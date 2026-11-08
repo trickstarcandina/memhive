@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from '../../src/cli/args.js';
@@ -23,7 +23,7 @@ describe('commands', () => {
     const h = await startDaemon(createDaemonContext(home, env), { port: 0 });
     r = io(); expect(await daemonCommand(['status'], r.io, { home })).toBe(0); expect(r.out.join('')).toContain(`port ${h.info.port}`);
     r = io(); expect(await daemonCommand(['stop'], r.io, { home })).toBe(0);
-    await new Promise((res) => setTimeout(res, 100));
+    for (let i = 0; i < 40 && readDaemonInfo(home); i++) await new Promise((res) => setTimeout(res, 50));
     expect(readDaemonInfo(home)).toBeNull();
   });
   it('search prints an index table', async () => {
@@ -38,10 +38,22 @@ describe('commands', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const r = io();
     const code = await doctorCommand([], r.io, { home, env: { ...env, MEMHUB_LLM_API_KEY: 'sk-secret-123' }, ping: false });
-    expect([0, 1]).toContain(code);
+    expect(code).toBe(0);   // no embedder is a valid FTS-only setup
     const text = r.out.join('');
     expect(text).toContain('provider');
+    expect(text).toContain('FTS-only');
     expect(text).toContain('api key set');
     expect(text).not.toContain('sk-secret-123');
+  });
+  it('doctor survives a malformed settings.json', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(home, 'settings.json'), '{not json');
+    const r = io();
+    await expect(doctorCommand([], r.io, { home, env, ping: false })).resolves.toBeTypeOf('number');
+  });
+  it('search rejects a bad --limit with usage and code 2', async () => {
+    const r = io();
+    expect(await searchCommand(['q', '--limit', 'abc'], r.io, { home: mkdtempSync(path.join(tmpdir(), 'mh-')) })).toBe(2);
+    expect(r.err.join('')).toContain('usage');
   });
 });

@@ -11,11 +11,13 @@ export async function searchCommand(args: string[], io: CliIo, opts: { home?: st
   const { positional, flags } = parseArgs(args);
   const query = positional.join(' ');
   if (!query) { io.stderr('usage: memhub search <query> [--type t] [--user u] [--since 7d] [--limit n]\n'); return 1; }
+  const limit = flags.limit === undefined ? 20 : Number(flags.limit);
+  if (!Number.isInteger(limit) || limit < 1) { io.stderr('memhub search: --limit must be a positive integer\nusage: memhub search <query> [--type t] [--user u] [--since 7d] [--limit n]\n'); return 2; }
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhub: daemon unavailable\n'); return 1; }
   const client = new DaemonClient(info);
   const key = (await client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(cwd)}`)).project.key;
-  const q = new URLSearchParams({ q: query, project_key: key, limit: String(flags.limit ?? 20) });
+  const q = new URLSearchParams({ q: query, project_key: key, limit: String(limit) });
   for (const k of ['type', 'user', 'since']) if (typeof flags[k] === 'string') q.set(k, flags[k] as string);
   const r = await client.request<{ observations: Observation[] }>('GET', `/v1/search?${q}`);
   io.stdout(formatIndex(r.observations) + '\n');

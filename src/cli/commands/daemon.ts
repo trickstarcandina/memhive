@@ -12,7 +12,8 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
     let h;
     try { h = await startDaemon(createDaemonContext(home)); }
     catch (e) { if (e instanceof DaemonAlreadyRunning) return 0; throw e; }
-    const stop = () => void h.close().catch(() => {}).then(() => process.exit(0));   // close() flushes the observer
+    let stopping = false;
+    const stop = () => { if (stopping) return; stopping = true; void h.close().catch(() => {}).then(() => process.exit(0)); };   // close() flushes the observer
     process.on('SIGTERM', stop); process.on('SIGINT', stop);
     await new Promise(() => {});
     return 0;
