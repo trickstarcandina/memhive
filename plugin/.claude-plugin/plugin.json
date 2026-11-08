@@ -1,0 +1,1 @@
+{ "name": "memhub", "version": "{{VERSION}}", "description": "Long-term memory for coding agents. Personal by default, shareable through a team hub.", "author": { "name": "memhub contributors" }, "license": "MIT", "keywords": ["memory", "mcp", "plugin"] }

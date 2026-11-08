@@ -1,0 +1,7 @@
+{ "description": "memhub memory hooks", "hooks": {
+  "SessionStart": [{ "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "SessionStart"], "timeout": 10 }] }],
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "UserPromptSubmit"], "timeout": 5, "async": true }] }],
+  "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "PostToolUse"], "timeout": 5, "async": true }] }],
+  "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "PostToolUseFailure"], "timeout": 5, "async": true }] }],
+  "Stop": [{ "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "Stop"], "timeout": 5, "async": true }] }],
+  "SessionEnd": [{ "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "SessionEnd"], "timeout": 5 }] }] } }

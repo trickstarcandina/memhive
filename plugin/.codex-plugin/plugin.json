@@ -1,0 +1,3 @@
+{ "name": "memhub", "version": "{{VERSION}}", "description": "Long-term memory for coding agents. Personal by default, shareable through a team hub.", "author": { "name": "memhub contributors" }, "license": "MIT",
+  "skills": "./skills/", "mcpServers": "./.mcp.json", "hooks": "./hooks/codex-hooks.json",
+  "interface": { "displayName": "memhub", "shortDescription": "Your agent remembers past sessions.", "longDescription": "memhub records what the agent reads, edits and runs, condenses it into short observations, and starts the next session with the ones that matter. Link a project to a hub to share memory with your team.", "developerName": "memhub contributors", "category": "Productivity", "capabilities": ["Interactive", "Write"] } }
