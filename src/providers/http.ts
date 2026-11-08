@@ -1,4 +1,5 @@
 import { ProviderError, type ProviderErrorKind } from './types.js';
+import { MAX_RESPONSE_BYTES, readBodyCapped } from '../shared/http.js';
 
 export function classifyStatus(status: number): ProviderErrorKind {
   if (status === 401 || status === 403) return 'auth';
@@ -11,8 +12,8 @@ export async function postJson(fetchImpl: typeof fetch, url: string, headers: Re
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal: ctl.signal });
-    const text = await res.text();
+    const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal: ctl.signal, redirect: 'error' });
+    const text = await readBodyCapped(res, MAX_RESPONSE_BYTES);
     let json: any = null; try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
     return { status: res.status, json };
   } catch (e) {

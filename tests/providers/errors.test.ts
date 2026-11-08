@@ -5,6 +5,8 @@ import { AnthropicProvider } from '../../src/providers/anthropic.js';
 import { OpenAICompatProvider } from '../../src/providers/openai-compat.js';
 import { OpenAICompatEmbedder } from '../../src/providers/embedder.js';
 import { ProviderError } from '../../src/providers/types.js';
+import { postJson } from '../../src/providers/http.js';
+import { DaemonClient } from '../../src/daemon/client.js';
 
 const KEY = 'sk-SECRET-key-1234567890';
 const req = { system: 'S', user: 'U', maxTokens: 5 };
@@ -117,3 +119,35 @@ describe('provider failure kinds', () => {
     expect(e2.message).not.toContain(KEY);
   });
 });
+
+describe('outbound response hardening', () => {
+  it('redirect is refused', async () => {
+    let followed = false;
+    const base = await listen((q, r) => {
+      if (q.url === '/target') { followed = true; r.end('{}'); return; }
+      r.writeHead(302, { location: '/target' }); r.end();
+    });
+    const e = await caught(new OpenAICompatProvider({ baseUrl: base, apiKey: KEY, model: 'm', timeoutMs: 2000 }).complete(req));
+    expect(e).toBeInstanceOf(ProviderError); expect(e.kind).toBe('transport');
+    expect(followed).toBe(false);
+    await expect(new DaemonClient({ port: Number(new URL(base).port), token: 't', pid: 1 } as never).request('GET', '/x')).rejects.toThrow();
+    expect(followed).toBe(false);
+  });
+  it('oversized response body is rejected', async () => {
+    let aborted = false;
+    // streams without content-length until the client gives up
+    const base = await listen((_q, r) => {
+      r.writeHead(200, { 'content-type': 'application/json' });
+      const chunk = 'x'.repeat(64 * 1024); let sent = 0;
+      const pump = () => { while (sent < 20 * 1024 * 1024) { sent += chunk.length; if (!r.write(chunk)) { r.once('drain', pump); return; } } r.end(); };
+      r.on('close', () => { if (sent < 20 * 1024 * 1024) aborted = true; });
+      pump();
+    });
+    const e = await caught(postJson(fetch, base, {}, {}, 10_000));
+    expect(e.message).toContain('response_too_large');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(aborted).toBe(true);
+    await expect(new DaemonClient({ port: Number(new URL(base).port), token: 't', pid: 1 } as never).request('GET', '/x', undefined, 10_000)).rejects.toThrow('response_too_large');
+  });
+});
+

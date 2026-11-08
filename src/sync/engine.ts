@@ -34,7 +34,7 @@ const CLIPPED = new Set(['title', 'subtitle', 'narrative', 'facts', 'concepts', 
 // Hub errors that mean "the hub or the path to it is unwell", not "this batch is bad": rows stay queued and the project backs off.
 // A fetch that rejects (connection refused, DNS, timeout) gets the same backoff ladder as a 5xx, so a hub that is down is not
 // hammered on every trigger.
-const transient = (e: unknown): boolean => !(e instanceof HubError) || e.code === 'bad_response' || e.status === 408 || e.status === 429 || e.status >= 500;
+const transient = (e: unknown): boolean => !(e instanceof HubError) || e.code === 'bad_response' || e.code === 'response_too_large' || e.status === 408 || e.status === 429 || e.status >= 500;
 
 export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
@@ -61,7 +61,9 @@ export class SyncEngine implements SyncHooks {
     if (!project.hubUrl) return null;
     const cred = loadCredentials(this.deps.home).hubs[project.hubUrl];
     if (!cred || cred.authFailed) return null;
-    return new HubClient(project.hubUrl, cred.key, this.deps.fetchImpl);
+    const client = new HubClient(project.hubUrl, cred.key, this.deps.fetchImpl);
+    const limit = this.hubCfg.get(project.hubUrl)?.cfg.body_limit; if (limit && limit > 0) client.maxBytes = limit * 4;
+    return client;
   }
   private markAuthFailed(project: Project): void {
     const c = loadCredentials(this.deps.home);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_RESPONSE_BYTES, ResponseTooLarge, readBodyCapped } from '../shared/http.js';
 import { HubConfigInfoSchema, MeResultSchema, PullResultSchema, PushResultSchema, type PushBody, type PushResult } from '../hub/wire.js';
 
 // Hub-supplied text reaches the terminal (`memhive sync`) and the logs: no control characters (terminal escapes), bounded length.
@@ -16,12 +17,16 @@ export type ClientPullResult = z.infer<typeof ClientPullSchema>;
 
 export class HubClient {
   private fetchImpl: typeof fetch;
+  /** Response cap; the engine raises it to 4x the hub's body_limit once /v1/config is known. */
+  maxBytes = MAX_RESPONSE_BYTES;
   constructor(private hubUrl: string, private key: string, fetchImpl?: typeof fetch) { this.fetchImpl = fetchImpl ?? fetch; }
   private async req<T>(schema: z.ZodType<T>, method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 10000): Promise<T> {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
-      const res = await this.fetchImpl(this.hubUrl + path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.key}` }, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal });
-      const text = await res.text(); let json: any; let parsed = true;
+      const res = await this.fetchImpl(this.hubUrl + path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.key}` }, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal, redirect: 'error' });
+      let text: string;
+      try { text = await readBodyCapped(res, this.maxBytes); }
+      catch (e) { if (e instanceof ResponseTooLarge) throw new HubError(`hub response over ${this.maxBytes} bytes`, res.status, 'response_too_large'); throw e; } let json: any; let parsed = true;
       try { json = text ? JSON.parse(text) : {}; } catch { json = {}; parsed = false; }
       if (!res.ok) {
         const ra = Number(res.headers.get('retry-after'));   // seconds form only; the engine caps it

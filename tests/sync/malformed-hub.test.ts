@@ -79,6 +79,18 @@ describe('malformed hub responses', () => {
     const r = await t.engine.syncNow(t.project);
     expect(r.error).toContain('?]0;pwned?'); expect(r.error).not.toContain('\u001b');
   });
+  it('hub client refuses redirects and caps the response at 4x body_limit', async () => {
+    let redirected = false;
+    const red = new HubClient(hubUrl, 'k', (async (_u: string, init?: RequestInit) => { redirected = init?.redirect === 'error'; throw new TypeError('fetch failed'); }) as unknown as typeof fetch);
+    await expect(red.me()).rejects.toThrow('fetch failed'); expect(redirected).toBe(true);
+    const big = JSON.stringify({ sessions: [], observations: [], summaries: [], next_seq: 1, has_more: false, max_seq: 1, pad: 'x'.repeat(5000) });
+    const t = setup({ pull: big });
+    (t.engine as any).hubCfg.set(hubUrl, { cfg: { embedding_model: null, embedding_dims: null, body_limit: 1000 }, at: Date.now() });
+    expect(await t.engine.pull(t.project, 1000)).toBe(0);
+    expect(t.warns.some((w) => w.includes('pull failed'))).toBe(true);
+    expect(t.store.getSyncState(t.project.id).lastError).toContain('over 4000 bytes');
+    expect(t.store.getSyncState(t.project.id).backoffUntil).not.toBeNull();
+  });
   it('/v1/sync returns a structured result with the error, not a 500', async () => {
     const t = setup({ pull: '<html>', push: '<html>' });
     const ctx = { store: t.store, sync: t.engine, logger: { info() {}, warn() {}, error() {}, debug() {} } } as unknown as DaemonContext;
