@@ -135,5 +135,69 @@ export function storeContract(name: string, open: () => Store): void {
       const hits = s.searchObservationsVector([1, 0, 0, 0], { projectId: p.id, limit: 5 });
       expect(hits[0].id).toBe(o.id);
     });
+
+    describe('search filters and isolation', () => {
+      const setup = () => {
+        const p1 = s.getOrCreateProject('k1', 'n1'); const p2 = s.getOrCreateProject('k2', 'n2');
+        const a1 = sess(p1.id); const a2 = sess(p2.id); s.upsertSession(a1); s.upsertSession(a2);
+        return { p1, p2, a1, a2 };
+      };
+
+      it('vector search is isolated per project partition', () => {
+        const { p1, p2, a1, a2 } = setup();
+        const o1 = obs({ projectId: p1.id, sessionId: a1.id }); const o2 = obs({ projectId: p2.id, sessionId: a2.id });
+        s.insertObservations([o1, o2]);
+        s.setObservationEmbedding(o1.id, [1, 0, 0, 0], 'm'); s.setObservationEmbedding(o2.id, [1, 0, 0, 0], 'm');
+        expect(s.searchObservationsVector([1, 0, 0, 0], { projectId: p1.id, limit: 10 }).map((h) => h.id)).toEqual([o1.id]);
+        expect(s.searchObservationsVector([1, 0, 0, 0], { projectId: p2.id, limit: 10 }).map((h) => h.id)).toEqual([o2.id]);
+      });
+
+      it('vector search honours type, userId and since filters', () => {
+        const { p1, a1 } = setup();
+        const a = obs({ projectId: p1.id, sessionId: a1.id, type: 'bugfix', userId: 'alice', createdAt: '2026-01-01T00:00:00Z' });
+        const b = obs({ projectId: p1.id, sessionId: a1.id, type: 'decision', userId: 'bob', createdAt: '2026-02-01T00:00:00Z' });
+        s.insertObservations([a, b]);
+        s.setObservationEmbedding(a.id, [1, 0, 0, 0], 'm'); s.setObservationEmbedding(b.id, [0, 1, 0, 0], 'm');
+        const ids = (f: object) => s.searchObservationsVector([1, 0, 0, 0], { projectId: p1.id, limit: 10, ...f }).map((h) => h.id).sort();
+        expect(ids({})).toEqual([a.id, b.id].sort());
+        expect(ids({ type: 'decision' })).toEqual([b.id]);
+        expect(ids({ type: 'bugfix' })).toEqual([a.id]);
+        expect(ids({ userId: 'alice' })).toEqual([a.id]);
+        expect(ids({ userId: 'nobody' })).toEqual([]);
+        expect(ids({ since: '2026-01-15T00:00:00Z' })).toEqual([b.id]);
+      });
+
+      it('fts search honours userId filter', () => {
+        const { p1, a1 } = setup();
+        s.insertObservations([
+          obs({ projectId: p1.id, sessionId: a1.id, userId: 'alice', title: 'shared widget' }),
+          obs({ projectId: p1.id, sessionId: a1.id, userId: 'bob', title: 'shared widget' }),
+        ]);
+        expect(s.searchObservationsFts('widget', { projectId: p1.id, limit: 10 })).toHaveLength(2);
+        expect(s.searchObservationsFts('widget', { projectId: p1.id, userId: 'alice', limit: 10 })).toHaveLength(1);
+        expect(s.searchObservationsFts('widget', { projectId: p1.id, userId: 'zed', limit: 10 })).toHaveLength(0);
+      });
+
+      it('summaries fts honours userId and since filters', () => {
+        const { p1, a1 } = setup();
+        const mk = (userId: string, createdAt: string): Summary => ({ id: newId(), projectId: p1.id, sessionId: a1.id, userId, request: 'refactor gizmo', learned: '', completed: '', nextSteps: '', createdAt, origin: 'local', syncedAt: null });
+        s.insertSummaries([mk('alice', '2026-01-01T00:00:00Z'), mk('bob', '2026-03-01T00:00:00Z')]);
+        expect(s.searchSummariesFts('gizmo', { projectId: p1.id, limit: 10 })).toHaveLength(2);
+        expect(s.searchSummariesFts('gizmo', { projectId: p1.id, userId: 'bob', limit: 10 })).toHaveLength(1);
+        expect(s.searchSummariesFts('gizmo', { projectId: p1.id, since: '2026-02-01T00:00:00Z', limit: 10 })).toHaveLength(1);
+      });
+
+      it('summaries sync bookkeeping: unsynced, markSynced, relink reset', () => {
+        const { p1, a1 } = setup();
+        const sm: Summary = { id: newId(), projectId: p1.id, sessionId: a1.id, userId: 'local', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null };
+        const hubSm: Summary = { ...sm, id: newId(), userId: 'bob', origin: 'hub', syncedAt: 'pulled' };
+        s.insertSummaries([sm, hubSm]);
+        expect(s.listUnsynced('summaries', p1.id, 10).map((x) => x.id)).toEqual([sm.id]);
+        s.markSynced('summaries', [sm.id], '2026-01-01T00:00:00Z');
+        expect(s.listUnsynced('summaries', p1.id, 10)).toHaveLength(0);
+        s.resetProjectSync(p1.id);
+        expect(s.listUnsynced('summaries', p1.id, 10).map((x) => x.id)).toEqual([sm.id]);
+      });
+    });
   });
 }
