@@ -16,6 +16,9 @@ export function stripPrivate(text: string, state: PrivateState = { depth: 0 }): 
   let cursor = 0;
   for (const m of text.matchAll(TAG)) {
     const at = m.index;
+    // A tag alone inside quotes (`grep "<private>" src`) mentions the tag; it does not open or close a block.
+    const q = text[at - 1];
+    if ((q === '"' || q === "'" || q === '`') && text[at + m[0].length] === q) continue;
     if (state.depth === 0) out += text.slice(cursor, at);
     if (m[1] === undefined) state.depth++;
     else if (state.depth > 0) state.depth--;

@@ -5,6 +5,14 @@ describe('stripPrivate', () => {
   it('removes closed private blocks, case-insensitive, multiline', () => {
     expect(stripPrivate('a <private>\nsecret\n</PRIVATE> b')).toBe('a  b');
   });
+  it('treats a tag alone inside quotes as a mention, not a block', () => {
+    expect(stripPrivate('grep -rn "<private>" src')).toBe('grep -rn "<private>" src');
+    expect(stripPrivate("rg '</private>' && x `<private>`")).toBe("rg '</private>' && x `<private>`");
+    expect(stripPrivate('a "<private>secret</private>" b')).toBe('a "" b');
+    const state = { depth: 0 };
+    stripPrivate('grep "<private>" src', state);
+    expect(state.depth).toBe(0);
+  });
   it('drops everything after an unclosed private tag', () => {
     expect(stripPrivate('keep <private> secret forever')).toBe('keep ');
   });
