@@ -84,6 +84,19 @@ describe('sanitizeToolPayload', () => {
 
 describe('sanitizePrompt', () => {
   it('strips private and trims', () => expect(sanitizePrompt('  hi <private>x</private> ')).toBe('hi'));
+  it('caps the scanned prompt before redaction, so a 2 MB prompt costs no more than 256 KB', () => {
+    const big = ('cookie:'.repeat(9) + ' ').repeat(33_000);
+    const t = performance.now();
+    const out = sanitizePrompt(big);
+    expect(performance.now() - t).toBeLessThan(300);
+    expect(out.length).toBeLessThan(16200);
+    expect(out).toContain('<elided');
+  });
+  it('leaves no fragment of a secret straddling the prompt pre-cap', () => {
+    const secret = 'sk-ant-' + 'abcdefghij'.repeat(4);
+    const out = sanitizePrompt('x '.repeat((256 * 1024 - 10) / 2) + secret + ' tail');
+    expect(out).not.toMatch(/sk-ant|abcdefgh|<reda(?!cted>)/);
+  });
 });
 
 describe('redactSecrets', () => {
@@ -258,6 +271,19 @@ const LEAK_FIXTURES: [string, string, string[]][] = [
   ['signing_key=signKey1234', 'signKey1234', ['signing_key=']],
   ['encryption-key: encKey12345', 'encKey12345', ['encryption-key: ']],
   ['authToken: authTok123456', 'authTok123456', ['authToken: ']],
+  ['cookie: sid="abc123quoted"; x=1', 'abc123quoted', ['cookie: ']],
+  ['Cookie: a=1; session="q u o t e d value"', 'q u o t e d', ['Cookie: ']],
+  ['postgres://admin:pa/ss1234@db.internal/prod', 'pa/ss1234', ['postgres://admin:', '@db.internal/prod']],
+  ['postgres://admin:p@ss1234@db.internal/prod', 'p@ss1234', ['postgres://admin:', '@db.internal/prod']],
+  ['https://u:pw12345678@host/p?e=a@b.com', 'pw12345678', ['https://u:', '@host/p?e=a@b.com']],
+  ['curl -uadmin:attachedPw1 https://x', 'attachedPw1', ['curl -u', ' https://x']],
+  ['-u admin:startPw99 https://x', 'startPw99', [' https://x']],
+  ['curl --user=admin:userEqPw1 https://x', 'userEqPw1', ['curl --user=']],
+  ['curl -u 1000:numericPw2 https://x', 'numericPw2', ['curl -u ']],
+  ['Authorization:\tBasic dXNlcjpwYXNz', 'dXNlcjpwYXNz', ['Authorization:']],
+  ['password=\\"unterminatedA\\', 'unterminatedA', ['password=']],
+  ['password=\\"unterminatedB\\\nnext: 1', 'unterminatedB', ['password=', '\nnext: 1']],
+  ['password=\\"a\\\\\\"leakedtail\\"', 'leakedtail', ['password=']],
   ['{"value": "MNEMONIC=\\"abandon ability\\""}', 'abandon', ['{"value": "MNEMONIC=\\"']],
   ['{\\"user\\": \\"app\\", \\"password\\": \\"hunter2xyz\\"}', 'hunter2xyz', ['\\"user\\": \\"app\\"']],
 ];
@@ -281,7 +307,7 @@ describe('redactSecrets coverage (H1)', () => {
     for (const c of [
       'the password field is required', 'password hunter2', 'Basic authentication is supported', 'author: Jane Doe',
       'authority: high', 'authentication: required', 'passed: 3, passing tests', 'https://example.com:8080/path',
-      'ssh://git@github.com:22/x', 'docker run -u 1000:1000 img', 'cookie: string;', 'sessionId: string', 'API_URL=https://api.example.com',
+      'ssh://git@github.com:22/x', 'docker run -u 1000:1000 img', 'docker run --rm -u www-data:www-data img', 'podman run -u app:app img', 'curl --user-agent foo https://x', 'cookie: string;', 'sessionId: string', 'API_URL=https://api.example.com',
       'eyJ is the start of a JWT', 'Ask the SK team', 'the AIza prefix',
     ]) expect(redactSecrets(c)).toBe(c);
   });
@@ -289,7 +315,7 @@ describe('redactSecrets coverage (H1)', () => {
     for (const [i] of LEAK_FIXTURES) expect(redactSecrets(redactSecrets(i))).toBe(redactSecrets(i));
   });
   it('stays linear on 256 KB inputs aimed at the new rules', () => {
-    for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', 'token=\\"a', 'token=\\"\\\\', ' -u a', 'a.', 'pass', 'auth: ']) {
+    for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', 'token=\\"a', 'token=\\"\\\\', 'cookie:', 'cookie:a', 'a://b:', 'x://a:@h', 'x://a:p@', ' -u a:', '-ua', ' docker -u a:b', ' ', 'Authorization: ', 'Authorization:      ', ' -u a', 'a.', 'pass', 'auth: ']) {
       const s = unit.repeat(Math.ceil(256 * 1024 / unit.length));
       const t = performance.now();
       redactSecrets(s);
@@ -312,6 +338,14 @@ describe('redactSecrets coverage (H1)', () => {
       ['eyJ', fill('eyJ')],
       ['://a:b@', fill('://a:b@')],
       ['Basic ', fill('Basic ')],
+      ['cookie:', fill('cookie:')],
+      ['password=\\"', fill('password=\\"')],
+      ['password=\\"a\\', fill('password=\\"a\\')],
+      ['spaces', ' '.repeat(N)],
+      ['a://b:', fill('a://b:')],
+      [' -u a:', fill(' -u a:')],
+      [' -u a:b', fill(' -u a:b')],
+      [' docker -u a:b', fill(' docker -u a:b')],
       ['NFD Vietnamese', fill('Tiếng Việt có dấu mật khẩu '.normalize('NFD'))],
       ['no whitespace', 'a'.repeat(N)],
     ];
