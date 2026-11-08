@@ -35,14 +35,26 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bmh_[A-Za-z0-9_-]{20,}/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
 ];
-// Only literal values: quoted strings, or unquoted tokens that are not a call like getToken().
-const SECRET_ASSIGN = /\b([\w.-]*(?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]*["']?\s*[:=]\s*)(?:(["'])[^"'\n]*\2|[^\s"'`(),;]{6,}(?![^\s"'`,;]*\())/gi;
+// Quantifiers are bounded and the keyword anchors the match, so scanning stays linear (ReDoS).
+// Quoted values are escape-aware; an unclosed quote redacts to end of line.
+// Unquoted values are redacted only after `=` (a `:` is usually a type annotation).
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40}["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|([^\s"'`(),;]{6,512})(?![^\s"'`,;]{0,64}\())/gi;
+// Bare references, not literals: `$VAR`, `process.env.X`, `config.token`.
+const REFERENCE = /^(?:\$|process\.|import\.meta\.|this\.|config\.|env\.|os\.environ)/i;
 
 export function redactSecrets(text: string): string {
   let out = text;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '<redacted>');
-  return out.replace(SECRET_ASSIGN, (_m, pre: string, q?: string) => (q ? `${pre}${q}<redacted>${q}` : `${pre}<redacted>`));
+  return out.replace(SECRET_ASSIGN, (m, pre: string, sep: string, dq?: string, sq?: string, bare?: string) => {
+    const q = dq ? '"' : sq ? "'" : '';
+    if (q) return `${pre}${q}<redacted>${q}`;
+    if (sep !== '=' || !bare || REFERENCE.test(bare)) return m;
+    return `${pre}<redacted>`;
+  });
 }
+
+const SECRET_KEY = /secret|token|passw(or)?d|api[_-]?key|private[_-]?key|authorization|cookie/i;
+const COUNT_KEY = /(^|_)(count|max|min|limit|len|length)s?$|tokens?_?(count|used)|max_?tokens/i;
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
@@ -53,9 +65,9 @@ function truncate(s: string, max: number): string {
 }
 
 function sanitizeString(s: string, max: number): string {
-  const noPrivate = redactSecrets(stripPrivate(s));
-  const noImages = noPrivate.replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
-  return truncate(noImages, max);
+  const noImages = stripPrivate(s).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
+  // Cap first so redaction never scans unbounded input.
+  return redactSecrets(truncate(noImages, max));
 }
 
 export function sanitizeToolPayload(value: unknown, maxChars = 16000, depth = 0): unknown {
@@ -67,6 +79,9 @@ export function sanitizeToolPayload(value: unknown, maxChars = 16000, depth = 0)
   const rec = value as Record<string, unknown>;
   if (rec.type === 'image' || rec.type === 'image_url') return { type: 'image', elided: true };
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(rec)) out[k] = sanitizeToolPayload(v, maxChars, depth + 1);
+  for (const [k, v] of Object.entries(rec)) {
+    const hidden = SECRET_KEY.test(k) && !COUNT_KEY.test(k) && (typeof v === 'string' || typeof v === 'number');
+    out[k] = hidden ? '<redacted>' : sanitizeToolPayload(v, maxChars, depth + 1);
+  }
   return out;
 }

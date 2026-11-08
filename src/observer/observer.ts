@@ -48,7 +48,16 @@ export class Observer {
 
   async onStop(ctx: SessionCtx): Promise<void> {
     const s = this.state(ctx);
-    await this.flush(s);
+    try {
+      await this.flush(s);
+      await this.summarize(s, ctx);
+    } finally {
+      s.turnObservations = [];
+      if (s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);
+    }
+  }
+
+  private async summarize(s: SessionState, ctx: SessionCtx): Promise<void> {
     const prompt = this.deps.store.latestPrompt(ctx.sessionId)?.text ?? null;
     if (s.turnObservations.length === 0 && (prompt ?? '').length < 20) return;
     if (this._authFailed) return;
@@ -61,10 +70,6 @@ export class Observer {
       this.deps.store.insertSummaries([summary]);
       this.onStored?.(ctx.projectId);
     } catch (e) { this.handleProviderError(e, 'summary'); }
-    finally {
-      s.turnObservations = [];
-      if (s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);
-    }
   }
 
   /** Plan 2 sets this to trigger sync after new rows. */

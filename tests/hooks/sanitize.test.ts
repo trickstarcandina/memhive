@@ -78,4 +78,22 @@ describe('redactSecrets', () => {
   it('is applied inside sanitizeToolPayload', () => {
     expect(sanitizeToolPayload({ a: 'x ghp_abcdefghijklmnopqrstuvwx' })).toEqual({ a: 'x ' + R });
   });
+  it('handles mixed quotes, escapes and unclosed quotes', () => {
+    expect(redactSecrets('{"password": "it\'s a pass"}')).toBe('{"password": "' + R + '"}');
+    expect(redactSecrets('secret: \'x"y\'')).toBe("secret: '" + R + "'");
+    expect(redactSecrets('password = "ab\\"cd" tail')).toBe('password = "' + R + '" tail');
+    expect(redactSecrets('password = "oops\nnext')).toBe('password = "' + R + '"\nnext');
+  });
+  it('does not redact type annotations or bare references', () => {
+    for (const c of ['password: string;', 'maxTokens: number = 100000', 'const a = process.env.SECRET', 'config.token', 'const t = config.token', 'token=$TOKEN']) expect(redactSecrets(c)).toBe(c);
+  });
+  it('is linear on hostile input', () => {
+    const t = Date.now();
+    redactSecrets('token='.repeat(175000));
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it('redacts secret-named keys in payloads but keeps counts', () => {
+    expect(sanitizeToolPayload({ password: 'x', n: { apiKey: 5 } })).toEqual({ password: R, n: { apiKey: R } });
+    expect(sanitizeToolPayload({ max_tokens: 2048, maxTokens: 2048 })).toEqual({ max_tokens: 2048, maxTokens: 2048 });
+  });
 });
