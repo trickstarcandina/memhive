@@ -99,7 +99,31 @@ export function createMcpServer(deps: McpDeps): McpServer {
   idTool('pin', 'Pin an observation (full id or 8-char short id): it always appears in the session-start context and is never expired by retention.', pin(true));
   idTool('unpin', 'Unpin an observation so it is ranked and expired like any other.', pin(false));
 
+  tool('forget', {
+    description: 'Permanently delete observations or session summaries of this project (full ids, unique prefixes or 8-char short ids), e.g. a secret recorded by mistake. Only rows recorded on this machine can be forgotten; on a linked hub the deletion reaches teammates too.',
+    inputSchema: { ids: z.array(id).min(1).max(50) },
+  }, async (a) => {
+    // Never force: an agent steered by text in a repo must not be able to wipe teammates' memory.
+    const r = await rpc.request<ForgetResult>('POST', '/v1/forget', { projectKey: await projectKey(), ids: a.ids });
+    return textResult(formatForget(r));
+  });
+
   return server;
+}
+
+export interface ForgetRow { id: string; kind: 'observation' | 'summary'; type: string; title: string; userId: string; createdAt: string }
+export interface ForgetResult { deleted: ForgetRow[]; not_owner: ForgetRow[]; not_found: string[]; propagates: boolean | null }
+const line = (r: ForgetRow) => `#${shortId(r.id)} · ${r.type} · ${r.title.replace(/\s+/g, ' ').slice(0, 200)}`;
+export function formatForget(r: ForgetResult, verb = 'Forgot'): string {
+  const out: string[] = [];
+  if (r.deleted.length) out.push(`${verb} ${r.deleted.length}:`, ...r.deleted.map(line));
+  else out.push('Nothing was forgotten.');
+  if (r.not_owner.length) out.push('Not forgotten (recorded by someone else; only rows recorded on this machine can be forgotten):', ...r.not_owner.map(line));
+  if (r.not_found.length) out.push(`Not found in this project: ${r.not_found.map((x) => x.replace(/[^0-9a-f#-]/gi, '?').slice(0, 64)).join(', ')}`);
+  if (r.deleted.length) out.push(r.propagates === true ? 'The deletion is pushed to the hub and removed from teammates on their next pull.'
+    : r.propagates === null ? 'The hub could not be reached; the deletion is queued and pushed once the hub answers (protocol 2 or later).'
+    : 'Removed from this machine only (project not linked to a hub, or the hub is older than protocol 2: the deletion stays queued).');
+  return out.join('\n');
 }
 
 /** MEMHIVE_CWD from the plugin's .mcp.json, unless the host left it empty or unexpanded; then the process cwd. */

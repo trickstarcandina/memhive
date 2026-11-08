@@ -95,6 +95,36 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     return ok({ observation: store.getObservations([id])[0] });
   }
 
+  // Forget observations or summaries of one project. Only this machine's own rows (origin local) are forgotten and pushed as
+  // tombstones; anyone else's row is not_owner unless force, which removes the local copy only. Rows of other projects are
+  // not_found, so an id cannot reach outside the project the caller is in. preview: report, delete nothing.
+  if (method === 'POST' && path === '/v1/forget') {
+    const b = (body ?? {}) as { projectKey?: unknown; ids?: unknown; force?: unknown; preview?: unknown };
+    if (typeof b.projectKey !== 'string' || !Array.isArray(b.ids) || !b.ids.length || b.ids.length > 100 || !b.ids.every((x) => typeof x === 'string')) return err(400, 'bad_forget', 'projectKey and ids (1-100 strings) required');
+    const project = store.getProjectByKey(b.projectKey);
+    type Row = { id: string; kind: 'observation' | 'summary'; type: string; title: string; userId: string; createdAt: string; origin: string };
+    const out = { deleted: [] as Row[], not_owner: [] as Row[], not_found: [] as string[] };
+    for (const raw of b.ids as string[]) {
+      const oid = store.resolveIdPrefix(raw); const sid = oid ? null : store.resolveSummaryIdPrefix(raw);
+      const o = oid ? store.getObservations([oid])[0] : undefined; const m = sid ? store.getSummaries([sid])[0] : undefined;
+      const x = o ?? m;
+      if (!x || !project || x.projectId !== project.id) { out.not_found.push(raw); continue; }
+      const row: Row = { id: x.id, kind: o ? 'observation' : 'summary', type: o ? o.type : 'session-summary', title: o ? o.title : m!.request.slice(0, 200), userId: x.userId, createdAt: x.createdAt, origin: x.origin };
+      const own = x.origin === 'local';
+      if (!own && b.force !== true) { out.not_owner.push(row); continue; }
+      if (b.preview !== true) {
+        const opts = { syncedAt: own ? null : new Date().toISOString(), projectId: project.id };   // a forced foreign row: remembered, never pushed
+        if (o) store.deleteObservations([x.id], opts); else store.deleteSummaries([x.id], opts);
+      }
+      out.deleted.push(row);
+    }
+    const protocol = project?.hubUrl && ctx.sync?.hubProtocol ? await ctx.sync.hubProtocol(project) : null;
+    // true: the team's copies go too; false: local only (not linked, or a hub before protocol 2); null: hub unreachable, queued.
+    const propagates = !project?.hubUrl ? false : protocol === null ? null : protocol >= 2;
+    if (project?.hubUrl && b.preview !== true && out.deleted.length) ctx.sync?.schedulePush(project.id);
+    return ok({ ...out, propagates });
+  }
+
   if (method === 'GET' && path === '/v1/observations') {
     const obsIds: string[] = []; const sumIds: string[] = [];
     for (const id of (q.get('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
