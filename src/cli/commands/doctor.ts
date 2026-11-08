@@ -30,6 +30,12 @@ export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: s
   const info = readDaemonInfo(home);
   const alive = info ? await new DaemonClient(info).health() : false;
   line(true, alive ? `daemon running on port ${info!.port}` : 'daemon not running (starts on first hook)');
+  if (alive) {
+    try {
+      const st = await new DaemonClient(info!).request<{ observerAuthFailed?: boolean }>('GET', '/v1/status', undefined, 2000);
+      line(!st.observerAuthFailed, st.observerAuthFailed ? 'observer: provider rejected the API key (401/403); observations paused until settings.json changes (retried every 15 min)' : 'observer running');
+    } catch (e) { line(false, `observer status unavailable: ${e instanceof Error ? e.message : e}`); }
+  }
   io.stdout(problems ? `${problems} problem(s) found\n` : 'all good\n');
   return problems ? 1 : 0;
 }

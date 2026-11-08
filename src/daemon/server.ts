@@ -36,7 +36,15 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   let provider: LlmProvider;
   try { provider = createProvider(settings); }
   catch (e) { logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) }); provider = { complete: async () => { throw e; } }; }
-  const observer = new Observer({ store, provider, embedder, logger });
+  // After an auth failure the observer asks for a new provider; one is built only when settings.json changed.
+  const settingsStamp = () => { try { return statSync(resolvePaths(home).settings).mtimeMs; } catch { return 0; } };
+  let stamp = settingsStamp();
+  const reloadProvider = (): LlmProvider | null => {
+    const now = settingsStamp(); if (now === stamp) return null;
+    stamp = now;
+    try { return createProvider(loadSettings(home, env)); } catch (e) { logger.warn('settings changed but provider still unusable', { error: String(e) }); return null; }
+  };
+  const observer = new Observer({ store, provider, embedder, logger, reloadProvider });
   const userId = defaultUser(loadCredentials(home)) ?? 'local';
   const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null, embedModel: settings.embed?.model ?? null });
   observer.onStored = (projectId) => sync.schedulePush(projectId);

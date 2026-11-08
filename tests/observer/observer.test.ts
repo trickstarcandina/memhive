@@ -79,6 +79,34 @@ describe('Observer', () => {
     expect(observer.authFailed).toBe(true);
   });
 
+  it('auth failure recovers when settings give a new provider', async () => {
+    const bad = vi.fn().mockRejectedValue(new ProviderError('bad key', 'auth', 401));
+    const good = vi.fn(async () => obsJson(1));
+    let next: LlmProvider | null = null;
+    const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
+    const p = store.getOrCreateProject('k', 'proj'); const s = sess(p.id); store.upsertSession(s);
+    const ctx: SessionCtx = { sessionId: s.id, projectId: p.id, projectName: 'proj', userId: 'local' };
+    const observer = new Observer({ store, provider: { complete: bad }, embedder: null, logger: silent, reloadProvider: () => next });
+    observer.onTool(ctx, tool(0)); await vi.runAllTimersAsync();
+    observer.onTool(ctx, tool(1)); await vi.runAllTimersAsync();
+    expect(bad).toHaveBeenCalledTimes(1);
+    next = { complete: good };
+    observer.onTool(ctx, tool(2)); await vi.runAllTimersAsync();
+    expect(good).toHaveBeenCalledTimes(1);
+    expect(observer.authFailed).toBe(false);
+    expect(store.countObservations(p.id)).toBe(1);
+  });
+
+  it('auth failure allows one new try after a cooldown', async () => {
+    const complete = vi.fn().mockRejectedValueOnce(new ProviderError('bad key', 'auth', 401)).mockResolvedValue(obsJson(1));
+    const { ctx, observer } = setup({ complete });
+    observer.onTool(ctx, tool(0)); await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    observer.onTool(ctx, tool(1)); await vi.runAllTimersAsync();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(observer.authFailed).toBe(false);
+  });
+
   it('drops unparseable output and bounds the buffer', async () => {
     const complete = vi.fn(async () => 'garbage');
     const { store, ctx, observer } = setup({ complete }, null);

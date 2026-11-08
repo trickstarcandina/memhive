@@ -14,21 +14,33 @@ const DEFAULTS: ObserverOptions = { flushCount: 8, idleMs: 5000, maxAgeMs: 30000
 
 interface SessionState { buffer: SessionBuffer; timer: NodeJS.Timeout | null; inflight: Promise<void> | null; turnObservations: Observation[]; ctx: SessionCtx; touchedAt: number }
 const IDLE_DROP_MS = 30 * 60 * 1000;
+// After a 401/403 the observer stays paused until settings give a new provider, or this long has passed (then one new try).
+const AUTH_RETRY_MS = 15 * 60 * 1000;
 
 export const embeddingText = (o: Pick<Observation, 'title' | 'subtitle' | 'facts' | 'narrative'>) => [o.title, o.subtitle, ...o.facts, o.narrative].filter(Boolean).join('\n');
 
 export class Observer {
   private sessions = new Map<string, SessionState>();
   private opts: ObserverOptions;
-  private _authFailed = false;
+  private authFailedAt: number | null = null;
   // Session id -> prompt id last summarized; pruned with idle sessions (Codex sends no SessionEnd).
   private summarizedPrompt = new Map<string, { promptId: string; at: number }>();
-  constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger }, opts: Partial<ObserverOptions> = {}) {
+  constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger; reloadProvider?: () => LlmProvider | null }, opts: Partial<ObserverOptions> = {}) {
     this.opts = { ...DEFAULTS, ...opts };
   }
   /** Test seam: live session entries. */
   get sessionCount(): number { return this.sessions.size; }
-  get authFailed(): boolean { return this._authFailed; }
+  get authFailed(): boolean { return this.authFailedAt !== null; }
+
+  /** True while an auth failure pauses provider calls; a changed provider (settings) or the cooldown lifts it. */
+  private paused(): boolean {
+    if (this.authFailedAt === null) return false;
+    const next = this.deps.reloadProvider?.() ?? null;
+    if (next) { this.deps.provider = next; this.authFailedAt = null; this.deps.logger.info('provider reloaded after auth failure'); return false; }
+    if (Date.now() - this.authFailedAt < AUTH_RETRY_MS) return true;
+    this.authFailedAt = null;
+    return false;
+  }
   /** Test seam: live summary markers. */
   get summaryMarkerCount(): number { return this.summarizedPrompt.size; }
 
@@ -84,7 +96,7 @@ export class Observer {
     const prompt = latest?.text ?? null;
     const observations = s.turnObservations;
     if (observations.length === 0 && (prompt ?? '').length < 20) { s.turnObservations = []; return; }
-    if (this._authFailed) return;
+    if (this.paused()) return;
     // Claim the turn before awaiting: a racing Stop/SessionEnd then sees it summarized (or nothing new without a prompt row).
     if (latest) this.summarizedPrompt.set(ctx.sessionId, { promptId: latest.id, at: Date.now() });
     s.turnObservations = [];
@@ -112,7 +124,7 @@ export class Observer {
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
     while (s.inflight) await s.inflight;
     const events = s.buffer.drain();
-    if (events.length === 0 || this._authFailed) return;
+    if (events.length === 0 || this.paused()) return;
     s.inflight = this.generate(s, events).finally(() => { s.inflight = null; });
     await s.inflight;
   }
@@ -164,7 +176,7 @@ export class Observer {
 
   private handleProviderError(e: unknown, stage: string): void {
     const kind = e instanceof ProviderError ? e.kind : 'other';
-    if (kind === 'auth') this._authFailed = true;
+    if (kind === 'auth') this.authFailedAt = Date.now();
     this.deps.logger.warn(`${stage} dropped: provider ${kind}`, { error: e instanceof Error ? e.message : String(e) });
   }
 }
