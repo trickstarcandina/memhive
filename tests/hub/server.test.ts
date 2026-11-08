@@ -23,7 +23,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await hub.close(); });
 
-describe('hub http', () => {
+describe('hub http', { shuffle: false }, () => {   // one hub; later tests read what earlier ones pushed
   it('healthz is public, everything else needs a key', async () => {
     expect((await call(null, 'GET', '/healthz')).status).toBe(200);
     const noKey = await call(null, 'GET', '/v1/config');

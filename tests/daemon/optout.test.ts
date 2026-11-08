@@ -13,8 +13,9 @@ import { pauseCommand } from '../../src/cli/commands/pause.js';
 import { pausedUntil, pauseReader, writePause } from '../../src/shared/optout.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import type { HookEvent } from '../../src/hooks/types.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
-const env = (extra: Record<string, string> = {}) => ({ MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x', ...extra });
+const env = (extra: Record<string, string> = {}) => ({ MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x', ...extra });
 const mk = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
 const ev = (cwd: string, p: Partial<HookEvent> = {}): HookEvent => ({ host: 'claude-code', hostEvent: 'SessionStart', hostSessionId: 'h-' + Math.random(), cwd, event: 'session-start', at: new Date().toISOString(), ...p });
 const url = (p: string) => new URL('http://x' + p);

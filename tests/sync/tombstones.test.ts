@@ -30,6 +30,7 @@ describe.each(hubStores('tomb'))('$name', ({ open }) => {
   });
   afterAll(async () => { await hub.close(); });
 
+  describe('one hub, steps that share its rows', { shuffle: false }, () => {   // row counts accumulate across the steps
   it('an owner forget is pushed, relayed to a teammate, and the row is not pulled back', async () => {
     const a = client('alice'); const b = client('bob');
     const s = sess(a.project.id, { userId: 'alice' }); a.store.upsertSession(s);
@@ -86,6 +87,7 @@ describe.each(hubStores('tomb'))('$name', ({ open }) => {
     await b.engine.pull(b.project, 3000);
     expect(b.store.getSession(s.id)).toBeNull(); expect(b.store.getObservations([o.id])).toEqual([]);
     a.engine.close(); b.engine.close();
+  });
   });
 });
 

@@ -5,6 +5,7 @@ import { it, expect } from 'vitest';
 import { serveCommand } from '../../src/cli/commands/serve.js';
 import { keyCommand } from '../../src/cli/commands/key.js';
 import { main } from '../../src/cli/index.js';
+import { pgTestDb } from '../helpers/pg.js';
 
 const cap = () => { const o = { out: '', err: '' }; return { o, io: { stdout: (s: string) => { o.out += s; }, stderr: (s: string) => { o.err += s; } } }; };
 
@@ -90,13 +91,10 @@ it('key rotate, key list --json, user list/remove, project list on a sqlite hub'
   expect((await run(projectCommand, ['list'])).out).toMatch(/github\.com\/a\/b {2}\(b\) {2}0 observations/);
   for (const cmd of ['user', 'project']) { const h = cap(); expect(await main([cmd, '--help'], h.io)).toBe(0); expect(h.o.out).toMatch(new RegExp(`usage: memhive ${cmd}`)); }
 });
-const pgUrl = process.env.TEST_DATABASE_URL;
-it.skipIf(!pgUrl)('key rotate against postgres', async () => {
-  // own database: other suites drop the public schema of TEST_DATABASE_URL in parallel
-  const { Pool } = await import('pg'); const name = 'memhive_test_cli';
-  const admin = new Pool({ connectionString: pgUrl }); if (!(await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [name])).rowCount) await admin.query(`CREATE DATABASE ${name}`); await admin.end();
-  const u = new URL(pgUrl!); u.pathname = '/' + name; const env = { DATABASE_URL: u.toString(), MEMHIVE_EMBED_DIMS: '4' };
-  const p = new Pool({ connectionString: env.DATABASE_URL }); await p.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS vector;'); await p.end();
+const pgDb = pgTestDb('cli');
+it.skipIf(!pgDb)('key rotate against postgres', async () => {
+  const { Pool } = await import('pg');
+  await pgDb!.reset(); const env = { DATABASE_URL: pgDb!.url, MEMHIVE_EMBED_DIMS: '4' };
   let c = cap(); expect(await keyCommand(['create', '--user', 'erin', '--json'], c.io, env)).toBe(0); const old = JSON.parse(c.o.out);
   c = cap(); expect(await keyCommand(['rotate', 'erin', '--json'], c.io, env)).toBe(0); const rot = JSON.parse(c.o.out);
   expect(rot).toMatchObject({ revoked: old.id, userName: 'erin' });

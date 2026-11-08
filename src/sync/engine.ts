@@ -323,7 +323,8 @@ export class SyncEngine implements SyncHooks {
       const hold = (tbl: SyncTable, raw: unknown, reason: string) => {
         const { embedding: _v, ...rest } = (raw && typeof raw === 'object' ? raw : { value: raw }) as Record<string, unknown>;
         const id = String(rest.id ?? '?').slice(0, 100);
-        quarantine.push({ id, tbl, seq: page.next_seq, reason: safeText(reason, 200), raw: JSON.stringify(rest) });
+        // kept for diagnosis only, but it is a teammate's text: redact secrets in every string, keep it valid JSON
+        quarantine.push({ id, tbl, seq: page.next_seq, reason: safeText(reason, 200), raw: JSON.stringify(rest, (_k, v) => (typeof v === 'string' ? redactSecrets(v) : v)) });
         if (!this.badPulled.has(id)) { this.badPulled.add(id); logger.warn('pulled row could not be stored; quarantined', { id, table: tbl, reason: safeText(reason, 200) }); }
       };
       const rows = <T>(tbl: SyncTable, list: unknown[], schema: z.ZodType<T>): Array<{ row: T; raw: unknown }> => list.flatMap((raw) => {

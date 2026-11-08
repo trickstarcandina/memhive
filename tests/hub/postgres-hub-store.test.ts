@@ -3,6 +3,7 @@ import { PostgresHubStore } from '../../src/hub/store/postgres.js';
 import { hubPgMigrations } from '../../src/hub/store/migrations-pg.js';
 import { hubStoreContract } from './hub-store-contract.js';
 import { Pool } from 'pg';
+import { pgTestDb } from '../helpers/pg.js';
 
 describe('dims validation', () => {
   it('rejects non-integer, out-of-range and injected dims', () => {
@@ -15,19 +16,12 @@ describe('dims validation', () => {
   });
 });
 
-const url = process.env.TEST_DATABASE_URL;
-if (!url) {
+const db = pgTestDb('hub_store');
+if (!db) {
   describe.skip('postgres hub store (set TEST_DATABASE_URL to run)', () => { it('skipped', () => {}); });
 } else {
-  // the suite drops the public schema: only allow throwaway databases
-  const dbName = decodeURIComponent(new URL(url).pathname.slice(1));
-  if (!dbName.includes('test') && !process.env.CI) throw new Error(`refusing to DROP SCHEMA on database "${dbName}": name must contain "test" (or set CI)`);
-  const open = (dims: number | null) => async () => {
-    const pool = new Pool({ connectionString: url });
-    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS vector;');
-    await pool.end();
-    return new PostgresHubStore(url, { dims });
-  };
+  const url = db.url;
+  const open = (dims: number | null) => async () => { await db.reset(); return new PostgresHubStore(url, { dims }); };
   hubStoreContract('postgres', open(4));
   hubStoreContract('postgres (dims null, real[])', open(null), { dims: null });
 

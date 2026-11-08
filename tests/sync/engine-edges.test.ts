@@ -133,6 +133,15 @@ describe('review follow-ups', () => {
     expect(JSON.parse(q.find((r) => r.reason === 'malformed: type')!.raw)).toMatchObject({ id: badType.id, type: 'brand-new-type' });
     expect(q.every((r) => r.seq === 4 && r.tbl === 'observations')).toBe(true);
   });
+  it('quarantined raw rows are stored with secrets redacted, still as JSON', async () => {
+    const s = hubSess(); const key = 'sk-ant-api03-' + 'Q'.repeat(40);
+    const bad = { ...hubObs(s.id), type: 'brand-new-type', title: `leaked ${key}`, facts: [`token=${'z'.repeat(24)}`], extra: { nested: `password = "${'p'.repeat(12)}"` } };
+    const t = setup({ pull: () => ({ sessions: [s], observations: [bad], summaries: [], next_seq: 2, has_more: false, max_seq: 2 }) });
+    await t.engine.pull(t.project, 2000);
+    const [q] = t.store.listQuarantine(t.project.id, 10);
+    expect(q.raw).not.toContain('Q'.repeat(40)); expect(q.raw).not.toContain('z'.repeat(24)); expect(q.raw).not.toContain('p'.repeat(12));
+    expect(JSON.parse(q.raw)).toMatchObject({ id: bad.id, type: 'brand-new-type' });
+  });
   it('the quarantine keeps the newest 1000 rows per project', () => {
     const t = setup({});
     t.store.quarantine(t.project.id, Array.from({ length: 1005 }, (_, i) => ({ id: 'r' + i, tbl: 'observations' as const, seq: i, reason: 'x', raw: '{}' })));

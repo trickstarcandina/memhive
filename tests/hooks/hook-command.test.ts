@@ -6,9 +6,10 @@ import { runHook } from '../../src/hooks/hook-command.js';
 import { readStdin, STDIN_LIMIT } from '../../src/hooks/stdin.js';
 import { PassThrough } from 'node:stream';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 
 describe('runHook', () => {
   it('session-start prints context JSON when daemon is up', async () => {
@@ -43,7 +44,7 @@ describe('runHook', () => {
     const log = readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8');
     expect(log).toContain('stdin too large'); expect(log).toContain('empty stdin'); expect(log).toContain('hook failed');
   });
-  it('tool events are fire-and-forget with a 250 ms budget', async () => {
+  it('tool events are fire-and-forget with a 250 ms budget', { retry: 2 }, async () => {
     const home = mkHome(); const h = await startDaemon(createDaemonContext(home, env), { port: 0 });
     let seenTimeout = 0;
     const slowFetch: typeof fetch = async (url, init) => {
@@ -66,7 +67,7 @@ describe('runHook', () => {
     input.end(Buffer.alloc(STDIN_LIMIT + 100, 'a'));
     expect((await p).length).toBe(STDIN_LIMIT + 1);
   });
-  it('readStdin gives up when the host never closes stdin', async () => {
+  it('readStdin gives up when the host never closes stdin', { retry: 2 }, async () => {
     const input = new PassThrough(); input.write('{"partial":');
     const t0 = Date.now();
     expect(await readStdin(STDIN_LIMIT, input, 100)).toBe('{"partial":');

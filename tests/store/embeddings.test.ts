@@ -9,6 +9,7 @@ import { ProviderError } from '../../src/providers/types.js';
 import { createDaemonContext } from '../../src/daemon/server.js';
 import { handleRoute } from '../../src/daemon/routes.js';
 import { obs, sess } from './store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const file = () => path.join(mkdtempSync(path.join(tmpdir(), 'mh-')), 'm.db');
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
@@ -118,7 +119,7 @@ describe('embeddings: backfill', () => {
   });
   it('/v1/embed with rebuild drops vectors and embeds everything again', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    const ctx = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
+    const ctx = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' });
     const embed = vi.fn(async (t: string[]) => t.map(() => [1])); (ctx.observer as any).deps.embedder = { model: 'm', dims: 1, embed };
     const { rows } = seed(ctx.store as SqliteStore, 3);
     for (const o of rows) ctx.store.setObservationEmbedding(o.id, [], 'm');

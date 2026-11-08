@@ -11,6 +11,7 @@ import { loadCredentials, saveCredentials } from '../../src/sync/credentials.js'
 import { obs, sess } from '../store/store-contract.js';
 import { hubStores } from './hub-stores.js';
 import type { HubStore } from '../../src/hub/store/types.js';
+import { waitFor } from '../helpers/wait.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 describe.each(hubStores('rt'))('$name', ({ open }) => {
@@ -33,7 +34,7 @@ describe.each(hubStores('rt'))('$name', ({ open }) => {
   });
   afterAll(async () => { await hub.close(); });
 
-  describe('sync round trip', () => {
+  describe('sync round trip', { shuffle: false }, () => {   // a scripted conversation between clients A and B
     it('A pushes, B pulls, origin=hub, vectors carried, idempotent, cursor advances', async () => {
       const a = client('alice', keys.alice, 2); const b = client('bob', keys.bob, 2);
       const s = sess(a.project.id, { userId: 'alice' }); a.store.upsertSession(s);
@@ -89,8 +90,7 @@ describe.each(hubStores('rt'))('$name', ({ open }) => {
       const s = sess(a.project.id); a.store.upsertSession(s);
       a.store.insertObservations([obs({ projectId: a.project.id, sessionId: s.id, title: 'debounced' })]);
       a.engine.schedulePush(a.project.id); a.engine.schedulePush(a.project.id);
-      await new Promise((r) => setTimeout(r, 150));
-      expect(a.store.listUnsynced('observations', a.project.id, 10)).toHaveLength(0);
+      await waitFor(() => a.store.listUnsynced('observations', a.project.id, 10).length === 0, { what: 'debounced push' });
       a.engine.close();
     });
     it('a row whose vector the hub cannot take is kept: it reaches the hub without a vector', async () => {

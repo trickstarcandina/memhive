@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'smol-toml';
 
 /** Drops a trailing comment, ignoring '#' inside single- or double-quoted strings. */
@@ -42,10 +43,15 @@ export function hasTomlTable(content: string, tableHeader: string): boolean {
 
 /** Line-based edit, then verified with a real TOML parser. Throws instead of returning a file that is invalid or lacks the intended value. */
 export function setTomlBooleanChecked(content: string, tableHeader: string, key: string, value: boolean): string {
-  if (content.trim()) { try { parse(content); } catch (e) { throw new Error(`existing TOML does not parse: ${(e as Error).message}`); } }
+  let before: Record<string, unknown> = {};
+  if (content.trim()) { try { before = parse(content); } catch (e) { throw new Error(`existing TOML does not parse: ${(e as Error).message}`); } }
   const out = setTomlBoolean(content, tableHeader, key, value);
   let parsed: unknown;
   try { parsed = parse(out); } catch (e) { throw new Error(`edited TOML would not parse (dotted/inline form?): ${(e as Error).message}`); }
+  // The line edit can land inside a multi-line string that holds a "[table]" line: the file still parses, but some
+  // other value changed. Everything except the target key must be as before.
+  const path = [...headerPath(tableHeader), key];
+  if (!isDeepStrictEqual(without(parsed, path), without(before, path))) throw new Error(`edited TOML would change more than ${key} (a multi-line string holding ${tableHeader}?)`);
   // Walk the path the header names: parse "<header>\nk = v" and follow its single-key chain.
   let want: unknown = parse(`${tableHeader}\n${key} = ${value}`);
   while (want && typeof want === 'object') {
@@ -56,4 +62,20 @@ export function setTomlBooleanChecked(content: string, tableHeader: string, key:
     want = wv;
   }
   return out;
+}
+
+const headerPath = (tableHeader: string): string[] => {
+  const path: string[] = []; let o: unknown = parse(`${tableHeader}\n__k = 1`);
+  while (o && typeof o === 'object') { const [k] = Object.keys(o); if (k === '__k') break; path.push(k); o = (o as Record<string, unknown>)[k]; }
+  return path;
+};
+/** A copy of `doc` without the value at `path`; tables left empty by that removal are dropped too. */
+function without(doc: unknown, path: string[]): unknown {
+  if (!path.length || !doc || typeof doc !== 'object' || Array.isArray(doc)) return doc;
+  const [k, ...rest] = path; const copy = { ...(doc as Record<string, unknown>) };
+  if (!(k in copy)) return copy;
+  if (!rest.length) { delete copy[k]; return copy; }
+  const inner = without(copy[k], rest);
+  if (inner && typeof inner === 'object' && !Array.isArray(inner) && !Object.keys(inner).length) delete copy[k]; else copy[k] = inner;
+  return copy;
 }

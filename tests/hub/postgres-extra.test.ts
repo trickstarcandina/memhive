@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Pool } from 'pg';
+import { pgTestDb } from '../helpers/pg.js';
 import { PostgresHubStore, toTsQuery } from '../../src/hub/store/postgres.js';
 import { hobs, hsess } from './hub-store-contract.js';
 import { newId } from '../../src/shared/ids.js';
@@ -30,31 +30,12 @@ describe('toTsQuery (pure)', () => {
   });
 });
 
-const url = process.env.TEST_DATABASE_URL;
-if (!url) {
+const db = pgTestDb('extra');
+if (!db) {
   describe.skip('postgres toTsQuery + seq concurrency (set TEST_DATABASE_URL to run)', () => { it('skipped', () => {}); });
 } else {
-  // own database: test files run in parallel and the other postgres suite drops the public schema of TEST_DATABASE_URL
-  const extraName = 'memhive_test_extra';
-  const base = new URL(url);
-  const adminUrl = url;
-  base.pathname = '/' + extraName;
-  const extraUrl = base.toString();
-  const dbName = decodeURIComponent(new URL(url).pathname.slice(1));
-  if (!dbName.includes('test') && !process.env.CI) throw new Error(`refusing to run against database "${dbName}": name must contain "test" (or set CI)`);
-  const ensureDb = async () => {
-    const admin = new Pool({ connectionString: adminUrl });
-    const { rowCount } = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [extraName]);
-    if (!rowCount) await admin.query(`CREATE DATABASE ${extraName}`);
-    await admin.end();
-  };
-  const fresh = async (): Promise<PostgresHubStore> => {
-    await ensureDb();
-    const pool = new Pool({ connectionString: extraUrl });
-    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS vector;');
-    await pool.end();
-    const s = new PostgresHubStore(extraUrl, { dims: 4 }); await s.migrate(); return s;
-  };
+  const extraUrl = db.url;
+  const fresh = async (): Promise<PostgresHubStore> => { await db.reset(); const s = new PostgresHubStore(extraUrl, { dims: 4 }); await s.migrate(); return s; };
 
   describe('postgres toTsQuery through real to_tsquery', () => {
     it('hostile and punctuation-heavy input never throws and still matches', async () => {

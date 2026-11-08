@@ -10,20 +10,22 @@ import { readDaemonInfo } from '../../src/daemon/info.js';
 import { saveCredentials } from '../../src/sync/credentials.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import type { HookEvent } from '../../src/hooks/types.js';
+import { deadUrl } from '../helpers/closed-port.js';
+import { waitFor } from '../helpers/wait.js';
 
 const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
 let handle: Awaited<ReturnType<typeof startDaemon>>; let client: DaemonClient;
 const ev = (p: Partial<HookEvent>): HookEvent => ({ host: 'claude-code', hostEvent: 'SessionStart', hostSessionId: 'h1', cwd: home, event: 'session-start', at: new Date().toISOString(), ...p });
 
 beforeAll(async () => {
-  const ctx = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
+  const ctx = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' });
   ctx.observer['deps'].provider = { complete: async () => JSON.stringify({ observations: [{ type: 'decision', title: 'Chose SQLite', facts: ['wal'] }] }) };
   handle = await startDaemon(ctx, { port: 0, idleMs: 60000 });
   client = new DaemonClient(handle.info);
 });
 afterAll(async () => { await handle.close(); });
 
-describe('daemon', () => {
+describe('daemon', { shuffle: false }, () => {   // one daemon; later tests read what earlier ones recorded
   it('writes daemon.json and answers healthz', async () => {
     expect(readDaemonInfo(home)!.port).toBe(handle.info.port);
     expect(await client.health()).toBe(true);
@@ -54,9 +56,8 @@ describe('daemon', () => {
     await client.request('POST', '/v1/events', ev({ hostEvent: 'UserPromptSubmit', event: 'prompt', prompt: 'pick a database' }));
     await client.request('POST', '/v1/events', ev({ hostEvent: 'PostToolUse', event: 'tool', tool: { name: 'Read', input: { file_path: 'a' }, output: 'b', failed: false } }));
     await client.request('POST', '/v1/events', ev({ hostEvent: 'Stop', event: 'stop' }));
-    await new Promise((r) => setTimeout(r, 50));
     const key = (await client.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
-    const s = await client.request<{ observations: any[] }>('GET', `/v1/search?q=sqlite&project_key=${encodeURIComponent(key)}`);
+    const s = await waitFor(async () => { const r = await client.request<{ observations: any[] }>('GET', `/v1/search?q=sqlite&project_key=${encodeURIComponent(key)}`); return r.observations.length ? r : null; }, { what: 'observation searchable' });
     expect(s.observations[0].title).toBe('Chose SQLite');
     const id8 = s.observations[0].id.slice(0, 8);
     const g = await client.request<{ observations: any[] }>('GET', `/v1/observations?ids=${id8}&project_key=${encodeURIComponent(key)}`);
@@ -81,7 +82,7 @@ describe('daemon', () => {
 });
 
 describe('daemon lock and authenticated health', () => {
-  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
   it('second daemon on the same home refuses and leaves the first daemon.json intact', async () => {
     const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const first = await startDaemon(createDaemonContext(h2, env), { port: 0 });
@@ -131,7 +132,7 @@ describe('user id per linked hub', () => {
     const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const linkedDir = mkdtempSync(path.join(tmpdir(), 'mh-linked-')); const plainDir = mkdtempSync(path.join(tmpdir(), 'mh-plain-'));
     saveCredentials(h2, { hubs: { 'https://a.example': { key: 'mh_a', user: 'alice' }, 'https://b.example': { key: 'mh_b', user: 'bob' } } });
-    const ctx = createDaemonContext(h2, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
+    const ctx = createDaemonContext(h2, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' });
     try {
       const { key, name } = projectKeyFor(linkedDir);
       ctx.store.setProjectHub(ctx.store.getOrCreateProject(key, name).id, 'https://b.example');

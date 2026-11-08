@@ -3,6 +3,7 @@ import { SqliteStore } from '../../src/store/sqlite/store.js';
 import { runMaintenance } from '../../src/daemon/maintenance.js';
 import { newId } from '../../src/shared/ids.js';
 import { obs, sess } from '../store/store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never;
 const DAY = 864e5;
@@ -58,7 +59,7 @@ describe('maintenance: retention', () => {
 it('a fresh daemon with default settings never deletes rows', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const path = await import('node:path');
   const { createDaemonContext } = await import('../../src/daemon/server.js');
-  const ctx = createDaemonContext(mkdtempSync(path.join(tmpdir(), 'mh-')), { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
+  const ctx = createDaemonContext(mkdtempSync(path.join(tmpdir(), 'mh-')), { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' });
   const p = ctx.store.getOrCreateProject('k', 'n'); const a = sess(p.id); ctx.store.upsertSession(a);
   ctx.store.insertObservations((['discovery', 'decision', 'bugfix'] as const).map((type) => obs({ projectId: p.id, sessionId: a.id, type, title: type, createdAt: new Date(Date.now() - 5 * 365 * DAY).toISOString() })));
   runMaintenance(ctx);

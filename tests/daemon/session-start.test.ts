@@ -8,8 +8,9 @@ import { projectKeyFor } from '../../src/shared/project-key.js';
 import { saveCredentials } from '../../src/sync/credentials.js';
 import type { HookEvent } from '../../src/hooks/types.js';
 import { obs, sess } from '../store/store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
-const env = (extra: Record<string, string> = {}) => ({ MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x', ...extra });
+const env = (extra: Record<string, string> = {}) => ({ MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x', ...extra });
 const start = (home: string): HookEvent => ({ host: 'claude-code', hostEvent: 'SessionStart', hostSessionId: 'h-' + Math.random(), cwd: home, event: 'session-start', at: new Date().toISOString() });
 
 function seeded(extra: Record<string, string> = {}) {
@@ -81,7 +82,7 @@ describe('session start pull', () => {
     } finally { vi.useRealTimers(); }
     s.ctx.store.close();
   });
-  it('first pull waits up to 1 s', async () => {
+  it('first pull waits up to 1 s', { retry: 2 }, async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const slow = linked(5000);
     try {

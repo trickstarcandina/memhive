@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loginCommand } from '../../src/cli/commands/login.js';
 import { loadCredentials, saveCredentials } from '../../src/sync/credentials.js';
+import { waitFor } from '../helpers/wait.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
 const cap = () => { const o = { out: '', err: '' }; return { o, io: { stdout: (s: string) => { o.out += s; }, stderr: (s: string) => { o.err += s; } } }; };
@@ -37,7 +38,7 @@ describe('login edge cases', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
     const home = mkHome(); const c = cap();
     const p = loginCommand(['https://hub.example.com'], c.io, { home });
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => stdin.listenerCount('data') > 0, { what: 'key prompt listening' });
     stdin.write('\x03');
     expect(await p).toBe(130);
     expect(c.o.err).toContain('cancelled');

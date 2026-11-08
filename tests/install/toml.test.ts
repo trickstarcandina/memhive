@@ -32,3 +32,10 @@ it('keeps CRLF line endings when inserting, replacing or appending', () => {
   expect(setTomlBoolean('[features]\r\nhooks = false\r\n', '[features]', 'hooks', true)).toBe('[features]\r\nhooks = true\r\n');
   expect(setTomlBoolean('model = "x"\r\n', '[features]', 'hooks', true)).toBe('model = "x"\r\n\r\n[features]\r\nhooks = true\r\n');
 });
+it('refuses an edit that lands inside a multi-line string holding the table header', () => {
+  const src = 'notes = """\n[features]\nhooks = true\n"""\n[features]\nhooks = false\n';
+  expect(() => setTomlBooleanChecked(src, '[features]', 'hooks', false)).toThrow(/would change more than hooks/);
+  // an existing empty table and a quoted header still edit fine
+  expect(setTomlBooleanChecked('[features]\n', '[features]', 'hooks', true)).toBe('[features]\nhooks = true\n');
+  expect(setTomlBooleanChecked('[plugins."memhive@m"]\nx = 1\n', '[plugins."memhive@m"]', 'enabled', true)).toBe('[plugins."memhive@m"]\nenabled = true\nx = 1\n');
+});
