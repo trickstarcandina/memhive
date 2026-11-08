@@ -30,10 +30,12 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
 
   const detected = detectHosts(env);
   const hostFlag = typeof flags.host === 'string' ? flags.host : await ask(`Install for which hosts? (claude-code,codex)`, [detected.claudeCode && 'claude-code', detected.codex && 'codex'].filter(Boolean).join(',') || 'claude-code');
-  const hosts = new Set(hostFlag.split(',').map((s) => s.trim()));
+  const hosts = new Set(hostFlag.split(',').map((s) => s.trim()).filter(Boolean));
+  if (hosts.size === 0 || [...hosts].some((h) => h !== 'claude-code' && h !== 'codex')) { rl?.close(); io.stderr(`memhub: unknown --host "${hostFlag}" (use claude-code, codex or both comma-separated)\n`); return 2; }
 
   const current = loadSettings(home, env);
   const providerFlag = typeof flags.provider === 'string' ? flags.provider : await ask('Observer provider (anthropic | openai-compat)', current.llm.provider);
+  if (providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') { rl?.close(); io.stderr(`memhub: unknown --provider "${providerFlag}" (use anthropic or openai-compat)\n`); return 2; }
   const settings: Settings = { ...DEFAULT_SETTINGS, ...current };
   if (providerFlag === 'openai-compat') {
     settings.llm = { provider: 'openai-compat', baseUrl: await ask('LLM base URL (OpenAI-compatible, e.g. http://localhost:11434/v1)', current.llm.baseUrl ?? 'http://localhost:11434/v1'), model: await ask('LLM model', current.llm.provider === 'openai-compat' ? current.llm.model : 'qwen2.5:7b'), apiKey: (await ask('LLM API key (empty if none)', current.llm.apiKey ?? '')) || undefined };
@@ -51,10 +53,12 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
   io.stdout(`plugin files rendered to ${marketplaceRoot}\n`);
 
   if (hosts.has('claude-code')) for (const l of installClaudeCode(marketplaceRoot, run)) io.stdout(`  claude-code: ${l}\n`);
-  if (hosts.has('codex')) for (const l of installCodex(marketplaceRoot, env.CODEX_HOME ?? path.join(homedir(), '.codex'), run)) io.stdout(`  codex: ${l}\n`);
+  let codexOk = true;
+  if (hosts.has('codex')) { const r = installCodex(marketplaceRoot, env.CODEX_HOME ?? path.join(homedir(), '.codex'), run); codexOk = r.ok; for (const l of r.log) io.stdout(`  codex: ${l}\n`); }
 
   io.stdout('\nChecking setup…\n');
   await doctorCommand([], io, { home, env, ping: !flags['no-ping'] });
+  if (!codexOk) { io.stderr('\nmemhub: Codex setup did not complete; follow the manual steps above.\n'); return 1; }
   io.stdout('\nDone. Restart your agent; memory appears from your second session in a project.\n');
   return 0;
 }

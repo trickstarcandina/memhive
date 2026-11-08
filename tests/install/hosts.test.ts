@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { detectHosts, installClaudeCode, installCodex, uninstallCodex, type RunFn } from '../../src/install/hosts.js';
@@ -21,8 +21,29 @@ it('codex install edits config.toml in temp home, preserving other content; unin
   const home = mkdtempSync(path.join(tmpdir(), 'cx-'));
   const cfg = path.join(home, 'config.toml');
   writeFileSync(cfg, 'model = "x"  # mine\n\n[features]\nhooks = false\n');
-  installCodex('/m', home, ok);
+  expect(installCodex('/m', home, ok).ok).toBe(true);
   expect(readFileSync(cfg, 'utf8')).toBe('model = "x"  # mine\n\n[features]\nhooks = true\n\n[plugins."memhub@memhub-local"]\nenabled = true\n');
   uninstallCodex(home, ok);
   expect(readFileSync(cfg, 'utf8')).toContain('enabled = false');
+});
+it('codex install writes nothing when the codex CLI fails', () => {
+  const home = path.join(mkdtempSync(path.join(tmpdir(), 'cx-')), 'codex');
+  const r = installCodex('/m', home, bad);
+  expect(r.ok).toBe(false);
+  expect(existsSync(home)).toBe(false);
+});
+it('codex install refuses a root dotted features key and leaves the file untouched', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'cx-'));
+  const cfg = path.join(home, 'config.toml');
+  writeFileSync(cfg, 'features.hooks = false\n');
+  const r = installCodex('/m', home, ok);
+  expect(r.ok).toBe(false);
+  expect(readFileSync(cfg, 'utf8')).toBe('features.hooks = false\n');
+});
+it('uninstall never appends a table', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'cx-'));
+  const cfg = path.join(home, 'config.toml');
+  writeFileSync(cfg, 'model = "x"\n');
+  uninstallCodex(home, ok);
+  expect(readFileSync(cfg, 'utf8')).toBe('model = "x"\n');
 });

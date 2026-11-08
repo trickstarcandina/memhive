@@ -19,7 +19,15 @@ it('renders templates with absolute node and bundle paths', () => {
 it('keeps paths with spaces and backslashes intact as single args', () => {
   const mk = path.join(mkdtempSync(path.join(tmpdir(), 'mh-')), 'mk');
   renderPluginDir({ templateRoot: path.resolve('.'), marketplaceRoot: mk, nodePath: 'C:\\Program Files\\node.exe', bundlePath: '/my dir/memhub.cjs', version: '1.0.0' });
-  const h = JSON.parse(readFileSync(path.join(mk, 'plugin', 'hooks', 'codex-hooks.json'), 'utf8')).hooks.Stop[0].hooks[0];
-  expect(h).toMatchObject({ command: 'C:\\Program Files\\node.exe', args: ['/my dir/memhub.cjs', 'hook', 'codex', 'Stop'] });
+  const h = JSON.parse(readFileSync(path.join(mk, 'plugin', 'hooks', 'hooks.json'), 'utf8')).hooks.Stop[0].hooks[0];
+  expect(h).toMatchObject({ command: 'C:\\Program Files\\node.exe', args: ['/my dir/memhub.cjs', 'hook', 'claude-code', 'Stop'] });
   expect(JSON.parse(readFileSync(path.join(mk, 'plugin', '.mcp.json'), 'utf8')).mcpServers.memhub.args[0]).toBe('/my dir/memhub.cjs');
+});
+
+it('renders a single shell-quoted command string for Codex hooks', () => {
+  const mk = path.join(mkdtempSync(path.join(tmpdir(), 'mh-')), 'mk');
+  renderPluginDir({ templateRoot: path.resolve('.'), marketplaceRoot: mk, nodePath: '/usr/bin/node', bundlePath: "/my dir/it's/memhub.cjs", version: '1.0.0' });
+  const h = JSON.parse(readFileSync(path.join(mk, 'plugin', 'hooks', 'codex-hooks.json'), 'utf8')).hooks.Stop[0].hooks[0];
+  expect(h.args).toBeUndefined();
+  expect(h.command).toBe("'/usr/bin/node' '/my dir/it'\\''s/memhub.cjs' hook codex Stop");
 });

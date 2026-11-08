@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { setTomlBoolean } from './toml.js';
+import { hasTomlTable, setTomlBooleanChecked } from './toml.js';
 
 export type RunFn = (cmd: string, args: string[]) => { status: number | null; stdout: string; stderr: string; error?: Error };
 export const defaultRun: RunFn = (cmd, args) => { const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 60000 }); return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error }; };
@@ -36,25 +36,36 @@ export function uninstallClaudeCode(run: RunFn = defaultRun): string[] {
   return log;
 }
 
-export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): string[] {
+export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): { log: string[]; ok: boolean } {
   const log: string[] = [];
-  run('codex', ['plugin', 'marketplace', 'remove', MARKETPLACE_NAME]);
-  tryRun(run, 'codex', ['plugin', 'marketplace', 'add', marketplaceRoot], log);
-  tryRun(run, 'codex', ['plugin', 'add', PLUGIN_ID], log);
   const cfg = path.join(codexHome, 'config.toml');
-  mkdirSync(codexHome, { recursive: true });
-  let content = existsSync(cfg) ? readFileSync(cfg, 'utf8') : '';
-  content = setTomlBoolean(content, '[features]', 'hooks', true);
-  content = setTomlBoolean(content, `[plugins."${PLUGIN_ID}"]`, 'enabled', true);
-  writeFileSync(cfg, content);
+  const manual = () => log.push(`Do it by hand: codex plugin marketplace add ${marketplaceRoot} ; codex plugin add ${PLUGIN_ID} ; then in ${cfg} set [features] hooks = true and [plugins."${PLUGIN_ID}"] enabled = true`);
+  run('codex', ['plugin', 'marketplace', 'remove', MARKETPLACE_NAME]);
+  if (!tryRun(run, 'codex', ['plugin', 'marketplace', 'add', marketplaceRoot], log) || !tryRun(run, 'codex', ['plugin', 'add', PLUGIN_ID], log)) { manual(); return { log, ok: false }; }
+  try {
+    let content = existsSync(cfg) ? readFileSync(cfg, 'utf8') : '';
+    content = setTomlBooleanChecked(content, '[features]', 'hooks', true);
+    content = setTomlBooleanChecked(content, `[plugins."${PLUGIN_ID}"]`, 'enabled', true);
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(cfg, content);
+  } catch (e) {
+    log.push(`FAILED to edit ${cfg}: ${(e as Error).message}`); manual(); return { log, ok: false };
+  }
   log.push(`updated ${cfg}: [features] hooks = true, [plugins."${PLUGIN_ID}"] enabled = true`);
   log.push('Restart Codex and trust the memhub hooks when prompted.');
-  return log;
+  return { log, ok: true };
 }
 export function uninstallCodex(codexHome: string, run: RunFn = defaultRun): string[] {
   const log: string[] = [];
   const cfg = path.join(codexHome, 'config.toml');
-  if (existsSync(cfg)) { writeFileSync(cfg, setTomlBoolean(readFileSync(cfg, 'utf8'), `[plugins."${PLUGIN_ID}"]`, 'enabled', false)); log.push(`disabled ${PLUGIN_ID} in ${cfg}`); }
+  const header = `[plugins."${PLUGIN_ID}"]`;
+  if (existsSync(cfg)) {
+    const src = readFileSync(cfg, 'utf8');
+    if (hasTomlTable(src, header)) {
+      try { writeFileSync(cfg, setTomlBooleanChecked(src, header, 'enabled', false)); log.push(`disabled ${PLUGIN_ID} in ${cfg}`); }
+      catch (e) { log.push(`FAILED to edit ${cfg}: ${(e as Error).message}; set enabled = false under ${header} by hand`); }
+    }
+  }
   tryRun(run, 'codex', ['plugin', 'remove', PLUGIN_ID], log);
   tryRun(run, 'codex', ['plugin', 'marketplace', 'remove', MARKETPLACE_NAME], log);
   return log;

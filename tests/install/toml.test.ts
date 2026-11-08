@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { setTomlBoolean } from '../../src/install/toml.js';
+import { setTomlBoolean, setTomlBooleanChecked } from '../../src/install/toml.js';
 it('appends a table when missing', () => expect(setTomlBoolean('model = "x"\n', '[features]', 'hooks', true)).toBe('model = "x"\n\n[features]\nhooks = true\n'));
 it('updates an existing key in place and keeps the rest', () => {
   const src = '[features]\nhooks = false # keep\nother = 1\n\n[plugins."memhub@memhub-local"]\nenabled = false\n';
@@ -7,3 +7,17 @@ it('updates an existing key in place and keeps the rest', () => {
   expect(out).toBe('[features]\nhooks = true\nother = 1\n\n[plugins."memhub@memhub-local"]\nenabled = true\n');
 });
 it('inserts a key into an existing table without the key', () => expect(setTomlBoolean('[features]\nx = 1\n', '[features]', 'hooks', true)).toBe('[features]\nhooks = true\nx = 1\n'));
+it('checked: multi-line array with a [ line is preserved', () => {
+  const src = '[features]\nlist = [\n  [1, 2],\n]\n';
+  expect(setTomlBooleanChecked(src, '[features]', 'hooks', true)).toBe('[features]\nhooks = true\nlist = [\n  [1, 2],\n]\n');
+});
+it('checked: refuses dotted and inline features forms', () => {
+  expect(() => setTomlBooleanChecked('features.hooks = false\n', '[features]', 'hooks', true)).toThrow();
+  expect(() => setTomlBooleanChecked('features = { hooks = false }\n', '[features]', 'hooks', true)).toThrow();
+});
+it('checked: refuses unparseable input', () => expect(() => setTomlBooleanChecked('a = \n', '[features]', 'hooks', true)).toThrow());
+it('checked: handles # inside a quoted table name', () => {
+  const src = '[plugins."a#b"]\nenabled = false\n\n[plugins."memhub@x"]\nenabled = false\n';
+  expect(setTomlBooleanChecked(src, '[plugins."memhub@x"]', 'enabled', true)).toBe('[plugins."a#b"]\nenabled = false\n\n[plugins."memhub@x"]\nenabled = true\n');
+  expect(setTomlBooleanChecked(src, '[plugins."a#b"]', 'enabled', true)).toBe('[plugins."a#b"]\nenabled = true\n\n[plugins."memhub@x"]\nenabled = false\n');
+});
