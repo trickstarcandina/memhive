@@ -32,7 +32,7 @@ export class SyncEngine implements SyncHooks {
   private markAuthFailed(project: Project): void {
     const c = loadCredentials(this.deps.home);
     if (project.hubUrl && c.hubs[project.hubUrl]) { c.hubs[project.hubUrl].authFailed = true; saveCredentials(this.deps.home, c); }
-    this.deps.logger.error('hub rejected API key; run `memhub login` again', { hub: project.hubUrl });
+    this.deps.logger.error('hub rejected API key; run `memhive login` again', { hub: project.hubUrl });
   }
   private failed(project: Project, what: string, e: unknown): void {
     if (e instanceof HubError && e.status === 401) this.markAuthFailed(project);

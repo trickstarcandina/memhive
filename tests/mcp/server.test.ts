@@ -13,7 +13,7 @@ const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
 let h: Awaited<ReturnType<typeof startDaemon>>; let client: Client;
 
 beforeAll(async () => {
-  h = await startDaemon(createDaemonContext(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' }), { port: 0 });
+  h = await startDaemon(createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' }), { port: 0 });
   const server = createMcpServer({ client: new DaemonClient(h.info), cwd: home });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
@@ -91,7 +91,7 @@ describe('mcp', () => {
   });
 });
 
-it('takes MEMHUB_CWD from the plugin env only when it is an expanded absolute path', () => {
-  expect(mcpCwd({ MEMHUB_CWD: '/work/app' }, '/x')).toBe('/work/app');
-  for (const v of [undefined, '', '${CLAUDE_PROJECT_DIR:-}', 'rel/dir']) expect(mcpCwd({ MEMHUB_CWD: v }, '/x')).toBe('/x');
+it('takes MEMHIVE_CWD from the plugin env only when it is an expanded absolute path', () => {
+  expect(mcpCwd({ MEMHIVE_CWD: '/work/app' }, '/x')).toBe('/work/app');
+  for (const v of [undefined, '', '${CLAUDE_PROJECT_DIR:-}', 'rel/dir']) expect(mcpCwd({ MEMHIVE_CWD: v }, '/x')).toBe('/x');
 });

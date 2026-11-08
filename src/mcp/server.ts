@@ -17,7 +17,7 @@ const id = z.preprocess((v) => (typeof v === 'string' ? v.replace(/^#/, '') : v)
 export type Reconnect = () => Promise<DaemonClient | null>;
 
 export function createMcpServer(deps: { client: DaemonClient; cwd: string; reconnect?: Reconnect }): McpServer {
-  const server = new McpServer({ name: 'memhub', version: VERSION });
+  const server = new McpServer({ name: 'memhive', version: VERSION });
   let current = deps.client;
   // One retry after re-ensuring the daemon on a connection failure or 401; timeouts and other daemon errors pass through.
   const rpc = {
@@ -74,16 +74,16 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string; recon
   return server;
 }
 
-/** MEMHUB_CWD from the plugin's .mcp.json, unless the host left it empty or unexpanded; then the process cwd. */
+/** MEMHIVE_CWD from the plugin's .mcp.json, unless the host left it empty or unexpanded; then the process cwd. */
 export function mcpCwd(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
-  const v = env.MEMHUB_CWD;
+  const v = env.MEMHIVE_CWD;
   return v && path.isAbsolute(v) && !v.includes('${') ? v : cwd;
 }
 
 export async function runMcp(): Promise<number> {
   const home = resolvePaths().home;
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
-  if (!info) { process.stderr.write('memhub: daemon could not be started\n'); return 1; }
+  if (!info) { process.stderr.write('memhive: daemon could not be started\n'); return 1; }
   const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000 }); return i ? new DaemonClient(i) : null; };
   const server = createMcpServer({ client: new DaemonClient(info), cwd: mcpCwd(), reconnect });
   await server.connect(new StdioServerTransport());

@@ -9,7 +9,7 @@ import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 describe('ensureDaemon', () => {
   it('returns running daemon info without spawning', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    const h = await startDaemon(createDaemonContext(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' }), { port: 0 });
+    const h = await startDaemon(createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' }), { port: 0 });
     let spawned = 0;
     const info = await ensureDaemon(home, { wait: true, spawn: () => { spawned++; } });
     expect(info!.port).toBe(h.info.port); expect(spawned).toBe(0);

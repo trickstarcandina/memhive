@@ -15,18 +15,18 @@ const io = () => { const out: string[] = []; const err: string[] = []; return { 
 function fixture() {
   const t = mkdtempSync(path.join(tmpdir(), 'mh-install-'));
   const root = path.join(t, 'pkg'); mkdirSync(path.join(root, 'dist'), { recursive: true });
-  writeFileSync(path.join(root, 'dist', 'memhub.cjs'), '');
+  writeFileSync(path.join(root, 'dist', 'memhive.cjs'), '');
   cpSync(path.join(repo, 'plugin'), path.join(root, 'plugin'), { recursive: true });
   cpSync(path.join(repo, 'plugin-marketplace'), path.join(root, 'plugin-marketplace'), { recursive: true });
-  const home = path.join(t, 'memhub');
-  const env = { HOME: t, CODEX_HOME: path.join(t, 'codex'), CLAUDE_CONFIG_DIR: path.join(t, 'claude'), MEMHUB_HOME: home };
+  const home = path.join(t, 'memhive');
+  const env = { HOME: t, CODEX_HOME: path.join(t, 'codex'), CLAUDE_CONFIG_DIR: path.join(t, 'claude'), MEMHIVE_HOME: home };
   return { root, home, env };
 }
 
 describe('install', () => {
   it('does not copy env-only values into settings.json', async () => {
     const f = fixture(); const r = io();
-    const env = { ...f.env, MEMHUB_ANTHROPIC_API_KEY: 'sk-env-only', ANTHROPIC_API_KEY: 'sk-shell', MEMHUB_CONTEXT_TOKENS: '500' };
+    const env = { ...f.env, MEMHIVE_ANTHROPIC_API_KEY: 'sk-env-only', ANTHROPIC_API_KEY: 'sk-shell', MEMHIVE_CONTEXT_TOKENS: '500' };
     expect(await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], r.io, { home: f.home, env, run, root: f.root })).toBe(0);
     const saved = readFileSync(path.join(f.home, 'settings.json'), 'utf8');
     expect(saved).not.toMatch(/sk-env-only|sk-shell/);
@@ -36,9 +36,9 @@ describe('install', () => {
   it('hints when only ANTHROPIC_API_KEY is set: the daemon does not read it', async () => {
     const f = fixture(); const r = io();
     expect(await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], r.io, { home: f.home, env: { ...f.env, ANTHROPIC_API_KEY: 'sk-shell' }, run, root: f.root })).toBe(0);
-    expect(r.out.join('')).toContain('ANTHROPIC_API_KEY is set but memhub does not read it');
+    expect(r.out.join('')).toContain('ANTHROPIC_API_KEY is set but memhive does not read it');
     const quiet = io(); const g = fixture();
-    await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], quiet.io, { home: g.home, env: { ...g.env, ANTHROPIC_API_KEY: 'sk-shell', MEMHUB_ANTHROPIC_API_KEY: 'sk-m' }, run, root: g.root });
+    await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], quiet.io, { home: g.home, env: { ...g.env, ANTHROPIC_API_KEY: 'sk-shell', MEMHIVE_ANTHROPIC_API_KEY: 'sk-m' }, run, root: g.root });
     expect(quiet.out.join('')).not.toContain('ANTHROPIC_API_KEY is set');
   });
 

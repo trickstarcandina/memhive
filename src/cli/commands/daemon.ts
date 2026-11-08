@@ -22,13 +22,13 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
   }
   if (sub === 'start') {
     const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
-    if (!info) { io.stderr('memhub: daemon failed to start (see logs/daemon.log)\n'); return 1; }
-    io.stdout(`memhub daemon running on port ${info.port} (pid ${info.pid})\n`); return 0;
+    if (!info) { io.stderr('memhive: daemon failed to start (see logs/daemon.log)\n'); return 1; }
+    io.stdout(`memhive daemon running on port ${info.port} (pid ${info.pid})\n`); return 0;
   }
   const info = readDaemonInfo(home);
   const alive = info ? await new DaemonClient(info).health() : false;
   if (sub === 'status') {
-    io.stdout(alive ? `memhub daemon running on port ${info!.port} (pid ${info!.pid}, since ${info!.startedAt})\n` : 'memhub daemon not running\n');
+    io.stdout(alive ? `memhive daemon running on port ${info!.port} (pid ${info!.pid}, since ${info!.startedAt})\n` : 'memhive daemon not running\n');
     return alive ? 0 : 1;
   }
   if (sub === 'stop') {
@@ -36,14 +36,14 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
       // A daemon from an older build fails the new health proof but still runs: stop it by pid, only when /proc shows it is ours.
       const pid = info?.pid ?? Number(readText(path.join(home, 'daemon.lock')));
       if (pid && pid !== process.pid && isOurDaemon(home, pid)) {
-        try { process.kill(pid, 'SIGTERM'); io.stdout(`memhub daemon (pid ${pid}) stopping\n`); return 0; } catch { /* already gone */ }
+        try { process.kill(pid, 'SIGTERM'); io.stdout(`memhive daemon (pid ${pid}) stopping\n`); return 0; } catch { /* already gone */ }
       }
-      io.stdout('memhub daemon not running\n'); return 0;
+      io.stdout('memhive daemon not running\n'); return 0;
     }
     await new DaemonClient(info!).request('POST', '/v1/shutdown').catch(() => {});
-    io.stdout('memhub daemon stopping\n'); return 0;
+    io.stdout('memhive daemon stopping\n'); return 0;
   }
-  io.stderr(`memhub daemon: unknown subcommand "${sub}" (run|start|stop|status)\n`); return 1;
+  io.stderr(`memhive daemon: unknown subcommand "${sub}" (run|start|stop|status)\n`); return 1;
 }
 
 const readText = (file: string): string => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
@@ -52,5 +52,5 @@ const readText = (file: string): string => { try { return readFileSync(file, 'ut
 function isOurDaemon(home: string, pid: number): boolean {
   const args = readText(`/proc/${pid}/cmdline`).split('\0');
   const env = readText(`/proc/${pid}/environ`).split('\0');
-  return args.includes('daemon') && args.includes('run') && args.some((a) => a.includes('memhub')) && env.includes(`MEMHUB_HOME=${home}`);
+  return args.includes('daemon') && args.includes('run') && args.some((a) => a.includes('memhive')) && env.includes(`MEMHIVE_HOME=${home}`);
 }

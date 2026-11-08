@@ -102,7 +102,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
   if (method === 'POST' && path === '/v1/sync') {
     const cwd = String((body as { cwd?: string } | undefined)?.cwd ?? process.cwd()); const { key, name } = projectKeyFor(cwd);
     const project = store.getOrCreateProject(key, name);
-    if (!ctx.sync || !project.hubUrl) return err(400, 'not_linked', 'project is not linked to a hub (memhub link <url>)');
+    if (!ctx.sync || !project.hubUrl) return err(400, 'not_linked', 'project is not linked to a hub (memhive link <url>)');
     return ok(await ctx.sync.syncNow(project));
   }
 

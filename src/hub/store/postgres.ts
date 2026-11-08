@@ -31,7 +31,7 @@ export class PostgresHubStore implements HubStore {
     assertValidDims(opts.dims);
     this.pool = new Pool({ connectionString: databaseUrl, max: 10 });
     // idle-client errors (e.g. server restart) would otherwise crash the process; never log the URL
-    this.pool.on('error', (e) => console.error(`[memhub-hub] postgres pool error: ${e.message}`));
+    this.pool.on('error', (e) => console.error(`[memhive-hub] postgres pool error: ${e.message}`));
   }
   // pgvector takes its text form; the real[] fallback takes a JS array
   private get vecCast(): string { return this.opts.dims ? '$15::vector' : '$15::real[]'; }

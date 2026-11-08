@@ -16,7 +16,7 @@ let handle: Awaited<ReturnType<typeof startDaemon>>; let client: DaemonClient;
 const ev = (p: Partial<HookEvent>): HookEvent => ({ host: 'claude-code', hostEvent: 'SessionStart', hostSessionId: 'h1', cwd: home, event: 'session-start', at: new Date().toISOString(), ...p });
 
 beforeAll(async () => {
-  const ctx = createDaemonContext(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' });
+  const ctx = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
   ctx.observer['deps'].provider = { complete: async () => JSON.stringify({ observations: [{ type: 'decision', title: 'Chose SQLite', facts: ['wal'] }] }) };
   handle = await startDaemon(ctx, { port: 0, idleMs: 60000 });
   client = new DaemonClient(handle.info);
@@ -35,7 +35,7 @@ describe('daemon', () => {
   });
   it('rejects a foreign Host header even with the token (DNS rebinding)', async () => {
     const status = (host: string) => new Promise<number>((resolve, reject) => {
-      const r = httpRequest({ host: '127.0.0.1', port: handle.info.port, path: '/v1/status', headers: { host, 'x-memhub-daemon-token': handle.info.token } }, (res) => { res.resume(); resolve(res.statusCode!); });
+      const r = httpRequest({ host: '127.0.0.1', port: handle.info.port, path: '/v1/status', headers: { host, 'x-memhive-daemon-token': handle.info.token } }, (res) => { res.resume(); resolve(res.statusCode!); });
       r.on('error', reject); r.end();
     });
     expect(await status(`evil.example:${handle.info.port}`)).toBe(401);
@@ -48,7 +48,7 @@ describe('daemon', () => {
   });
   it('session start returns a context block and creates the session', async () => {
     const r = await client.request<{ context: string }>('POST', '/v1/sessions/start', ev({}));
-    expect(r.context).toContain('memhub ·');
+    expect(r.context).toContain('memhive ·');
   });
   it('events flow to the observer and become searchable', async () => {
     await client.request('POST', '/v1/events', ev({ hostEvent: 'UserPromptSubmit', event: 'prompt', prompt: 'pick a database' }));
@@ -81,7 +81,7 @@ describe('daemon', () => {
 });
 
 describe('daemon lock and authenticated health', () => {
-  const env = { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' };
+  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
   it('second daemon on the same home refuses and leaves the first daemon.json intact', async () => {
     const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const first = await startDaemon(createDaemonContext(h2, env), { port: 0 });
@@ -131,7 +131,7 @@ describe('user id per linked hub', () => {
     const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const linkedDir = mkdtempSync(path.join(tmpdir(), 'mh-linked-')); const plainDir = mkdtempSync(path.join(tmpdir(), 'mh-plain-'));
     saveCredentials(h2, { hubs: { 'https://a.example': { key: 'mh_a', user: 'alice' }, 'https://b.example': { key: 'mh_b', user: 'bob' } } });
-    const ctx = createDaemonContext(h2, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' });
+    const ctx = createDaemonContext(h2, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
     try {
       const { key, name } = projectKeyFor(linkedDir);
       ctx.store.setProjectHub(ctx.store.getOrCreateProject(key, name).id, 'https://b.example');

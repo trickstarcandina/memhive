@@ -6,8 +6,8 @@ declare const module: any;
 export interface CliIo { stdout: (s: string) => void; stderr: (s: string) => void }
 const defaultIo: CliIo = { stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s) };
 
-const USAGE = `memhub ${VERSION}
-usage: memhub <command>
+const USAGE = `memhive ${VERSION}
+usage: memhive <command>
   install | uninstall | doctor
   hook <claude-code|codex> <event>
   daemon <run|start|stop|status>
@@ -22,20 +22,20 @@ usage: memhub <command>
 `;
 
 const SUB_USAGE: Record<string, string> = {
-  install: 'usage: memhub install [--yes] [--host claude-code,codex] [--provider anthropic|openai-compat] [--no-ping]\n',
-  uninstall: 'usage: memhub uninstall\n',
-  doctor: 'usage: memhub doctor\n',
-  hook: 'usage: memhub hook <claude-code|codex> <event>\n',
-  daemon: 'usage: memhub daemon <run|start|stop|status>\n',
-  mcp: 'usage: memhub mcp\n',
-  search: 'usage: memhub search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
-  embed: 'usage: memhub embed [--missing|--rebuild]\n',
-  serve: 'usage: memhub serve   (env: DATABASE_URL, PORT, MEMHUB_EMBED_MODEL, MEMHUB_EMBED_DIMS)\n',
-  key: 'usage: memhub key <create --user <name> [--label <text>] | list | revoke <id>>\n',
-  login: 'usage: memhub login <hub-url> [--key-stdin]   (prompts for the API key without echo; --key-stdin reads it from stdin)\n',
-  link: 'usage: memhub link <hub-url>   (links the current project to a hub you are logged in to)\n',
-  unlink: 'usage: memhub unlink   (stops syncing the current project)\n',
-  sync: 'usage: memhub sync   (push and pull the current project now)\n',
+  install: 'usage: memhive install [--yes] [--host claude-code,codex] [--provider anthropic|openai-compat] [--no-ping]\n',
+  uninstall: 'usage: memhive uninstall\n',
+  doctor: 'usage: memhive doctor\n',
+  hook: 'usage: memhive hook <claude-code|codex> <event>\n',
+  daemon: 'usage: memhive daemon <run|start|stop|status>\n',
+  mcp: 'usage: memhive mcp\n',
+  search: 'usage: memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
+  embed: 'usage: memhive embed [--missing|--rebuild]\n',
+  serve: 'usage: memhive serve   (env: DATABASE_URL, PORT, MEMHIVE_EMBED_MODEL, MEMHIVE_EMBED_DIMS)\n',
+  key: 'usage: memhive key <create --user <name> [--label <text>] | list | revoke <id>>\n',
+  login: 'usage: memhive login <hub-url> [--key-stdin]   (prompts for the API key without echo; --key-stdin reads it from stdin)\n',
+  link: 'usage: memhive link <hub-url>   (links the current project to a hub you are logged in to)\n',
+  unlink: 'usage: memhive unlink   (stops syncing the current project)\n',
+  sync: 'usage: memhive sync   (push and pull the current project now)\n',
 };
 
 export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<number> {
@@ -60,18 +60,18 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'unlink': return (await import('./commands/link.js')).linkCommand(rest, { stdout, stderr }, { unlink: true });
     case 'sync': return (await import('./commands/sync.js')).syncCommand(rest, { stdout, stderr });
     case 'uninstall': return (await import('./commands/uninstall.js')).uninstallCommand(rest, { stdout, stderr });
-    default: stderr(`memhub: unknown command "${cmd}"\n${USAGE}`); return 1;
+    default: stderr(`memhive: unknown command "${cmd}"\n${USAGE}`); return 1;
   }
 }
 
 const isEntry = typeof require !== 'undefined' && require.main === module;
-if (isEntry || process.env.MEMHUB_FORCE_MAIN === '1') {
+if (isEntry || process.env.MEMHIVE_FORCE_MAIN === '1') {
   const argv = process.argv.slice(2);
   // daemon run, serve and mcp are long-lived; everything else must not linger on open handles.
   const longLived = argv[0] === 'mcp' || (argv[0] === 'daemon' && argv[1] === 'run') || argv[0] === 'serve';
   const finish = (code: number) => { process.exitCode = code; if (!longLived) process.stdout.write('', () => process.exit(code)); };
   main(argv).then(finish, (err) => {
-    process.stderr.write(`memhub: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.stderr.write(`memhive: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
     finish(1);
   });
 }

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createLogger } from '../../src/shared/logger.js';
 
 describe('logger', () => {
-  it('appends JSON lines and skips debug unless MEMHUB_DEBUG', () => {
+  it('appends JSON lines and skips debug unless MEMHIVE_DEBUG', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const log = createLogger(home, 'hook', {});
     log.info('hello', { a: 1 });

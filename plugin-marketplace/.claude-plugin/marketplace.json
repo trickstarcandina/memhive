@@ -1,1 +1,1 @@
-{ "name": "memhub-local", "owner": { "name": "memhub" }, "metadata": { "description": "memhub installed from this machine" }, "plugins": [{ "name": "memhub", "version": "{{VERSION}}", "source": "./plugin", "description": "Long-term memory for coding agents." }] }
+{ "name": "memhive-local", "owner": { "name": "memhive" }, "metadata": { "description": "memhive installed from this machine" }, "plugins": [{ "name": "memhive", "version": "{{VERSION}}", "source": "./plugin", "description": "Long-term memory for coding agents." }] }

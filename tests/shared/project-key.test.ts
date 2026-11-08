@@ -3,8 +3,8 @@ import { normalizeRemote, projectKeyFor } from '../../src/shared/project-key.js'
 
 describe('normalizeRemote', () => {
   it.each([
-    ['git@github.com:kalix-vn/memhub.git', 'github.com/kalix-vn/memhub'],
-    ['https://user@github.com/Kalix-VN/MemHub.git/', 'github.com/kalix-vn/memhub'],
+    ['git@github.com:kalix-vn/memhive.git', 'github.com/kalix-vn/memhive'],
+    ['https://user@github.com/Kalix-VN/MemHive.git/', 'github.com/kalix-vn/memhive'],
     ['ssh://git@gitlab.com:2222/team/app.git', 'gitlab.com/team/app'],
     ['http://10.0.0.5/repo', '10.0.0.5/repo'],
     ['git@host:123/repo.git', 'host/repo'],   // kept as before so existing project keys stay stable

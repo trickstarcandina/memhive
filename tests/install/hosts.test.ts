@@ -14,7 +14,7 @@ it('detects hosts via injected exists', () => {
 it('claude install runs marketplace add + install; prints manual steps on failure', () => {
   calls.length = 0;
   expect(installClaudeCode('/m', ok).some((l) => l.startsWith('Run inside'))).toBe(false);
-  expect(calls).toContain('claude plugin install memhub@memhub-local');
+  expect(calls).toContain('claude plugin install memhive@memhive-local');
   expect(installClaudeCode('/m', bad).some((l) => l.startsWith('Run inside Claude Code'))).toBe(true);
 });
 it('codex install edits config.toml in temp home, preserving other content; uninstall disables', () => {
@@ -22,7 +22,7 @@ it('codex install edits config.toml in temp home, preserving other content; unin
   const cfg = path.join(home, 'config.toml');
   writeFileSync(cfg, 'model = "x"  # mine\n\n[features]\nhooks = false\n');
   expect(installCodex('/m', home, ok).ok).toBe(true);
-  expect(readFileSync(cfg, 'utf8')).toBe('model = "x"  # mine\n\n[features]\nhooks = true\n\n[plugins."memhub@memhub-local"]\nenabled = true\n');
+  expect(readFileSync(cfg, 'utf8')).toBe('model = "x"  # mine\n\n[features]\nhooks = true\n\n[plugins."memhive@memhive-local"]\nenabled = true\n');
   uninstallCodex(home, ok);
   expect(readFileSync(cfg, 'utf8')).toContain('enabled = false');
 });

@@ -95,7 +95,7 @@ describe('createHubStore', () => {
   it('throws without DATABASE_URL and on unknown scheme', () => {
     expect(() => createHubStore({})).toThrow(/DATABASE_URL/);
     expect(() => createHubStore({ DATABASE_URL: 'mysql://x' })).toThrow(/postgres|sqlite/);
-    expect(hubConfigFromEnv({ PORT: '8080', MEMHUB_EMBED_MODEL: 'm', MEMHUB_EMBED_DIMS: '8' })).toEqual({ port: 8080, embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
+    expect(hubConfigFromEnv({ PORT: '8080', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '8' })).toEqual({ port: 8080, embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
   });
 });
 

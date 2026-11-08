@@ -53,7 +53,7 @@ describe('login edge cases', () => {
   it('missing url prints usage', async () => {
     const c = cap();
     expect(await loginCommand([], c.io, { home: mkHome() })).toBe(1);
-    expect(c.o.err).toContain('usage: memhub login');
+    expect(c.o.err).toContain('usage: memhive login');
   });
 
   it('config endpoint failure warns but still logs in and saves the key', async () => {

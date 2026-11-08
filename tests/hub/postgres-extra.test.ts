@@ -34,7 +34,7 @@ if (!url) {
   describe.skip('postgres toTsQuery + seq concurrency (set TEST_DATABASE_URL to run)', () => { it('skipped', () => {}); });
 } else {
   // own database: test files run in parallel and the other postgres suite drops the public schema of TEST_DATABASE_URL
-  const extraName = 'memhub_test_extra';
+  const extraName = 'memhive_test_extra';
   const base = new URL(url);
   const adminUrl = url;
   base.pathname = '/' + extraName;

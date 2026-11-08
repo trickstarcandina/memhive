@@ -3,18 +3,18 @@ services:
     build: { context: .., dockerfile: docker/Dockerfile }
     ports: ["127.0.0.1:7777:7777"]
     environment:
-      DATABASE_URL: postgres://memhub@db:5432/memhub
+      DATABASE_URL: postgres://memhive@db:5432/memhive
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      MEMHUB_EMBED_MODEL: ${MEMHUB_EMBED_MODEL:-bge-m3}
-      MEMHUB_EMBED_DIMS: ${MEMHUB_EMBED_DIMS:-1024}
-      MEMHUB_HOME: /data
+      MEMHIVE_EMBED_MODEL: ${MEMHIVE_EMBED_MODEL:-bge-m3}
+      MEMHIVE_EMBED_DIMS: ${MEMHIVE_EMBED_DIMS:-1024}
+      MEMHIVE_HOME: /data
     volumes: ["hub-data:/data"]
     depends_on: { db: { condition: service_healthy } }
     restart: unless-stopped
   db:
     image: pgvector/pgvector:pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
-    environment: { POSTGRES_USER: memhub, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}", POSTGRES_DB: memhub }
+    environment: { POSTGRES_USER: memhive, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}", POSTGRES_DB: memhive }
     volumes: ["pg-data:/var/lib/postgresql/data"]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U memhub"], interval: 5s, timeout: 5s, retries: 10 }
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U memhive"], interval: 5s, timeout: 5s, retries: 10 }
     restart: unless-stopped
 volumes: { hub-data: {}, pg-data: {} }

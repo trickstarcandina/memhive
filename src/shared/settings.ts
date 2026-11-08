@@ -26,26 +26,26 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const file: Partial<Settings> = isObj(parsed) ? (parsed as Partial<Settings>) : {};
   const fl: Partial<LlmSettings> = isObj(file.llm) ? (file.llm as Partial<LlmSettings>) : {};
   const llm: LlmSettings = { ...DEFAULT_SETTINGS.llm, ...fl };
-  if (env.MEMHUB_LLM_PROVIDER === 'anthropic' || env.MEMHUB_LLM_PROVIDER === 'openai-compat') llm.provider = env.MEMHUB_LLM_PROVIDER;
+  if (env.MEMHIVE_LLM_PROVIDER === 'anthropic' || env.MEMHIVE_LLM_PROVIDER === 'openai-compat') llm.provider = env.MEMHIVE_LLM_PROVIDER;
   if (llm.provider !== 'anthropic' && llm.provider !== 'openai-compat') llm.provider = DEFAULT_SETTINGS.llm.provider;
   // The file's model belongs to the file's provider; another provider (env switch, or none saved) gets its own default.
   if (!fl.model || (fl.provider ?? DEFAULT_SETTINGS.llm.provider) !== llm.provider) llm.model = DEFAULT_MODELS[llm.provider];
   if (llm.provider === 'anthropic') {
-    if (env.MEMHUB_ANTHROPIC_API_KEY) llm.apiKey = env.MEMHUB_ANTHROPIC_API_KEY;
-    if (env.MEMHUB_ANTHROPIC_MODEL) llm.model = env.MEMHUB_ANTHROPIC_MODEL;
+    if (env.MEMHIVE_ANTHROPIC_API_KEY) llm.apiKey = env.MEMHIVE_ANTHROPIC_API_KEY;
+    if (env.MEMHIVE_ANTHROPIC_MODEL) llm.model = env.MEMHIVE_ANTHROPIC_MODEL;
   } else {
-    if (env.MEMHUB_LLM_BASE_URL) llm.baseUrl = env.MEMHUB_LLM_BASE_URL;
-    if (env.MEMHUB_LLM_API_KEY) llm.apiKey = env.MEMHUB_LLM_API_KEY;
-    if (env.MEMHUB_LLM_MODEL) llm.model = env.MEMHUB_LLM_MODEL;
+    if (env.MEMHIVE_LLM_BASE_URL) llm.baseUrl = env.MEMHIVE_LLM_BASE_URL;
+    if (env.MEMHIVE_LLM_API_KEY) llm.apiKey = env.MEMHIVE_LLM_API_KEY;
+    if (env.MEMHIVE_LLM_MODEL) llm.model = env.MEMHIVE_LLM_MODEL;
   }
   const fe: Partial<EmbedSettings> = isObj(file.embed) ? (file.embed as Partial<EmbedSettings>) : {};
   // An empty env url/model wins (that disables embeddings); a config missing url, model or a positive dims is none.
-  const dims = posInt(env.MEMHUB_EMBED_DIMS) ?? posInt(fe.dims);
-  const baseUrl = env.MEMHUB_EMBED_BASE_URL ?? fe.baseUrl ?? '';
-  const model = env.MEMHUB_EMBED_MODEL ?? fe.model ?? '';
+  const dims = posInt(env.MEMHIVE_EMBED_DIMS) ?? posInt(fe.dims);
+  const baseUrl = env.MEMHIVE_EMBED_BASE_URL ?? fe.baseUrl ?? '';
+  const model = env.MEMHIVE_EMBED_MODEL ?? fe.model ?? '';
   const embed: EmbedSettings | null = dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model ? null
-    : { baseUrl, apiKey: env.MEMHUB_EMBED_API_KEY ?? fe.apiKey, model, dims };
-  const contextTokens = Number(env.MEMHUB_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
+    : { baseUrl, apiKey: env.MEMHIVE_EMBED_API_KEY ?? fe.apiKey, model, dims };
+  const contextTokens = Number(env.MEMHIVE_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
   return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens };
 }
 

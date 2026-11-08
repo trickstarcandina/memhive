@@ -16,7 +16,7 @@ import { main } from '../../src/cli/index.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 const cap = () => { const o = { out: '', err: '' }; return { o, io: { stdout: (s: string) => { o.out += s; }, stderr: (s: string) => { o.err += s; } } }; };
-const env = { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
 let hub: Awaited<ReturnType<typeof startHub>>; let hubUrl: string; let key: string; let hs: SqliteHubStore;
 beforeAll(async () => {
   hs = new SqliteHubStore(':memory:', { dims: null }); await hs.migrate();
@@ -91,9 +91,9 @@ describe('login / link / sync / unlink', () => {
   });
   it('--help for new commands has no side effects', async () => {
     for (const cmd of ['login', 'link', 'unlink', 'sync']) {
-      const home = mkdtempSync(path.join(tmpdir(), 'mh-help-')); const prev = process.env.MEMHUB_HOME; process.env.MEMHUB_HOME = home;
-      try { const c = cap(); expect(await main([cmd, '--help'], c.io)).toBe(0); expect(c.o.out).toContain(`memhub ${cmd}`); expect(c.o.err).toBe(''); }
-      finally { if (prev === undefined) delete process.env.MEMHUB_HOME; else process.env.MEMHUB_HOME = prev; }
+      const home = mkdtempSync(path.join(tmpdir(), 'mh-help-')); const prev = process.env.MEMHIVE_HOME; process.env.MEMHIVE_HOME = home;
+      try { const c = cap(); expect(await main([cmd, '--help'], c.io)).toBe(0); expect(c.o.out).toContain(`memhive ${cmd}`); expect(c.o.err).toBe(''); }
+      finally { if (prev === undefined) delete process.env.MEMHIVE_HOME; else process.env.MEMHIVE_HOME = prev; }
       expect(readdirSync(home)).toEqual([]);
     }
   });

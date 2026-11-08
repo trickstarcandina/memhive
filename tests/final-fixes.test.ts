@@ -110,8 +110,8 @@ describe('file modes', () => {
     ctx.store.close();
     saveSettings(home, DEFAULT_SETTINGS);
     expect(mode(path.join(home, 'settings.json'))).toBe(0o600);
-    expect(existsSync(path.join(home, 'memhub.db'))).toBe(true);
-    expect(mode(path.join(home, 'memhub.db'))).toBe(0o600);
+    expect(existsSync(path.join(home, 'memhive.db'))).toBe(true);
+    expect(mode(path.join(home, 'memhive.db'))).toBe(0o600);
   });
   it('tightens an existing loose home', () => {
     const home = tmp(); chmodSync(home, 0o755);
@@ -119,9 +119,9 @@ describe('file modes', () => {
     createDaemonContext(home, {}).store.close();
     expect(mode(home)).toBe(0o700);
   });
-  it('leaves the mode of a shared directory MEMHUB_HOME points at, warns, and keeps memhub files private', () => {
+  it('leaves the mode of a shared directory MEMHIVE_HOME points at, warns, and keeps memhive files private', () => {
     const home = tmp(); chmodSync(home, 0o755);
-    writeFileSync(path.join(home, 'notes.txt'), 'not memhub');
+    writeFileSync(path.join(home, 'notes.txt'), 'not memhive');
     const warnings: string[] = [];
     setHomeWarningSink((m) => warnings.push(m));
     const ctx = createDaemonContext(home, {});   // migrate writes, so the WAL files exist while the store is open
@@ -129,9 +129,9 @@ describe('file modes', () => {
     saveSettings(home, DEFAULT_SETTINGS);
     expect(mode(home)).toBe(0o755);
     expect(warnings.join('')).toMatch(/readable by other users/);
-    for (const f of ['memhub.db', 'memhub.db-wal', 'memhub.db-shm', 'settings.json', 'logs/x.log', 'logs/daemon.log']) if (existsSync(path.join(home, f))) expect([f, mode(path.join(home, f))]).toEqual([f, 0o600]);
+    for (const f of ['memhive.db', 'memhive.db-wal', 'memhive.db-shm', 'settings.json', 'logs/x.log', 'logs/daemon.log']) if (existsSync(path.join(home, f))) expect([f, mode(path.join(home, f))]).toEqual([f, 0o600]);
     expect(mode(path.join(home, 'logs'))).toBe(0o700);
-    expect(existsSync(path.join(home, 'memhub.db-wal'))).toBe(true);
+    expect(existsSync(path.join(home, 'memhive.db-wal'))).toBe(true);
     ctx.store.close();
   });
 });

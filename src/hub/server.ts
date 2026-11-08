@@ -11,13 +11,13 @@ import { VERSION } from '../shared/version.js';
 export interface HubConfig { port: number; embeddingModel: string | null; embeddingDims: number | null; bodyLimit: number }
 
 export function hubConfigFromEnv(env: NodeJS.ProcessEnv): HubConfig {
-  return { port: Number(env.PORT ?? 7777) || 7777, embeddingModel: env.MEMHUB_EMBED_MODEL || null, embeddingDims: env.MEMHUB_EMBED_DIMS ? Number(env.MEMHUB_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHUB_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
+  return { port: Number(env.PORT ?? 7777) || 7777, embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
 }
 
 export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
   const url = env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL is required (postgres://… or sqlite:<path>)');
-  const dims = env.MEMHUB_EMBED_DIMS ? Number(env.MEMHUB_EMBED_DIMS) || null : null;
+  const dims = env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null;
   if (url.startsWith('postgres://') || url.startsWith('postgresql://')) return new PostgresHubStore(url, { dims });
   if (url.startsWith('sqlite:')) return new SqliteHubStore(url.slice('sqlite:'.length), { dims });
   throw new Error('DATABASE_URL must start with postgres:// or sqlite:');

@@ -25,16 +25,16 @@ describe('settings', () => {
   });
   it('defaults the model per provider', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    expect(loadSettings(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://x/v1' }).llm.model).toBe('qwen2.5:7b');
+    expect(loadSettings(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://x/v1' }).llm.model).toBe('qwen2.5:7b');
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ llm: { provider: 'anthropic', model: 'claude-haiku-5-5' } }));
-    expect(loadSettings(home, { MEMHUB_LLM_PROVIDER: 'openai-compat' }).llm.model).toBe('qwen2.5:7b');
+    expect(loadSettings(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat' }).llm.model).toBe('qwen2.5:7b');
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ llm: { provider: 'openai-compat', model: 'llama3' } }));
     expect(loadSettings(home, {}).llm.model).toBe('llama3');
-    expect(loadSettings(home, { MEMHUB_LLM_PROVIDER: 'anthropic' }).llm.model).toBe('claude-haiku-5-5');
+    expect(loadSettings(home, { MEMHIVE_LLM_PROVIDER: 'anthropic' }).llm.model).toBe('claude-haiku-5-5');
   });
   it('env overrides file', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    const s = loadSettings(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://x/v1', MEMHUB_LLM_MODEL: 'm', MEMHUB_EMBED_BASE_URL: 'http://e/v1', MEMHUB_EMBED_MODEL: 'bge-m3', MEMHUB_EMBED_DIMS: '1024', MEMHUB_CONTEXT_TOKENS: '500' });
+    const s = loadSettings(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://x/v1', MEMHIVE_LLM_MODEL: 'm', MEMHIVE_EMBED_BASE_URL: 'http://e/v1', MEMHIVE_EMBED_MODEL: 'bge-m3', MEMHIVE_EMBED_DIMS: '1024', MEMHIVE_CONTEXT_TOKENS: '500' });
     expect(s.llm).toEqual({ provider: 'openai-compat', model: 'm', baseUrl: 'http://x/v1', apiKey: undefined });
     expect(s.embed).toEqual({ baseUrl: 'http://e/v1', apiKey: undefined, model: 'bge-m3', dims: 1024 });
     expect(s.contextTokens).toBe(500);
@@ -54,23 +54,23 @@ describe('settings', () => {
   it('treats a partial embed config as unconfigured (empty url or model, dims 0)', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'bge-m3', dims: 768 } }));
-    expect(loadSettings(home, { MEMHUB_EMBED_BASE_URL: '' }).embed).toBeNull();
-    expect(loadSettings(home, { MEMHUB_EMBED_MODEL: '' }).embed).toBeNull();
+    expect(loadSettings(home, { MEMHIVE_EMBED_BASE_URL: '' }).embed).toBeNull();
+    expect(loadSettings(home, { MEMHIVE_EMBED_MODEL: '' }).embed).toBeNull();
     const h0 = mkdtempSync(path.join(tmpdir(), 'mh-'));
     writeFileSync(path.join(h0, 'settings.json'), JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'bge-m3', dims: 0 } }));
     expect(loadSettings(h0, {}).embed).toBeNull();
-    expect(loadSettings(mkdtempSync(path.join(tmpdir(), 'mh-')), { MEMHUB_EMBED_DIMS: '1024' }).embed).toBeNull();
+    expect(loadSettings(mkdtempSync(path.join(tmpdir(), 'mh-')), { MEMHIVE_EMBED_DIMS: '1024' }).embed).toBeNull();
     expect(loadSettings(home, {}).embed).toMatchObject({ dims: 768 });
   });
   it('treats embed as unconfigured when dims is not a positive integer', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    const s = loadSettings(home, { MEMHUB_EMBED_BASE_URL: 'http://e/v1', MEMHUB_EMBED_MODEL: 'bge-m3', MEMHUB_EMBED_DIMS: 'abc' });
+    const s = loadSettings(home, { MEMHIVE_EMBED_BASE_URL: 'http://e/v1', MEMHIVE_EMBED_MODEL: 'bge-m3', MEMHIVE_EMBED_DIMS: 'abc' });
     expect(s.embed).toBeNull();
   });
   it('falls back to file dims when env dims is invalid', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'bge-m3', dims: 768 } }));
-    const s = loadSettings(home, { MEMHUB_EMBED_DIMS: 'abc' });
+    const s = loadSettings(home, { MEMHIVE_EMBED_DIMS: 'abc' });
     expect(s.embed).toEqual({ baseUrl: 'http://e/v1', apiKey: undefined, model: 'bge-m3', dims: 768 });
   });
 });

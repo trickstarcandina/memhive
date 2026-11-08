@@ -73,7 +73,7 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   return ctx;
 }
 
-export class DaemonAlreadyRunning extends Error { constructor() { super('another memhub daemon is already running'); this.name = 'DaemonAlreadyRunning'; } }
+export class DaemonAlreadyRunning extends Error { constructor() { super('another memhive daemon is already running'); this.name = 'DaemonAlreadyRunning'; } }
 
 function pidAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
 
@@ -125,7 +125,7 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
     if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(closeSafe, 10); return { status: 200, body: {} }; }
     try { return await handleRoute(ctx, method, url, body); }
     catch (e) { ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
-  }, (url, headers) => hostOk(headers.host, port()) && (url.pathname === '/healthz' || tokenOk(headers['x-memhub-daemon-token'], token)));
+  }, (url, headers) => hostOk(headers.host, port()) && (url.pathname === '/healthz' || tokenOk(headers['x-memhive-daemon-token'], token)));
   const port = () => (server.address() as AddressInfo | null)?.port ?? -1;
   try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(opts.port ?? 0, '127.0.0.1', resolve); }); }
   catch (e) { rmSync(lock, { force: true }); throw e; }

@@ -8,6 +8,6 @@ const { createDaemonContext } = await import('../../src/daemon/server.js');
 
 it('does not call the embedder while sqlite-vec is degraded', () => {
   const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-  const ctx = createDaemonContext(home, { MEMHUB_EMBED_BASE_URL: 'http://127.0.0.1:9', MEMHUB_EMBED_MODEL: 'm', MEMHUB_EMBED_DIMS: '4' });
+  const ctx = createDaemonContext(home, { MEMHIVE_EMBED_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '4' });
   try { expect(ctx.embedder).toBeNull(); } finally { ctx.store.close(); }
 });

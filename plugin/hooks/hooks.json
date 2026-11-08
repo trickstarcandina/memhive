@@ -1,4 +1,4 @@
-{ "description": "memhub memory hooks", "hooks": {
+{ "description": "memhive memory hooks", "hooks": {
   "SessionStart": [{ "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "SessionStart"], "timeout": 10 }] }],
   "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "UserPromptSubmit"], "timeout": 5, "async": true }] }],
   "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "{{NODE}}", "args": ["{{BUNDLE}}", "hook", "claude-code", "PostToolUse"], "timeout": 5, "async": true }] }],

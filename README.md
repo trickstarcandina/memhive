@@ -1,22 +1,22 @@
-# memhub
+# memhive
 
-memhub gives coding agents long-term memory. It watches sessions in Claude Code and Codex, distills what happened into short observations (decisions, bugfixes, config changes, and so on), and feeds the relevant ones back into the next session. Memory stays on your machine by default and can be shared through a team hub later.
+memhive gives coding agents long-term memory. It watches sessions in Claude Code and Codex, distills what happened into short observations (decisions, bugfixes, config changes, and so on), and feeds the relevant ones back into the next session. Memory stays on your machine by default and can be shared through a team hub later.
 
 ## Install
 
 ```sh
-npm install -g memhub && memhub install
+npm install -g memhive && memhive install
 ```
 
-`memhub install` asks which hosts to wire up (Claude Code, Codex) and which observer provider to use. Flags: `--host claude-code,codex`, `--provider anthropic|openai-compat`, `--yes` to skip prompts.
+`memhive install` asks which hosts to wire up (Claude Code, Codex) and which observer provider to use. Flags: `--host claude-code,codex`, `--provider anthropic|openai-compat`, `--yes` to skip prompts.
 
 ## How it works
 
-- **Hooks.** Claude Code and Codex call `memhub hook <host> <event>` on session start, each prompt, each tool use, stop and session end. Hook commands always exit 0, so they never block the agent.
-- **Daemon.** The first hook starts a local daemon (`memhub daemon status|start|stop|run`). It owns the SQLite database (`~/.memhub/memhub.db`) and a per-session event buffer.
+- **Hooks.** Claude Code and Codex call `memhive hook <host> <event>` on session start, each prompt, each tool use, stop and session end. Hook commands always exit 0, so they never block the agent.
+- **Daemon.** The first hook starts a local daemon (`memhive daemon status|start|stop|run`). It owns the SQLite database (`~/.memhive/memhive.db`) and a per-session event buffer.
 - **Observer.** Buffered events are flushed to the LLM after 8 events, after 5 s of idle, or on stop. The LLM turns them into typed observations. A failed LLM call drops its batch; nothing is retried or replayed.
-- **Context.** At session start the daemon builds a context block from recent and relevant observations, capped by `MEMHUB_CONTEXT_TOKENS`, and injects it into the agent.
-- **MCP.** `memhub mcp` exposes the memory to the agent in three steps: `search` finds matching observations, `timeline` shows what happened around one, and `get_observations` fetches full records. `save_memory` stores an explicit note.
+- **Context.** At session start the daemon builds a context block from recent and relevant observations, capped by `MEMHIVE_CONTEXT_TOKENS`, and injects it into the agent.
+- **MCP.** `memhive mcp` exposes the memory to the agent in three steps: `search` finds matching observations, `timeline` shows what happened around one, and `get_observations` fetches full records. `save_memory` stores an explicit note.
 
 Observation types: `decision`, `bugfix`, `feature`, `refactor`, `discovery`, `config`, `problem`, `workaround`.
 
@@ -26,34 +26,34 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 
 | Command | Purpose |
 | --- | --- |
-| `memhub install` / `memhub uninstall` | Wire memhub into Claude Code and Codex, or remove it. Your memory is kept. |
-| `memhub search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations from the terminal. |
-| `memhub embed [--missing\|--rebuild]` | Compute embeddings for observations. `--rebuild` after changing `MEMHUB_EMBED_DIMS`. |
-| `memhub doctor` | Check settings, provider and embedder credentials, and daemon health. Reports whether each key is set; it never prints keys. |
-| `memhub daemon run\|start\|stop\|status` | Control the background daemon. |
-| `memhub hook <claude-code\|codex> <event>` | Hook entry point; called by the host, not by you. |
-| `memhub mcp` | MCP server over stdio; called by the host. |
-| `memhub version` | Print the version. |
+| `memhive install` / `memhive uninstall` | Wire memhive into Claude Code and Codex, or remove it. Your memory is kept. |
+| `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations from the terminal. |
+| `memhive embed [--missing\|--rebuild]` | Compute embeddings for observations. `--rebuild` after changing `MEMHIVE_EMBED_DIMS`. |
+| `memhive doctor` | Check settings, provider and embedder credentials, and daemon health. Reports whether each key is set; it never prints keys. |
+| `memhive daemon run\|start\|stop\|status` | Control the background daemon. |
+| `memhive hook <claude-code\|codex> <event>` | Hook entry point; called by the host, not by you. |
+| `memhive mcp` | MCP server over stdio; called by the host. |
+| `memhive version` | Print the version. |
 
 ## Configuration
 
-Settings live in `~/.memhub/settings.json` (mode 0600). Environment variables override the file and use the same names as the settings keys shown here.
+Settings live in `~/.memhive/settings.json` (mode 0600). Environment variables override the file and use the same names as the settings keys shown here.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MEMHUB_HOME` | `~/.memhub` | Data directory (database, settings, daemon info, logs). |
-| `MEMHUB_LLM_PROVIDER` | `anthropic` | Observer provider: `anthropic` or `openai-compat`. |
-| `MEMHUB_ANTHROPIC_API_KEY` | none | Anthropic API key (provider `anthropic`). Required there. |
-| `MEMHUB_ANTHROPIC_MODEL` | `claude-haiku-5-5` | Anthropic model alias. |
-| `MEMHUB_LLM_BASE_URL` | none | OpenAI-compatible endpoint, e.g. `http://localhost:11434/v1`. Required for `openai-compat`. |
-| `MEMHUB_LLM_API_KEY` | none | Key for the OpenAI-compatible endpoint, if it needs one. |
-| `MEMHUB_LLM_MODEL` | `claude-haiku-5-5` | Model name for the OpenAI-compatible endpoint. Set it: the default is an Anthropic model. |
-| `MEMHUB_EMBED_BASE_URL` | none | OpenAI-compatible embeddings endpoint (Ollama, OpenAI, OpenRouter, ...). |
-| `MEMHUB_EMBED_API_KEY` | none | Key for the embeddings endpoint, if needed. |
-| `MEMHUB_EMBED_MODEL` | none | Embedding model name. |
-| `MEMHUB_EMBED_DIMS` | unset | Vector size. Setting it enables vector search; unset means FTS-only search. |
-| `MEMHUB_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block (about 4 characters per token). |
-| `MEMHUB_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
+| `MEMHIVE_HOME` | `~/.memhive` | Data directory (database, settings, daemon info, logs). |
+| `MEMHIVE_LLM_PROVIDER` | `anthropic` | Observer provider: `anthropic` or `openai-compat`. |
+| `MEMHIVE_ANTHROPIC_API_KEY` | none | Anthropic API key (provider `anthropic`). Required there. |
+| `MEMHIVE_ANTHROPIC_MODEL` | `claude-haiku-5-5` | Anthropic model alias. |
+| `MEMHIVE_LLM_BASE_URL` | none | OpenAI-compatible endpoint, e.g. `http://localhost:11434/v1`. Required for `openai-compat`. |
+| `MEMHIVE_LLM_API_KEY` | none | Key for the OpenAI-compatible endpoint, if it needs one. |
+| `MEMHIVE_LLM_MODEL` | `claude-haiku-5-5` | Model name for the OpenAI-compatible endpoint. Set it: the default is an Anthropic model. |
+| `MEMHIVE_EMBED_BASE_URL` | none | OpenAI-compatible embeddings endpoint (Ollama, OpenAI, OpenRouter, ...). |
+| `MEMHIVE_EMBED_API_KEY` | none | Key for the embeddings endpoint, if needed. |
+| `MEMHIVE_EMBED_MODEL` | none | Embedding model name. |
+| `MEMHIVE_EMBED_DIMS` | unset | Vector size. Setting it enables vector search; unset means FTS-only search. |
+| `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block (about 4 characters per token). |
+| `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
 
 ## Privacy
 
@@ -88,10 +88,10 @@ Hub settings are environment variables:
 | --- | --- | --- |
 | `DATABASE_URL` | none (required) | `postgres://…` or `sqlite:<path>`. Compose sets the Postgres URL. |
 | `PORT` | `7777` | Listen port. |
-| `MEMHUB_EMBED_MODEL` | none | Embedding model the hub expects. Compose sets `bge-m3`. |
-| `MEMHUB_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
-| `MEMHUB_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. |
-| `MEMHUB_HOME` | `~/.memhub` | Directory for hub logs. Compose sets `/data`. |
+| `MEMHIVE_EMBED_MODEL` | none | Embedding model the hub expects. Compose sets `bge-m3`. |
+| `MEMHIVE_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
+| `MEMHIVE_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. |
+| `MEMHIVE_HOME` | `~/.memhive` | Directory for hub logs. Compose sets `/data`. |
 
 `POSTGRES_PASSWORD` is required: compose refuses to start without it. Compose reads it from `docker/.env` and passes it to the hub as `PGPASSWORD`, outside the connection URL, so any characters work.
 
@@ -102,9 +102,9 @@ The hub limits each key to 60 requests per minute.
 Create one key per person or machine. Run these from `docker/`:
 
 ```sh
-docker compose exec hub node dist/memhub.cjs key create --user alice --label laptop
-docker compose exec hub node dist/memhub.cjs key list
-docker compose exec hub node dist/memhub.cjs key revoke <id>
+docker compose exec hub node dist/memhive.cjs key create --user alice --label laptop
+docker compose exec hub node dist/memhive.cjs key list
+docker compose exec hub node dist/memhive.cjs key revoke <id>
 ```
 
 The new key is printed once and starts with `mh_`. Give it to its owner through a private channel. `key revoke` takes the id shown by `key list`.
@@ -114,22 +114,22 @@ The new key is printed once and starts with `mh_`. Give it to its owner through 
 On each machine, log in once. The command asks for the key without echoing it:
 
 ```sh
-memhub login https://hub.example.com
+memhive login https://hub.example.com
 ```
 
 To script it, pipe the key on stdin. Never pass the key as a command-line argument, because arguments show up in shell history and process listings:
 
 ```sh
-printf '%s' "$MEMHUB_KEY" | memhub login https://hub.example.com --key-stdin
+printf '%s' "$MEMHIVE_KEY" | memhive login https://hub.example.com --key-stdin
 ```
 
 Then, inside each project you want to share:
 
 ```sh
-memhub link https://hub.example.com
+memhive link https://hub.example.com
 ```
 
-`link` runs an initial pull. `memhub sync` pushes and pulls the current project now. `memhub unlink` stops syncing the current project; its local memory stays.
+`link` runs an initial pull. `memhive sync` pushes and pulls the current project now. `memhive unlink` stops syncing the current project; its local memory stays.
 
 ### What syncs
 
@@ -137,15 +137,15 @@ Observations, summaries and session records of linked projects are pushed to the
 
 ### Embedding model must match
 
-Clients that embed must use the same embedding model and vector size as the hub. Set `MEMHUB_EMBED_MODEL` and `MEMHUB_EMBED_DIMS` on the hub to the `embed` model and dims in each client's `~/.memhub/settings.json`. The hub rejects a pushed row whose embedding model differs from its own, or whose vector length differs from `MEMHUB_EMBED_DIMS`, with `422 embedding_model_mismatch`. Rows without a vector are accepted. `memhub login` warns when the local settings differ from the hub's.
+Clients that embed must use the same embedding model and vector size as the hub. Set `MEMHIVE_EMBED_MODEL` and `MEMHIVE_EMBED_DIMS` on the hub to the `embed` model and dims in each client's `~/.memhive/settings.json`. The hub rejects a pushed row whose embedding model differs from its own, or whose vector length differs from `MEMHIVE_EMBED_DIMS`, with `422 embedding_model_mismatch`. Rows without a vector are accepted. `memhive login` warns when the local settings differ from the hub's.
 
 Hub-side search is full-text only, because the hub runs no embedder. Client search stays hybrid over local rows, including rows pulled from the hub.
 
 ## Troubleshooting
 
-- Run `memhub doctor` first. It checks settings, credentials and daemon health.
-- Logs are in `~/.memhub/logs/` (`hook.log`, `daemon.log`, and others). Set `MEMHUB_DEBUG=1` for more detail.
-- If session context is missing, check that `memhub daemon status` reports the daemon running. Hooks start it automatically on the next session.
+- Run `memhive doctor` first. It checks settings, credentials and daemon health.
+- Logs are in `~/.memhive/logs/` (`hook.log`, `daemon.log`, and others). Set `MEMHIVE_DEBUG=1` for more detail.
+- If session context is missing, check that `memhive daemon status` reports the daemon running. Hooks start it automatically on the next session.
 
 ## License
 

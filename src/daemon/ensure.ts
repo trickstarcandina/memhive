@@ -6,7 +6,7 @@ declare const __filename: string;   // defined in the CJS bundle, undefined unde
 export type SpawnFn = (bundlePath: string, home: string) => void;
 
 const defaultSpawn: SpawnFn = (bundlePath, home) => {
-  const child = spawn(process.execPath, [bundlePath, 'daemon', 'run'], { detached: true, stdio: 'ignore', env: { ...process.env, MEMHUB_HOME: home } });
+  const child = spawn(process.execPath, [bundlePath, 'daemon', 'run'], { detached: true, stdio: 'ignore', env: { ...process.env, MEMHIVE_HOME: home } });
   child.unref();
 };
 

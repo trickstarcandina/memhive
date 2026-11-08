@@ -6,10 +6,10 @@ import { ProviderError, type Embedder, type LlmProvider } from './types.js';
 
 export function createProvider(s: Settings, fetchImpl?: typeof fetch): LlmProvider {
   if (s.llm.provider === 'anthropic') {
-    if (!s.llm.apiKey) throw new ProviderError('MEMHUB_ANTHROPIC_API_KEY not set', 'auth');
+    if (!s.llm.apiKey) throw new ProviderError('MEMHIVE_ANTHROPIC_API_KEY not set', 'auth');
     return new AnthropicProvider({ apiKey: s.llm.apiKey, model: s.llm.model, fetch: fetchImpl });
   }
-  if (!s.llm.baseUrl) throw new ProviderError('MEMHUB_LLM_BASE_URL not set', 'other');
+  if (!s.llm.baseUrl) throw new ProviderError('MEMHIVE_LLM_BASE_URL not set', 'other');
   return new OpenAICompatProvider({ baseUrl: s.llm.baseUrl, apiKey: s.llm.apiKey, model: s.llm.model, fetch: fetchImpl });
 }
 

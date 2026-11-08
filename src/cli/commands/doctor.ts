@@ -11,7 +11,7 @@ export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: s
   const home = opts.home ?? resolvePaths().home; const env = opts.env ?? process.env;
   let problems = 0;
   const line = (ok: boolean, text: string) => { io.stdout(`${ok ? 'ok  ' : 'FAIL'} ${text}\n`); if (!ok) problems++; };
-  io.stdout(`memhub ${VERSION} · home ${home}\n`);
+  io.stdout(`memhive ${VERSION} · home ${home}\n`);
   let s; try { s = loadSettings(home, env); } catch (e) { line(false, `settings: ${e instanceof Error ? e.message : e}`); io.stdout(`${problems} problem(s) found\n`); return 1; }
   line(true, `provider ${s.llm.provider} model ${s.llm.model}${s.llm.baseUrl ? ` at ${s.llm.baseUrl}` : ''} (api key ${s.llm.apiKey ? 'set' : 'not set'})`);
   if (s.embed) line(true, `embedder ${s.embed.model} (${s.embed.dims} dims) at ${s.embed.baseUrl} (api key ${s.embed.apiKey ? 'set' : 'not set'})`);

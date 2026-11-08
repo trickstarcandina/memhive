@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
-const env = { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
 
 describe('runHook', () => {
   it('session-start prints context JSON when daemon is up', async () => {
@@ -16,7 +16,7 @@ describe('runHook', () => {
     const out: string[] = [];
     const code = await runHook(['claude-code', 'SessionStart'], { home, readStdin: async () => JSON.stringify({ session_id: 's1', cwd: home, hook_event_name: 'SessionStart', source: 'startup' }), stdout: (s) => out.push(s) });
     expect(code).toBe(0);
-    expect(JSON.parse(out.join('')).hookSpecificOutput.additionalContext).toContain('memhub ·');
+    expect(JSON.parse(out.join('')).hookSpecificOutput.additionalContext).toContain('memhive ·');
     await h.close();
   });
   it('exits 0 and logs on invalid JSON, empty stdin, unknown host, missing daemon', async () => {

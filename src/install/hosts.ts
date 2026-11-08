@@ -7,8 +7,8 @@ import { hasTomlTable, setTomlBooleanChecked } from './toml.js';
 export type RunFn = (cmd: string, args: string[]) => { status: number | null; stdout: string; stderr: string; error?: Error };
 export const defaultRun: RunFn = (cmd, args) => { const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 60000 }); return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error }; };
 
-export const PLUGIN_ID = 'memhub@memhub-local';
-export const MARKETPLACE_NAME = 'memhub-local';
+export const PLUGIN_ID = 'memhive@memhive-local';
+export const MARKETPLACE_NAME = 'memhive-local';
 
 export function detectHosts(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): { claudeCode: boolean; codex: boolean } {
   return { claudeCode: exists(env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), '.claude')), codex: exists(env.CODEX_HOME ?? path.join(homedir(), '.codex')) };
@@ -52,7 +52,7 @@ export function installCodex(marketplaceRoot: string, codexHome: string, run: Ru
     log.push(`FAILED to edit ${cfg}: ${(e as Error).message}`); manual(); return { log, ok: false };
   }
   log.push(`updated ${cfg}: [features] hooks = true, [plugins."${PLUGIN_ID}"] enabled = true`);
-  log.push('Restart Codex and trust the memhub hooks when prompted.');
+  log.push('Restart Codex and trust the memhive hooks when prompted.');
   return { log, ok: true };
 }
 export function uninstallCodex(codexHome: string, run: RunFn = defaultRun): string[] {

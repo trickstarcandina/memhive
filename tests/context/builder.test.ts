@@ -9,7 +9,7 @@ const base = { projectName: 'app', observationCount: 0, sessionCount: 0, lastAct
 describe('buildContext', () => {
   it('first session: header and footer only', () => {
     const c = buildContext(base);
-    expect(c).toContain('memhub · app · 0 observations · 0 sessions');
+    expect(c).toContain('memhive · app · 0 observations · 0 sessions');
     expect(c).toContain('search');
     expect(c.split('\n').length).toBeLessThan(8);
   });

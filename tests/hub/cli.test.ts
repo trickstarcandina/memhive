@@ -21,6 +21,6 @@ it('key create/list/revoke on a sqlite file, and --help is side-effect free', as
   c = cap(); await keyCommand(['list'], c.io, env); expect(c.o.out).toContain('carol'); expect(c.o.out).not.toMatch(/mh_/);
   c = cap(); await keyCommand(['revoke', id], c.io, env); expect(c.o.out).toMatch(/revoked/);
   c = cap(); await keyCommand(['list'], c.io, env); expect(c.o.out).toContain('REVOKED');
-  const h = cap(); expect(await main(['serve', '--help'], h.io)).toBe(0); expect(h.o.out).toMatch(/usage: memhub serve/);
-  const k = cap(); expect(await main(['key', '-h'], k.io)).toBe(0); expect(k.o.out).toMatch(/usage: memhub key/);
+  const h = cap(); expect(await main(['serve', '--help'], h.io)).toBe(0); expect(h.o.out).toMatch(/usage: memhive serve/);
+  const k = cap(); expect(await main(['key', '-h'], k.io)).toBe(0); expect(k.o.out).toMatch(/usage: memhive key/);
 });

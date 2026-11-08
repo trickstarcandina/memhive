@@ -14,7 +14,7 @@ import { daemonCommand } from './daemon.js';
 
 declare const __dirname: string;
 
-/** The bundle lives at <package>/dist/memhub.cjs; templates at <package>/plugin and <package>/plugin-marketplace. */
+/** The bundle lives at <package>/dist/memhive.cjs; templates at <package>/plugin and <package>/plugin-marketplace. */
 export function packageRoot(): string { return path.resolve(typeof __dirname === 'string' ? __dirname : path.dirname(process.argv[1]), '..'); }
 // In the CJS bundle __dirname is <package>/dist. process.argv[1] may be the global bin symlink, so it is only a fallback.
 
@@ -27,12 +27,12 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
   const { flags } = parseArgs(args);
   // Flags are checked before any prompt, so a typo never costs a round of questions.
   const badHost = flags.host !== undefined && (typeof flags.host !== 'string' || !validHosts(flags.host));
-  if (badHost) { io.stderr(`memhub: unknown --host "${flags.host === true ? '' : flags.host}" (use claude-code, codex or both comma-separated)\n`); return 2; }
-  if (flags.provider !== undefined && flags.provider !== 'anthropic' && flags.provider !== 'openai-compat') { io.stderr(`memhub: unknown --provider "${flags.provider === true ? '' : flags.provider}" (use anthropic or openai-compat)\n`); return 2; }
+  if (badHost) { io.stderr(`memhive: unknown --host "${flags.host === true ? '' : flags.host}" (use claude-code, codex or both comma-separated)\n`); return 2; }
+  if (flags.provider !== undefined && flags.provider !== 'anthropic' && flags.provider !== 'openai-compat') { io.stderr(`memhive: unknown --provider "${flags.provider === true ? '' : flags.provider}" (use anthropic or openai-compat)\n`); return 2; }
   const root = opts.root ?? packageRoot();
-  const bundle = path.join(root, 'dist', 'memhub.cjs');
-  if (!existsSync(bundle)) { io.stderr(`memhub: bundle not found at ${bundle}. Install with: npm install -g memhub\n`); return 1; }
-  if (/[\\/]_npx[\\/]/.test(root)) { io.stderr('memhub: running from the npx cache. Install permanently first:\n  npm install -g memhub && memhub install\n'); return 1; }
+  const bundle = path.join(root, 'dist', 'memhive.cjs');
+  if (!existsSync(bundle)) { io.stderr(`memhive: bundle not found at ${bundle}. Install with: npm install -g memhive\n`); return 1; }
+  if (/[\\/]_npx[\\/]/.test(root)) { io.stderr('memhive: running from the npx cache. Install permanently first:\n  npm install -g memhive && memhive install\n'); return 1; }
 
   const rl = flags.yes || opts.ask ? null : createInterface({ input: process.stdin, output: process.stdout });
   const ask: AskFn = opts.ask && !flags.yes ? opts.ask : async (q, def) => (rl ? (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim() || def : def);
@@ -41,13 +41,13 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
 
   const detected = detectHosts(env);
   const hostFlag = typeof flags.host === 'string' ? flags.host : await ask(`Install for which hosts? (claude-code,codex)`, [detected.claudeCode && 'claude-code', detected.codex && 'codex'].filter(Boolean).join(',') || 'claude-code');
-  if (!validHosts(hostFlag)) { rl?.close(); io.stderr(`memhub: unknown --host "${hostFlag}" (use claude-code, codex or both comma-separated)\n`); return 2; }
+  if (!validHosts(hostFlag)) { rl?.close(); io.stderr(`memhive: unknown --host "${hostFlag}" (use claude-code, codex or both comma-separated)\n`); return 2; }
   const hosts = new Set(hostFlag.split(',').map((s) => s.trim()).filter(Boolean));
 
-  // File values only: env overrides (MEMHUB_*_API_KEY, MEMHUB_CONTEXT_TOKENS, ...) must not be copied into settings.json.
+  // File values only: env overrides (MEMHIVE_*_API_KEY, MEMHIVE_CONTEXT_TOKENS, ...) must not be copied into settings.json.
   const current = loadSettings(home, {});
   const providerFlag = typeof flags.provider === 'string' ? flags.provider : await ask('Observer provider (anthropic | openai-compat)', current.llm.provider);
-  if (providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') { rl?.close(); io.stderr(`memhub: unknown --provider "${providerFlag}" (use anthropic or openai-compat)\n`); return 2; }
+  if (providerFlag !== 'anthropic' && providerFlag !== 'openai-compat') { rl?.close(); io.stderr(`memhive: unknown --provider "${providerFlag}" (use anthropic or openai-compat)\n`); return 2; }
   const settings: Settings = { ...DEFAULT_SETTINGS, ...current };
   if (providerFlag === 'openai-compat') {
     settings.llm = { provider: 'openai-compat', baseUrl: await ask('LLM base URL (OpenAI-compatible, e.g. http://localhost:11434/v1)', current.llm.baseUrl ?? 'http://localhost:11434/v1'), model: await ask('LLM model', current.llm.provider === 'openai-compat' ? current.llm.model : 'qwen2.5:7b'), apiKey: await askKey('LLM API key', current.llm.provider === 'openai-compat' ? current.llm.apiKey : undefined) };
@@ -60,14 +60,14 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
     const model = await ask('Embedding model', current.embed?.model ?? 'bge-m3');
     const dimsText = await ask('Embedding dims', String(current.embed?.dims ?? 1024));
     const dims = Number(dimsText);
-    if (!/^\d+$/.test(dimsText.trim()) || !Number.isSafeInteger(dims) || dims < 1) { rl?.close(); io.stderr(`memhub: embedding dims must be a positive integer, got "${dimsText}"\n`); return 2; }
+    if (!/^\d+$/.test(dimsText.trim()) || !Number.isSafeInteger(dims) || dims < 1) { rl?.close(); io.stderr(`memhive: embedding dims must be a positive integer, got "${dimsText}"\n`); return 2; }
     settings.embed = { baseUrl: embedUrl, model, dims, apiKey: await askKey('Embedding API key', current.embed?.apiKey) };
   }
   rl?.close();
   saveSettings(home, settings);
   io.stdout(`settings written to ${resolvePaths(home).settings}\n`);
-  if (settings.llm.provider === 'anthropic' && !settings.llm.apiKey && env.ANTHROPIC_API_KEY && !env.MEMHUB_ANTHROPIC_API_KEY) {
-    io.stdout('note: ANTHROPIC_API_KEY is set but memhub does not read it; export MEMHUB_ANTHROPIC_API_KEY or run install again and paste the key\n');
+  if (settings.llm.provider === 'anthropic' && !settings.llm.apiKey && env.ANTHROPIC_API_KEY && !env.MEMHIVE_ANTHROPIC_API_KEY) {
+    io.stdout('note: ANTHROPIC_API_KEY is set but memhive does not read it; export MEMHIVE_ANTHROPIC_API_KEY or run install again and paste the key\n');
   }
 
   const marketplaceRoot = resolvePaths(home).marketplace;
@@ -81,7 +81,7 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
 
   io.stdout('\nChecking setup…\n');
   await doctorCommand([], io, { home, env, ping: !flags['no-ping'] });
-  if (!codexOk) { io.stderr('\nmemhub: Codex setup did not complete; follow the manual steps above.\n'); return 1; }
+  if (!codexOk) { io.stderr('\nmemhive: Codex setup did not complete; follow the manual steps above.\n'); return 1; }
   io.stdout('\nDone. Restart your agent; memory appears from your second session in a project.\n');
   return 0;
 }

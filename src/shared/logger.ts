@@ -21,7 +21,7 @@ export function createLogger(home: string, name: string, env: NodeJS.ProcessEnv 
   const dir = resolvePaths(home).logs;
   const file = path.join(dir, `${name}.log`);
   const maxBytes = opts.maxBytes ?? 5 * 1024 * 1024;
-  const debug = env.MEMHUB_DEBUG === '1' || env.MEMHUB_DEBUG === 'true';
+  const debug = env.MEMHIVE_DEBUG === '1' || env.MEMHIVE_DEBUG === 'true';
   let dirReady = false;
   const write = (level: string, msg: string, data?: object) => {
     try {

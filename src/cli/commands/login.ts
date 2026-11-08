@@ -28,12 +28,12 @@ async function promptKey(): Promise<string> {
 export async function loginCommand(args: string[], io: CliIo, opts: { home?: string; readKey?: () => Promise<string> } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home;
   const { positional, flags } = parseArgs(args);
-  if (!positional[0]) { io.stderr('usage: memhub login <hub-url> [--key-stdin]\n'); return 1; }
-  let hubUrl: string; try { hubUrl = normalizeHubUrl(positional[0]); } catch (e) { io.stderr(`memhub login: ${e instanceof Error ? e.message : e}\n`); return 1; }
+  if (!positional[0]) { io.stderr('usage: memhive login <hub-url> [--key-stdin]\n'); return 1; }
+  let hubUrl: string; try { hubUrl = normalizeHubUrl(positional[0]); } catch (e) { io.stderr(`memhive login: ${e instanceof Error ? e.message : e}\n`); return 1; }
   let key: string;
   try { key = opts.readKey ? await opts.readKey() : flags['key-stdin'] || !process.stdin.isTTY ? await readStdin() : await promptKey(); }
-  catch (e) { if (e instanceof Cancelled) { io.stderr('memhub login: cancelled\n'); return 130; } throw e; }
-  if (!key) { io.stderr('memhub login: no API key given\n'); return 1; }
+  catch (e) { if (e instanceof Cancelled) { io.stderr('memhive login: cancelled\n'); return 130; } throw e; }
+  if (!key) { io.stderr('memhive login: no API key given\n'); return 1; }
   const client = new HubClient(hubUrl, key);
   try {
     const me = await client.me();
@@ -45,5 +45,5 @@ export async function loginCommand(args: string[], io: CliIo, opts: { home?: str
     if (cfg?.embedding_model && (!local || local.model !== cfg.embedding_model || local.dims !== cfg.embedding_dims)) io.stdout(`warning: hub embeds with ${cfg.embedding_model}/${cfg.embedding_dims}; your settings use ${local ? `${local.model}/${local.dims}` : 'no embedder'}. Your vectors will be pushed without embeddings until they match.\n`);
     await daemonCommand(['stop'], { stdout: () => {}, stderr: () => {} }, { home });   // restart picks up the new user id
     return 0;
-  } catch (e) { io.stderr(`memhub login failed: ${e instanceof Error ? e.message : e}\n`); return 1; }
+  } catch (e) { io.stderr(`memhive login failed: ${e instanceof Error ? e.message : e}\n`); return 1; }
 }

@@ -13,7 +13,7 @@ export class DaemonClient {
   async request<T = unknown>(method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 5000): Promise<T> {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
-      const res = await this.fetchImpl(this.baseUrl + path, { method, headers: { 'content-type': 'application/json', 'x-memhub-daemon-token': this.info.token }, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal });
+      const res = await this.fetchImpl(this.baseUrl + path, { method, headers: { 'content-type': 'application/json', 'x-memhive-daemon-token': this.info.token }, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal });
       const text = await res.text();
       const json = text ? JSON.parse(text) : {};
       if (!res.ok) throw new DaemonError(json?.error?.message ?? `daemon ${res.status}`, res.status);

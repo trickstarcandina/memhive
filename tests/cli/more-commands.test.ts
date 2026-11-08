@@ -15,7 +15,7 @@ import { obs, sess } from '../store/store-contract.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
 const io = () => { const out: string[] = []; const err: string[] = []; return { out, err, io: { stdout: (s: string) => out.push(s), stderr: (s: string) => err.push(s) } }; };
-const baseEnv = { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' };
+const baseEnv = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
 
 let servers: http.Server[] = [];
 afterEach(async () => {
@@ -74,7 +74,7 @@ describe('search with data', () => {
   it('search without a query prints usage and exits 1', async () => {
     const r = io();
     expect(await searchCommand([], r.io, { home: mkHome() })).toBe(1);
-    expect(r.err.join('')).toContain('usage: memhub search');
+    expect(r.err.join('')).toContain('usage: memhive search');
   });
 });
 
@@ -82,7 +82,7 @@ describe('embed command', () => {
   it('backfills missing embeddings and reports the count', async () => {
     const base = await fakeLlm();
     const home = mkHome(); const cwd = mkHome();
-    const ctx = createDaemonContext(home, { ...baseEnv, MEMHUB_EMBED_BASE_URL: base, MEMHUB_EMBED_MODEL: 'bge', MEMHUB_EMBED_DIMS: '2' });
+    const ctx = createDaemonContext(home, { ...baseEnv, MEMHIVE_EMBED_BASE_URL: base, MEMHIVE_EMBED_MODEL: 'bge', MEMHIVE_EMBED_DIMS: '2' });
     const list = seed(ctx, cwd, ['one', 'two', 'three']);
     const h = await startDaemon(ctx, { port: 0 });
     const r = io();
@@ -110,14 +110,14 @@ describe('daemon run', () => {
   it('returns 0 immediately when a daemon already owns the home', async () => {
     const home = mkHome();
     const h = await startDaemon(createDaemonContext(home, baseEnv), { port: 0 });
-    vi.stubEnv('MEMHUB_HOME', home); for (const [k, v] of Object.entries(baseEnv)) vi.stubEnv(k, v);
+    vi.stubEnv('MEMHIVE_HOME', home); for (const [k, v] of Object.entries(baseEnv)) vi.stubEnv(k, v);
     expect(await daemonCommand(['run'], io().io, { home })).toBe(0);
     expect(readDaemonInfo(home)!.token).toBe(h.info.token);   // untouched
     await h.close();
   });
   it('serves until SIGTERM, then closes cleanly and exits 0', async () => {
     const home = mkHome();
-    vi.stubEnv('MEMHUB_HOME', home); vi.stubEnv('HOME', home); vi.stubEnv('CODEX_HOME', home); vi.stubEnv('CLAUDE_CONFIG_DIR', home);
+    vi.stubEnv('MEMHIVE_HOME', home); vi.stubEnv('HOME', home); vi.stubEnv('CODEX_HOME', home); vi.stubEnv('CLAUDE_CONFIG_DIR', home);
     for (const [k, v] of Object.entries(baseEnv)) vi.stubEnv(k, v);
     const before = { term: process.listeners('SIGTERM'), int: process.listeners('SIGINT') };
     const exited = new Promise<number | undefined>((resolve) => {
@@ -141,7 +141,7 @@ describe('doctor ping', () => {
   it('pings provider and embedder and reports ok', async () => {
     const base = await fakeLlm();
     const r = io();
-    const code = await doctorCommand([], r.io, { home: mkHome(), env: { ...baseEnv, MEMHUB_LLM_BASE_URL: base, MEMHUB_LLM_API_KEY: 'sk-secret-123', MEMHUB_EMBED_BASE_URL: base, MEMHUB_EMBED_MODEL: 'bge', MEMHUB_EMBED_DIMS: '2' } });
+    const code = await doctorCommand([], r.io, { home: mkHome(), env: { ...baseEnv, MEMHIVE_LLM_BASE_URL: base, MEMHIVE_LLM_API_KEY: 'sk-secret-123', MEMHIVE_EMBED_BASE_URL: base, MEMHIVE_EMBED_MODEL: 'bge', MEMHIVE_EMBED_DIMS: '2' } });
     const text = r.out.join('');
     expect(code).toBe(0);
     expect(text).toContain('ok   provider ping');
@@ -152,7 +152,7 @@ describe('doctor ping', () => {
   it('reports FAIL and exits 1 when the provider ping errors, without leaking the key', async () => {
     const base = await fakeLlm({ chatStatus: 500 });
     const r = io();
-    const code = await doctorCommand([], r.io, { home: mkHome(), env: { ...baseEnv, MEMHUB_LLM_BASE_URL: base, MEMHUB_LLM_API_KEY: 'sk-secret-123' } });
+    const code = await doctorCommand([], r.io, { home: mkHome(), env: { ...baseEnv, MEMHIVE_LLM_BASE_URL: base, MEMHIVE_LLM_API_KEY: 'sk-secret-123' } });
     const text = r.out.join('');
     expect(code).toBe(1);
     expect(text).toContain('FAIL provider ping failed');
@@ -162,7 +162,7 @@ describe('doctor ping', () => {
   it('reports FAIL when the embedder returns the wrong dims', async () => {
     const base = await fakeLlm();
     const r = io();
-    const code = await doctorCommand([], r.io, { home: mkHome(), env: { ...baseEnv, MEMHUB_LLM_BASE_URL: base, MEMHUB_EMBED_BASE_URL: base, MEMHUB_EMBED_MODEL: 'bge', MEMHUB_EMBED_DIMS: '3' } });
+    const code = await doctorCommand([], r.io, { home: mkHome(), env: { ...baseEnv, MEMHIVE_LLM_BASE_URL: base, MEMHIVE_EMBED_BASE_URL: base, MEMHIVE_EMBED_MODEL: 'bge', MEMHIVE_EMBED_DIMS: '3' } });
     expect(code).toBe(1);
     expect(r.out.join('')).toContain('FAIL embedder ping failed');
   });

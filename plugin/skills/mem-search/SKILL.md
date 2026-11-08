@@ -1,6 +1,6 @@
 ---
 name: mem-search
-description: Search memhub's memory of past sessions in three steps — search, timeline, get_observations. Use when the user asks "did we already do X?", "how did we solve this before?", or when starting work that may have history.
+description: Search memhive's memory of past sessions in three steps — search, timeline, get_observations. Use when the user asks "did we already do X?", "how did we solve this before?", or when starting work that may have history.
 ---
 
 # Searching past work
