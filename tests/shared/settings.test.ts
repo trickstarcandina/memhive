@@ -23,6 +23,15 @@ describe('settings', () => {
     saveSettings(home, DEFAULT_SETTINGS);
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
+  it('defaults the model per provider', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    expect(loadSettings(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://x/v1' }).llm.model).toBe('qwen2.5:7b');
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ llm: { provider: 'anthropic', model: 'claude-haiku-5-5' } }));
+    expect(loadSettings(home, { MEMHUB_LLM_PROVIDER: 'openai-compat' }).llm.model).toBe('qwen2.5:7b');
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ llm: { provider: 'openai-compat', model: 'llama3' } }));
+    expect(loadSettings(home, {}).llm.model).toBe('llama3');
+    expect(loadSettings(home, { MEMHUB_LLM_PROVIDER: 'anthropic' }).llm.model).toBe('claude-haiku-5-5');
+  });
   it('env overrides file', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const s = loadSettings(home, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://x/v1', MEMHUB_LLM_MODEL: 'm', MEMHUB_EMBED_BASE_URL: 'http://e/v1', MEMHUB_EMBED_MODEL: 'bge-m3', MEMHUB_EMBED_DIMS: '1024', MEMHUB_CONTEXT_TOKENS: '500' });

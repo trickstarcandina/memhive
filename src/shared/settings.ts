@@ -6,6 +6,8 @@ export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: s
 export interface EmbedSettings { baseUrl: string; apiKey?: string; model: string; dims: number }
 export interface Settings { llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number }
 
+export const DEFAULT_MODELS: Record<LlmSettings['provider'], string> = { anthropic: 'claude-haiku-5-5', 'openai-compat': 'qwen2.5:7b' };
+
 export const DEFAULT_SETTINGS: Settings = {
   llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
   embed: null,
@@ -25,6 +27,9 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const fl: Partial<LlmSettings> = isObj(file.llm) ? (file.llm as Partial<LlmSettings>) : {};
   const llm: LlmSettings = { ...DEFAULT_SETTINGS.llm, ...fl };
   if (env.MEMHUB_LLM_PROVIDER === 'anthropic' || env.MEMHUB_LLM_PROVIDER === 'openai-compat') llm.provider = env.MEMHUB_LLM_PROVIDER;
+  if (llm.provider !== 'anthropic' && llm.provider !== 'openai-compat') llm.provider = DEFAULT_SETTINGS.llm.provider;
+  // The file's model belongs to the file's provider; another provider (env switch, or none saved) gets its own default.
+  if (!fl.model || (fl.provider ?? DEFAULT_SETTINGS.llm.provider) !== llm.provider) llm.model = DEFAULT_MODELS[llm.provider];
   if (llm.provider === 'anthropic') {
     if (env.MEMHUB_ANTHROPIC_API_KEY) llm.apiKey = env.MEMHUB_ANTHROPIC_API_KEY;
     if (env.MEMHUB_ANTHROPIC_MODEL) llm.model = env.MEMHUB_ANTHROPIC_MODEL;
