@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -9,8 +9,14 @@ import { join } from 'node:path';
 export default function setup(): () => Promise<void> {
   const dir = join(tmpdir(), `memhive-vitest-${process.pid}`);
   mkdirSync(dir, { recursive: true });
-  const saved = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
+  const keys = ['TMPDIR', 'TMP', 'TEMP', 'GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   process.env.TMPDIR = process.env.TMP = process.env.TEMP = dir;
+  // Project keys come from `git -C <cwd>`: stop git at the run dir and ignore the machine's git config, so a temp dir
+  // inside some repo, or a global safe.directory, cannot change the keys tests see. Fixture repos inside still work.
+  process.env.GIT_CEILING_DIRECTORIES = dir;
+  process.env.GIT_CONFIG_GLOBAL = devNull;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
   return async () => {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     // Windows keeps a handle open for a moment after a child exits (EBUSY/EPERM): retry instead of failing the run

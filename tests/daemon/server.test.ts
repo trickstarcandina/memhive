@@ -11,6 +11,7 @@ import { saveCredentials } from '../../src/sync/credentials.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import type { HookEvent } from '../../src/hooks/types.js';
 import { deadUrl } from '../helpers/closed-port.js';
+import { waitFor } from '../helpers/wait.js';
 
 const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
 let handle: Awaited<ReturnType<typeof startDaemon>>; let client: DaemonClient;
@@ -55,9 +56,8 @@ describe('daemon', () => {
     await client.request('POST', '/v1/events', ev({ hostEvent: 'UserPromptSubmit', event: 'prompt', prompt: 'pick a database' }));
     await client.request('POST', '/v1/events', ev({ hostEvent: 'PostToolUse', event: 'tool', tool: { name: 'Read', input: { file_path: 'a' }, output: 'b', failed: false } }));
     await client.request('POST', '/v1/events', ev({ hostEvent: 'Stop', event: 'stop' }));
-    await new Promise((r) => setTimeout(r, 50));
     const key = (await client.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
-    const s = await client.request<{ observations: any[] }>('GET', `/v1/search?q=sqlite&project_key=${encodeURIComponent(key)}`);
+    const s = await waitFor(async () => { const r = await client.request<{ observations: any[] }>('GET', `/v1/search?q=sqlite&project_key=${encodeURIComponent(key)}`); return r.observations.length ? r : null; }, { what: 'observation searchable' });
     expect(s.observations[0].title).toBe('Chose SQLite');
     const id8 = s.observations[0].id.slice(0, 8);
     const g = await client.request<{ observations: any[] }>('GET', `/v1/observations?ids=${id8}`);

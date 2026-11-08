@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from '../../src/cli/args.js';
@@ -10,6 +10,7 @@ import { doctorCommand } from '../../src/cli/commands/doctor.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { readDaemonInfo } from '../../src/daemon/info.js';
 import { deadUrl } from '../helpers/closed-port.js';
+import { waitFor } from '../helpers/wait.js';
 
 const io = () => { const out: string[] = []; const err: string[] = []; return { out, err, io: { stdout: (s: string) => out.push(s), stderr: (s: string) => err.push(s) } }; };
 const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
@@ -25,8 +26,7 @@ describe('commands', () => {
     const h = await startDaemon(createDaemonContext(home, env), { port: 0 });
     r = io(); expect(await daemonCommand(['status'], r.io, { home })).toBe(0); expect(r.out.join('')).toContain(`port ${h.info.port}`);
     r = io(); expect(await daemonCommand(['stop'], r.io, { home })).toBe(0);
-    for (let i = 0; i < 40 && readDaemonInfo(home); i++) await new Promise((res) => setTimeout(res, 50));
-    expect(readDaemonInfo(home)).toBeNull();
+    await waitFor(() => !readDaemonInfo(home), { what: 'daemon.json removed' });
   });
   it.skipIf(process.platform !== 'linux')('stop ends a daemon that fails the health proof (older build) by pid, only when it is ours', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
@@ -34,14 +34,16 @@ describe('commands', () => {
     const exited = (c: ReturnType<typeof spawn>) => new Promise<boolean>((res) => { if (c.exitCode !== null || c.signalCode) res(true); c.once('exit', () => res(true)); setTimeout(() => res(false), 2000); });
     const stranger = fake(['other', 'daemon', 'run'], { MEMHIVE_HOME: home });
     const writeInfo = (pid: number) => writeFileSync(path.join(home, 'daemon.json'), JSON.stringify({ port: 9, pid, token: 't', startedAt: '' }));
-    await new Promise((res) => setTimeout(res, 200));
+    // stop identifies the process by /proc/<pid>/cmdline and environ: wait until the child shows its own, not node's pre-exec ones
+    const started = (c: ReturnType<typeof spawn>) => waitFor(() => { try { return readFileSync(`/proc/${c.pid}/cmdline`, 'utf8').includes('daemon\0run'); } catch { return false; } }, { what: 'fake daemon started' });
+    await started(stranger);
     writeInfo(stranger.pid!);
     let r = io(); await daemonCommand(['stop'], r.io, { home });
     expect(r.out.join('')).toContain('not running');
     expect(await Promise.race([exited(stranger), new Promise((res) => setTimeout(() => res(false), 300))])).toBe(false);
     stranger.kill();
     const old = fake(['/x/memhive.cjs', 'daemon', 'run'], { MEMHIVE_HOME: home });
-    await new Promise((res) => setTimeout(res, 200));
+    await started(old);
     writeInfo(old.pid!);
     r = io(); await daemonCommand(['stop'], r.io, { home });
     expect(r.out.join('')).toContain(`(pid ${old.pid})`);
