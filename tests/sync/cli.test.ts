@@ -10,6 +10,8 @@ import { linkCommand } from '../../src/cli/commands/link.js';
 import { syncCommand } from '../../src/cli/commands/sync.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { loadCredentials, saveCredentials } from '../../src/sync/credentials.js';
+import { projectKeyFor } from '../../src/shared/project-key.js';
+import { obs, sess } from '../store/store-contract.js';
 import { main } from '../../src/cli/index.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
@@ -52,6 +54,22 @@ describe('login / link / sync / unlink', () => {
       c = cap(); expect(await linkCommand([], c.io, { home, cwd, unlink: true })).toBe(0); expect(c.o.out).toMatch(/unlinked/);
       c = cap(); expect(await syncCommand([], c.io, { home, cwd })).toBe(1);
     } finally { await d2.close().catch(() => {}); }
+  });
+  it('relinking to a new hub resets sync state', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-')); const cwd = mkdtempSync(path.join(tmpdir(), 'mh-cwd-'));
+    await loginCommand([hubUrl], cap().io, { home, readKey: async () => key });
+    const ctx = createDaemonContext(home, env); const d = await startDaemon(ctx, { port: 0 });
+    try {
+      const { key: pk, name } = projectKeyFor(cwd); const p = ctx.store.getOrCreateProject(pk, name);
+      const s = sess(p.id); ctx.store.upsertSession(s); ctx.store.insertObservations([obs({ projectId: p.id, sessionId: s.id })]);
+      ctx.store.markSynced('sessions', [s.id], 'now'); ctx.store.markSynced('observations', ctx.store.listUnsynced('observations', p.id, 5).map((o) => o.id), 'now'); ctx.store.setPullCursor(p.id, 999999);
+      expect(ctx.store.listUnsynced('sessions', p.id, 5)).toHaveLength(0);
+      expect(await linkCommand([hubUrl], cap().io, { home, cwd })).toBe(0);
+      expect(ctx.store.getPullCursor(p.id)).toBeLessThan(999999);   // cursor restarted from 0
+      expect(ctx.store.listRecentObservations(p.id, 1)[0].syncedAt).not.toBe('now');   // re-pushed to the new hub
+      expect(ctx.store.getProject(p.id)!.hubUrl).toBe(hubUrl);
+      expect(ctx.store.countObservations(p.id)).toBe(1);
+    } finally { await d.close().catch(() => {}); }
   });
   it('--help for new commands has no side effects', async () => {
     for (const cmd of ['login', 'link', 'unlink', 'sync']) {

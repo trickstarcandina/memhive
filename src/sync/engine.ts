@@ -12,7 +12,8 @@ const MAX_ROUNDS = 20;   // bounds one push() call (hub allows 60 requests/min/k
 export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
-  constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
+  private hubCfg = new Map<string, { embedding_model: string | null; embedding_dims: number | null }>();
+  constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null; embedModel?: string | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
 
   private clientFor(project: Project): HubClient | null {
     if (!project.hubUrl) return null;
@@ -28,6 +29,11 @@ export class SyncEngine implements SyncHooks {
   private failed(project: Project, what: string, e: unknown): void {
     if (e instanceof HubError && e.status === 401) this.markAuthFailed(project);
     else this.deps.logger.warn(`${what} failed, will retry on next trigger`, { hub: project.hubUrl, error: e instanceof Error ? e.message : String(e) });
+  }
+
+  private async hubConfig(client: HubClient, hubUrl: string, refresh = false): Promise<{ embedding_model: string | null; embedding_dims: number | null } | null> {
+    if (!refresh && this.hubCfg.has(hubUrl)) return this.hubCfg.get(hubUrl)!;
+    try { const c = await client.config(); this.hubCfg.set(hubUrl, c); return c; } catch { return null; }   // unknown: send vectors, the reject path resends without
   }
 
   schedulePush(projectId: string): void {
@@ -47,10 +53,25 @@ export class SyncEngine implements SyncHooks {
       const observations = sessionsFirst ? [] : store.listUnsynced('observations', project.id, BATCH) as Observation[];
       const summaries = sessionsFirst ? [] : store.listUnsynced('summaries', project.id, BATCH) as Summary[];
       if (!sessions.length && !observations.length && !summaries.length) return total;
+      const cfg = await this.hubConfig(client, project.hubUrl!);
       const vecs = store.getObservationEmbeddings(observations.map((o) => o.id));
-      const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: observations.map((o): HubObservation => ({ ...o, embedding: vecs.get(o.id) ?? null, embeddingModel: vecs.has(o.id) ? o.embeddingModel : null })), summaries };
+      const toHub = (o: Observation, withVec: boolean): HubObservation => {
+        const v = withVec ? vecs.get(o.id) : undefined;
+        const fits = v && (!cfg || (cfg.embedding_model !== null && cfg.embedding_model === o.embeddingModel && cfg.embedding_dims === v.length));
+        return { ...o, embedding: fits ? v! : null, embeddingModel: fits ? o.embeddingModel : null };
+      };
+      const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: observations.map((o) => toHub(o, true)), summaries };
       let result: PushResult;
-      try { result = await client.push(body); }
+      try {
+        result = await client.push(body);
+        // Hub disagrees about the embedder: keep the row, drop its vector (local backfill / hub FTS still work).
+        const mismatched = new Set(result.rejected.filter((r) => r.reason === 'embedding_model_mismatch').map((r) => r.id));
+        if (mismatched.size) {
+          await this.hubConfig(client, project.hubUrl!, true);
+          const again = await client.push({ ...body, sessions: [], summaries: [], observations: observations.filter((o) => mismatched.has(o.id)).map((o) => toHub(o, false)) });
+          result = { accepted: { sessions: result.accepted.sessions, observations: result.accepted.observations + again.accepted.observations, summaries: result.accepted.summaries }, rejected: [...result.rejected.filter((r) => r.reason !== 'embedding_model_mismatch'), ...again.rejected] };
+        }
+      }
       catch (e) { this.failed(project, 'push', e); return round === 0 ? null : total; }
       // Rejected rows are marked synced too: retrying the same invalid row would loop forever.
       const now = new Date().toISOString();
@@ -67,7 +88,7 @@ export class SyncEngine implements SyncHooks {
 
   async pull(project: Project, timeoutMs: number): Promise<number> {
     const client = this.clientFor(project); if (!client) return 0;
-    const { store, embedDims, logger } = this.deps;
+    const { store, embedDims, embedModel, logger } = this.deps;
     let applied = 0; let since = store.getPullCursor(project.id);
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -81,7 +102,7 @@ export class SyncEngine implements SyncHooks {
       store.insertObservations(fresh.map((o) => ({ id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub' as const, syncedAt: now })));
       for (const o of fresh) {
         applied++;
-        if (o.embedding && embedDims && o.embedding.length === embedDims && o.embeddingModel) {
+        if (o.embedding && embedDims && o.embedding.length === embedDims && o.embeddingModel && o.embeddingModel === embedModel) {
           try { store.setObservationEmbedding(o.id, o.embedding, o.embeddingModel); } catch (e) { logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) }); }
         }
       }

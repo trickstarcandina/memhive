@@ -18,7 +18,7 @@ const client = (user: string, key: string, dims: number | null) => {
   saveCredentials(home, { hubs: { [hubUrl]: { key, user } } });
   const store = new SqliteStore(':memory:', { dims }); store.migrate();
   const project = store.getOrCreateProject('github.com/t/r', 'r'); store.setProjectHub(project.id, hubUrl);
-  const engine = new SyncEngine({ store, home, logger: silent, embedDims: dims }, { debounceMs: 10 });
+  const engine = new SyncEngine({ store, home, logger: silent, embedDims: dims, embedModel: 'm' }, { debounceMs: 10 });
   return { home, store, project: store.getProject(project.id)!, engine, user };
 };
 
@@ -79,16 +79,33 @@ describe('sync round trip', () => {
     expect(a.store.listUnsynced('observations', a.project.id, 10)).toHaveLength(0);
     a.engine.close();
   });
-  it('rejected rows are marked synced so the push loop cannot spin', async () => {
+  it('a row whose vector the hub cannot take is kept: it reaches the hub without a vector', async () => {
     const a = client('alice', keys.alice, 2);
     const s = sess(a.project.id); a.store.upsertSession(s);
-    const bad = obs({ projectId: a.project.id, sessionId: s.id, title: 'bad model' });
-    a.store.insertObservations([bad]); a.store.setObservationEmbedding(bad.id, [1, 0], 'other-model');
+    const o = obs({ projectId: a.project.id, sessionId: s.id, title: 'other embedder' });
+    a.store.insertObservations([o]); a.store.setObservationEmbedding(o.id, [1, 0], 'other-model');
     const r = await a.engine.push(a.project);
-    expect(r!.rejected).toEqual([{ id: bad.id, reason: 'embedding_model_mismatch' }]);
+    expect(r!.accepted.observations).toBe(1); expect(r!.rejected).toEqual([]);
     expect(a.store.listUnsynced('observations', a.project.id, 10)).toHaveLength(0);
-    expect((await a.engine.push(a.project))!.rejected).toEqual([]);
-    a.engine.close();
+    const b = client('bob', keys.bob, 2);
+    await b.engine.pull(b.project, 3000);
+    expect(b.store.getObservations([o.id])[0]).toMatchObject({ title: 'other embedder', embeddingModel: null });
+    a.engine.close(); b.engine.close();
+  });
+  it('against a hub without an embedder vectors are dropped, rows kept; other rejects are marked synced', async () => {
+    const hs = new SqliteHubStore(':memory:', { dims: null }); await hs.migrate();
+    const h2 = await startHub(hs, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 }, silent);
+    await hs.createUser('carol'); const k = generateApiKey(); await hs.createApiKey('carol', 'l', k.hash);
+    try {
+      const url2 = `http://127.0.0.1:${h2.port}`;
+      const a = client('carol', k.raw, 2); saveCredentials(a.home, { hubs: { [url2]: { key: k.raw, user: 'carol' } } });
+      a.store.setProjectHub(a.project.id, url2);
+      const s = sess(a.project.id); a.store.upsertSession(s);
+      const o = obs({ projectId: a.project.id, sessionId: s.id }); a.store.insertObservations([o]); a.store.setObservationEmbedding(o.id, [1, 0], 'm');
+      const r = await a.engine.push(a.store.getProject(a.project.id)!);
+      expect(r!.accepted.observations).toBe(1); expect(r!.rejected).toEqual([]);
+      a.engine.close();
+    } finally { await h2.close(); }
   });
   it('401 marks authFailed and stops pushing; unlinked project is ignored', async () => {
     const bad = client('eve', 'mh_' + 'A'.repeat(43), 2);

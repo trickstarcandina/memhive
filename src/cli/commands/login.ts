@@ -8,6 +8,8 @@ import { loadCredentials, normalizeHubUrl, saveCredentials } from '../../sync/cr
 import { HubClient } from '../../sync/client.js';
 import { daemonCommand } from './daemon.js';
 
+class Cancelled extends Error {}
+
 async function readStdin(): Promise<string> {
   let s = ''; process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) s += chunk;
@@ -18,7 +20,9 @@ async function readStdin(): Promise<string> {
 async function promptKey(): Promise<string> {
   process.stderr.write('API key: ');
   const rl = createInterface({ input: process.stdin, output: new Writable({ write(_c, _e, cb) { cb(); } }), terminal: true });
-  try { return (await rl.question('')).trim(); } finally { rl.close(); process.stderr.write('\n'); }
+  try {
+    return (await new Promise<string>((resolve, reject) => { rl.on('SIGINT', () => reject(new Cancelled())); rl.question('').then(resolve, reject); })).trim();
+  } finally { rl.close(); process.stderr.write('\n'); }
 }
 
 export async function loginCommand(args: string[], io: CliIo, opts: { home?: string; readKey?: () => Promise<string> } = {}): Promise<number> {
@@ -26,15 +30,19 @@ export async function loginCommand(args: string[], io: CliIo, opts: { home?: str
   const { positional, flags } = parseArgs(args);
   if (!positional[0]) { io.stderr('usage: memhub login <hub-url> [--key-stdin]\n'); return 1; }
   let hubUrl: string; try { hubUrl = normalizeHubUrl(positional[0]); } catch (e) { io.stderr(`memhub login: ${e instanceof Error ? e.message : e}\n`); return 1; }
-  const key = opts.readKey ? await opts.readKey() : flags['key-stdin'] || !process.stdin.isTTY ? await readStdin() : await promptKey();
+  let key: string;
+  try { key = opts.readKey ? await opts.readKey() : flags['key-stdin'] || !process.stdin.isTTY ? await readStdin() : await promptKey(); }
+  catch (e) { if (e instanceof Cancelled) { io.stderr('memhub login: cancelled\n'); return 130; } throw e; }
   if (!key) { io.stderr('memhub login: no API key given\n'); return 1; }
   const client = new HubClient(hubUrl, key);
   try {
-    const me = await client.me(); const cfg = await client.config();
+    const me = await client.me();
     const c = loadCredentials(home); c.hubs[hubUrl] = { key, user: me.user }; saveCredentials(home, c);   // fresh entry also clears authFailed
     io.stdout(`logged in to ${hubUrl} as ${me.user}\n`);
+    let cfg: Awaited<ReturnType<HubClient['config']>> | null = null;
+    try { cfg = await client.config(); } catch (e) { io.stdout(`warning: could not read hub config (${e instanceof Error ? e.message : e}); embedder compatibility not checked\n`); }
     const local = loadSettings(home).embed;
-    if (cfg.embedding_model && (!local || local.model !== cfg.embedding_model || local.dims !== cfg.embedding_dims)) io.stdout(`warning: hub embeds with ${cfg.embedding_model}/${cfg.embedding_dims}; your settings use ${local ? `${local.model}/${local.dims}` : 'no embedder'}. Vectors will be rejected on push until they match.\n`);
+    if (cfg?.embedding_model && (!local || local.model !== cfg.embedding_model || local.dims !== cfg.embedding_dims)) io.stdout(`warning: hub embeds with ${cfg.embedding_model}/${cfg.embedding_dims}; your settings use ${local ? `${local.model}/${local.dims}` : 'no embedder'}. Your vectors will be pushed without embeddings until they match.\n`);
     await daemonCommand(['stop'], { stdout: () => {}, stderr: () => {} }, { home });   // restart picks up the new user id
     return 0;
   } catch (e) { io.stderr(`memhub login failed: ${e instanceof Error ? e.message : e}\n`); return 1; }

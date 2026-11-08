@@ -108,6 +108,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     if (b.hubUrl != null) { try { hubUrl = normalizeHubUrl(String(b.hubUrl)); } catch (e) { return err(400, 'bad_hub_url', e instanceof Error ? e.message : 'bad hub url'); } }
     const { key, name } = projectKeyFor(String(b.cwd ?? process.cwd()));
     const project = store.getOrCreateProject(key, name);
+    if (hubUrl && project.hubUrl !== hubUrl) store.resetProjectSync(project.id);   // new hub has none of this history
     store.setProjectHub(project.id, hubUrl);
     return ok({ project: store.getProject(project.id) });
   }

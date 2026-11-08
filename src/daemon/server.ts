@@ -38,7 +38,7 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   catch (e) { logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) }); provider = { complete: async () => { throw e; } }; }
   const observer = new Observer({ store, provider, embedder, logger });
   const userId = defaultUser(loadCredentials(home)) ?? 'local';
-  const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null });
+  const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null, embedModel: settings.embed?.model ?? null });
   observer.onStored = (projectId) => sync.schedulePush(projectId);
   const ctx: DaemonContext = {
     home, store, observer, embedder, settings, logger, userId, sync,

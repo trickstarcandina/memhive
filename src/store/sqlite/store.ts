@@ -196,6 +196,12 @@ export class SqliteStore implements Store {
   }
   getPullCursor(projectId: string): number { const r = this.db.prepare('SELECT pull_cursor FROM sync_state WHERE project_id = ?').get(projectId) as Row | undefined; return r ? Number(r.pull_cursor) : 0; }
   setPullCursor(projectId: string, cursor: number): void { this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor) VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET pull_cursor = excluded.pull_cursor').run(projectId, cursor); }
+  resetProjectSync(projectId: string): void {
+    this.db.transaction(() => {
+      for (const t of ['sessions', 'observations', 'summaries']) this.db.prepare(`UPDATE ${t} SET synced_at = NULL WHERE project_id = ?`).run(projectId);
+      this.setPullCursor(projectId, 0);
+    })();
+  }
   countObservations(projectId: string): number { return Number((this.db.prepare('SELECT COUNT(*) c FROM observations WHERE project_id = ?').get(projectId) as Row).c); }
   countSessions(projectId: string): number { return Number((this.db.prepare('SELECT COUNT(*) c FROM sessions WHERE project_id = ?').get(projectId) as Row).c); }
   lastActivity(projectId: string): string | null { return ((this.db.prepare('SELECT MAX(created_at) m FROM observations WHERE project_id = ?').get(projectId) as Row).m as string | null) ?? null; }
