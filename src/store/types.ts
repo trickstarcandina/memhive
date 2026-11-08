@@ -29,6 +29,7 @@ export interface Store {
   timeline(anchorId: string, before: number, after: number): Observation[];
   listMissingEmbedding(limit: number): Observation[];
   setObservationEmbedding(id: string, vec: number[], model: string): void;
+  getObservationEmbeddings(ids: string[]): Map<string, number[]>;   // only ids that have a vector
   insertSummaries(s: Summary[]): void;
   listRecentSummaries(projectId: string, limit: number): Summary[];
   searchSummariesFts(query: string, f: SearchFilters): SearchHit[];

@@ -160,6 +160,15 @@ export class SqliteStore implements Store {
     })();
   }
 
+  getObservationEmbeddings(ids: string[]): Map<string, number[]> {
+    const out = new Map<string, number[]>();
+    if (!this.dims || ids.length === 0) return out;
+    for (const r of this.db.prepare(`SELECT id, embedding FROM vec_observations WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as Row[]) {
+      const b: Buffer = r.embedding; out.set(r.id, Array.from(new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength))));
+    }
+    return out;
+  }
+
   insertSummaries(list: Summary[]): void {
     const stmt = this.db.prepare(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at, origin, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`);
     this.db.transaction(() => { for (const s of list) stmt.run(s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt, s.origin, s.syncedAt); })();

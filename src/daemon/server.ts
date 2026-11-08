@@ -17,6 +17,8 @@ import { projectKeyFor } from '../shared/project-key.js';
 import { newId } from '../shared/ids.js';
 import type { HookEvent } from '../hooks/types.js';
 import type { LlmProvider } from '../providers/types.js';
+import { SyncEngine } from '../sync/engine.js';
+import { defaultUser, loadCredentials } from '../sync/credentials.js';
 
 function tokenOk(got: string | string[] | undefined, want: string): boolean {
   if (typeof got !== 'string') return false;
@@ -35,9 +37,11 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   try { provider = createProvider(settings); }
   catch (e) { logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) }); provider = { complete: async () => { throw e; } }; }
   const observer = new Observer({ store, provider, embedder, logger });
-  const userId = 'local';
+  const userId = defaultUser(loadCredentials(home)) ?? 'local';
+  const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null });
+  observer.onStored = (projectId) => sync.schedulePush(projectId);
   const ctx: DaemonContext = {
-    home, store, observer, embedder, settings, logger, userId, sync: null,
+    home, store, observer, embedder, settings, logger, userId, sync,
     resolveSession(ev: HookEvent) {
       let session = store.getSessionByHost(ev.host, ev.hostSessionId);
       // Existing session: reuse its project (no git spawns per event, no split on cwd change).
@@ -108,6 +112,7 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
     server.closeAllConnections?.();
     if (readDaemonInfo(ctx.home)?.token === token) removeDaemonInfo(ctx.home);   // never delete a successor's file
     try { if (Number(readFileSync(lock, 'utf8')) === process.pid) rmSync(lock, { force: true }); } catch { /* gone */ }
+    ctx.sync?.close();
     ctx.store.close();
     ctx.logger.info('daemon stopped');
   })();

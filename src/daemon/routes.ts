@@ -6,6 +6,7 @@ import { newId } from '../shared/ids.js';
 import { OBSERVATION_TYPES, type Observation, type ObservationType, type SearchFilters } from '../store/types.js';
 import { projectKeyFor } from '../shared/project-key.js';
 import { embeddingText } from '../observer/observer.js';
+import { normalizeHubUrl } from '../sync/credentials.js';
 import { redactSecrets, stripPrivate } from '../hooks/sanitize.js';
 
 const ok = (body: unknown, status = 200) => ({ status, body });
@@ -38,7 +39,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const ev = body as HookEvent;
     if (!ev?.hostSessionId || !ev.cwd) return err(400, 'bad_event', 'hostSessionId and cwd required');
     const { project } = ctx.resolveSession(ev);
-    if (ctx.sync && project.hubUrl) { try { await ctx.sync.pull(project, 3000); } catch (e) { ctx.logger.warn('pull failed', { error: String(e) }); } }
+    if (ctx.sync && project.hubUrl) { try { await ctx.sync.pull(project, 3000); } catch (e) { ctx.logger.warn('pull failed', { error: String(e) }); } ctx.sync.schedulePush(project.id); }   // push also retries rows left over from an earlier daemon
     const context = buildContext({
       projectName: project.name, observationCount: store.countObservations(project.id), sessionCount: store.countSessions(project.id), lastActivity: store.lastActivity(project.id),
       summaries: store.listRecentSummaries(project.id, 3), observations: store.listRecentObservations(project.id, 200), budgetTokens: ctx.settings.contextTokens,
@@ -92,6 +93,23 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     if (ctx.embedder) { try { const [v] = await ctx.embedder.embed([embeddingText(o)]); store.setObservationEmbedding(o.id, v, ctx.embedder.model); } catch { /* backfill later */ } }
     ctx.sync?.schedulePush(project.id);
     return ok({ observation: store.getObservations([o.id])[0] });
+  }
+
+  if (method === 'POST' && path === '/v1/sync') {
+    const cwd = String((body as { cwd?: string } | undefined)?.cwd ?? process.cwd()); const { key, name } = projectKeyFor(cwd);
+    const project = store.getOrCreateProject(key, name);
+    if (!ctx.sync || !project.hubUrl) return err(400, 'not_linked', 'project is not linked to a hub (memhub link <url>)');
+    return ok(await ctx.sync.syncNow(project));
+  }
+
+  if (method === 'POST' && path === '/v1/projects/link') {
+    const b = (body ?? {}) as { cwd?: string; hubUrl?: string | null };
+    let hubUrl: string | null = null;
+    if (b.hubUrl != null) { try { hubUrl = normalizeHubUrl(String(b.hubUrl)); } catch (e) { return err(400, 'bad_hub_url', e instanceof Error ? e.message : 'bad hub url'); } }
+    const { key, name } = projectKeyFor(String(b.cwd ?? process.cwd()));
+    const project = store.getOrCreateProject(key, name);
+    store.setProjectHub(project.id, hubUrl);
+    return ok({ project: store.getProject(project.id) });
   }
 
   if (method === 'POST' && path === '/v1/embed') return ok({ embedded: await ctx.observer.embedMissing(Number((body as any)?.limit ?? 200) || 200) });
