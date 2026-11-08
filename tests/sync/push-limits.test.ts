@@ -140,6 +140,38 @@ describe('push failure handling', () => {
       expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
     }
   });
+  it('a bare 4xx that keeps refusing one row: after 5 tries the batch goes row by row and only that row is given up', async () => {
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) =>
+      String(url).endsWith('/v1/sync/push') && String(init?.body).includes('POISON') ? new Response('<html>WAF</html>', { status: 403 }) : inner(url, init) });
+    const [a] = addObs(t, 1, null); const [bad] = addObs(t, 1, null, { narrative: 'POISON <script>' }); const [c] = addObs(t, 1, null);
+    for (let i = 0; i < 4; i++) expect(await t.engine.push(t.project, { force: true })).toBeNull();
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(3);
+    const r = await t.engine.push(t.project, { force: true });
+    expect(r!.rejected).toEqual([{ id: bad.id, reason: 'http_error' }]);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
+    expect((await t.hs.getObservations([a.id, c.id])).map((o) => o.id).sort()).toEqual([a.id, c.id].sort());
+    expect(t.engine.blockedProjects()).toEqual([]);
+  });
+  it('a bare 4xx on every row gives up at most one row per 5 failed tries', async () => {
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).endsWith('/v1/sync/push') ? new Response('<html>Forbidden</html>', { status: 403 }) : inner(url, init) });
+    addObs(t, 2, null);
+    const push = async (n: number) => { for (let i = 0; i < n; i++) await t.engine.push(t.project, { force: true }); };
+    await push(5);   // 5th failure: row by row, the session is given up, the next row fails (strike 1) and backs off
+    expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(0);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(2);
+    await push(3);   // strikes 2-4
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(2);
+    await push(1);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
+  });
+  it('a 404 that persists keeps every row queued and is reported as blocked', async () => {
+    const t = await setup({ dims: null, fetchImpl: failPush(404) });
+    addObs(t, 2, null);
+    for (let i = 0; i < 8; i++) expect(await t.engine.push(t.project, { force: true })).toBeNull();
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(2);
+    expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(1);
+    expect(t.engine.blockedProjects()).toEqual([t.project.id]);
+  });
   it('a 5xx keeps rows and backs off; a manual sync (force) still tries', async () => {
     const t = await setup({ dims: null, fetchImpl: failPush(500) });
     addObs(t, 2, null);

@@ -8,6 +8,8 @@ import type { HookEvent } from '../hooks/types.js';
 export interface SyncHooks {
   pull(project: Project, timeoutMs: number): Promise<number>;
   schedulePush(projectId: string): void;
+  /** Project ids whose push keeps failing with a 404 or a bare 4xx. */
+  blockedProjects?(): string[];
   syncNow(project: Project): Promise<{ pushed: { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> } | null; pulled: number }>;
   close(): void;
 }

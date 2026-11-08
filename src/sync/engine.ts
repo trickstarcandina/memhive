@@ -11,6 +11,7 @@ const MAX_ROUNDS = 20;   // bounds one push() call (hub allows 60 requests/min/k
 const MAX_BODY_BYTES = 1.5 * 1024 * 1024;   // hub default limit is 2 MB; used when the hub does not report body_limit
 const BACKOFF_START_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60_000;
+const MAX_STRIKES = 5;   // 404 / bare-4xx failures in a row before the bounded policy in pushOnce kicks in
 const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes its embedder is noticed without a daemon restart
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
 
@@ -18,7 +19,7 @@ export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
   private hubCfg = new Map<string, { cfg: HubConfigInfo; at: number }>();
-  private backoff = new Map<string, { until: number; delayMs: number }>();   // project id -> next push allowed after 5xx/429
+  private backoff = new Map<string, { until: number; delayMs: number; strikes: number }>();   // project id -> next push allowed after 5xx/429/404/bare 4xx
   private badPulled = new Set<string>();
   constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null; embedModel?: string | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
 
@@ -76,6 +77,7 @@ export class SyncEngine implements SyncHooks {
     const off = this.backoff.get(project.id);
     if (off && !opts.force && Date.now() < off.until) return null;
     let cap = BATCH;   // rows per body; halved on 413 for the rest of this call
+    let isolating = false;   // sending row by row to find a row a bare 4xx keeps refusing
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const client = this.clientFor(project); if (!client) return round === 0 ? null : total;
       const { store, logger } = this.deps;
@@ -111,15 +113,27 @@ export class SyncEngine implements SyncHooks {
           try { result = await this.send(client, project, { ...body, observations: [noVec(hubObs[0])] }); }
           catch (e2) { if (!(e2 instanceof HubError) || e2.status !== 413) { this.failed(project, 'push', e2); return round === 0 ? null : total; } result = this.giveUp(project, body, e2); }
         } else if (e.status === 404 || e.code === 'http_error' || e.status === 408 || e.status === 429 || e.status >= 500) {
-          // 404 and a 4xx without a hub error body come from a proxy, a wrong path prefix or an old hub: dropping the batch would lose rows.
+          // Policy: 408/429/5xx back off with rows kept, forever. 404 and a bare 4xx (no hub error body: proxy, WAF, wrong path, old hub)
+          // also back off, but after MAX_STRIKES in a row a bare 4xx goes row by row and gives up the one row still refused (warn log),
+          // while a 404 keeps its rows unsynced, logs an error and waits at the longest backoff.
           // shortcut: backoff is per daemon process and resets on restart, persist it if hubs stay down for hours
-          const delayMs = Math.min((off?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
-          this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs });
-          logger.warn('push failed, backing off', { hub: project.hubUrl, status: e.status, retryInMs: delayMs, error: e.message });
-          return round === 0 ? null : total;
+          const prev = this.backoff.get(project.id);
+          const bounded = e.status === 404 || (e.status < 500 && e.status !== 408 && e.status !== 429);
+          const strikes = (prev?.strikes ?? 0) + (bounded ? 1 : 0);
+          if (bounded && e.status !== 404 && strikes >= MAX_STRIKES) {
+            if (taken > 1) { cap = 1; isolating = true; this.backoff.set(project.id, { until: 0, delayMs: prev?.delayMs ?? BACKOFF_START_MS, strikes }); continue; }
+            this.backoff.delete(project.id); result = this.giveUp(project, body, e);
+          } else {
+            const delayMs = e.status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
+            this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes });
+            if (e.status === 404 && strikes === MAX_STRIKES) logger.error('push blocked: hub keeps answering 404 (wrong hub URL or old hub?); rows stay queued', { hub: project.hubUrl });
+            else logger.warn('push failed, backing off', { hub: project.hubUrl, status: e.status, retryInMs: delayMs, error: e.message });
+            return round === 0 ? null : total;
+          }
         } else result = this.giveUp(project, body, e);
       }
-      this.backoff.delete(project.id);
+      // While isolating, a passing row keeps the strike count so the refused row is given up when it comes up.
+      if (!isolating) this.backoff.delete(project.id);
       // Rejected rows are marked synced too: retrying the same invalid row would loop forever.
       const now = new Date().toISOString();
       store.markSynced('sessions', sessions.map((s) => s.id), now);
@@ -131,6 +145,9 @@ export class SyncEngine implements SyncHooks {
     }
     return total;
   }
+
+  /** Projects whose push has failed MAX_STRIKES times in a row with a 404 or a bare 4xx (shown by doctor). */
+  blockedProjects(): string[] { return [...this.backoff].filter(([, b]) => b.strikes >= MAX_STRIKES).map(([id]) => id); }
 
   /** The hub itself refused the body (a 4xx with a hub error body, other than 401/404, or one row over the size limit): every row in it is reported rejected so it is marked synced, not resent forever. */
   private giveUp(project: Project, body: PushBody, e: HubError): PushResult {

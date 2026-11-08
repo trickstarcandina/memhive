@@ -29,7 +29,7 @@ function resolveIds(ctx: DaemonContext, raw: string): string[] {
 export async function handleRoute(ctx: DaemonContext, method: string, url: URL, body: unknown): Promise<{ status: number; body: unknown }> {
   const { store } = ctx; const q = url.searchParams; const path = url.pathname;
 
-  if (method === 'GET' && path === '/v1/status') return ok({ observerAuthFailed: ctx.observer.authFailed });
+  if (method === 'GET' && path === '/v1/status') return ok({ observerAuthFailed: ctx.observer.authFailed, pushBlocked: ctx.sync?.blockedProjects?.() ?? [] });
 
   if (method === 'GET' && path === '/v1/project') {
     const cwd = q.get('cwd') ?? process.cwd();
