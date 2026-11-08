@@ -110,6 +110,10 @@ describe('redactSecrets', () => {
     expect(redactSecrets('secret: Abc123;')).toBe('secret: ' + R + ';');
     for (const c of ['token: null', 'secret: Foo | null;', 'f(token: Token)', 'token: Token,', 'token: string[]', 'token: bigint;']) expect(redactSecrets(c)).toBe(c);
   });
+  it('accepts only balanced, digit-free generics and arrays as types', () => {
+    for (const c of ['password: hunter2<3', 'password: Hunter<3', 'password: Pass<word>', 'token: abcd1[]']) expect(redactSecrets(c)).toBe(c.slice(0, c.indexOf(':') + 2) + R);
+    for (const c of ['token: Promise<string>;', 'token: Record<string, string>,', 'token: Map<string, number>;', 'token: number[]', 'token: Promise<Map<string, number>>;']) expect(redactSecrets(c)).toBe(c);
+  });
   it('is linear on hostile type-like input', () => {
     const t = Date.now();
     redactSecrets('token: A<'.repeat(110000));

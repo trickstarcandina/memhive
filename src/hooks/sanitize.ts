@@ -42,17 +42,26 @@ const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?ke
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
 // After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env secret:
-// a primitive keyword, a generic/array shape, a `|` union of those, or a digit-free identifier in
-// member/param context (followed by `;`, `,`, `=`, `)` or `|`). A bare word at end of line is a value.
+// a primitive keyword, a digit-free array (`Foo[]`), a `|` union of those, or - in member/param
+// context (followed by `;`, `,`, `=`, `)` or `|`) - a digit-free identifier or a balanced generic
+// with a digit-free base (`Map<string, number>`). A bare word at end of line is a value.
 const TS_PRIMITIVE = /^(?:string|number|boolean|any|unknown|object|null|undefined|never|void|bigint|symbol)(?:\[\])*$/;
-const TS_SHAPE = /^[A-Za-z_$][\w$.]*(?:<.*|(?:\[\])+)$/;
+const TS_ARRAY = /^[A-Za-z_$][A-Za-z_$.]*(?:\[\])+$/;
 const TS_IDENT = /^[A-Za-z_$][A-Za-z_$.]*$/;
+// Disjoint delimiters keep this linear; one level of nesting (`Promise<Map<a, b>>`) is enough.
+const TS_GENERIC = /^[A-Za-z_$][A-Za-z_$.]*<[^<>\n]*(?:<[^<>\n]*>[^<>\n]*)*>(?:\[\])*/;
 const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
 const MEMBER_FOLLOW = /^[ \t]*[;,=)|]/;
 
 function looksLikeType(bare: string, follow: string): boolean {
+  if (bare.includes('<')) {
+    // The bare token stops at ',' so `Map<string, number>` arrives split; match it against the follow text.
+    const text = bare + follow;
+    const m = TS_GENERIC.exec(text);
+    return !!m && m[0].length >= bare.length && MEMBER_FOLLOW.test(text.slice(m[0].length));
+  }
   if (!TYPE_FOLLOW.test(follow)) return false;
-  const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_SHAPE.test(p);
+  const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_ARRAY.test(p);
   if (bare.includes('|')) return bare.split('|').every(typeLike);
   return typeLike(bare) || (TS_IDENT.test(bare) && MEMBER_FOLLOW.test(follow));
 }
