@@ -47,7 +47,7 @@ into the next session. Your agent stops re-learning the same codebase every morn
 - **Automatic capture**: hooks record prompts and tool use; an LLM turns them into typed observations
 - **Context at session start**: recent and relevant memory is injected, within a token budget
 - **Hybrid search**: SQLite full-text search plus optional vector search, merged with reciprocal rank fusion
-- **MCP tools**: the agent can `search`, browse a `timeline`, fetch full records, `save_memory` itself and `pin` / `unpin` what must always be in context
+- **MCP tools**: the agent can `search`, browse a `timeline`, fetch full records, `save_memory` itself, `pin` / `unpin` what must always be in context and `forget` its own rows
 - **Any provider**: Anthropic or any OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM, ...) for the observer and embeddings
 - **Privacy first**: `<private>` blocks and secrets are stripped before anything is stored; raw tool output never touches disk
 - **Team hub**: link a project to a self-hosted hub (Postgres + pgvector) to share memory with your team
@@ -111,6 +111,7 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 | --- | --- |
 | `memhive install` / `memhive uninstall` | Wire memhive into Claude Code and Codex, or remove it. Your memory is kept. |
 | `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations and session summaries from the terminal. |
+| `memhive forget <id...> [--yes] [--force] [--project key]` | Delete observations or session summaries (full ids, prefixes or 8-char short ids) of the current project. Shows each row's title, author and date and asks first unless `--yes`. See [Forgetting a memory](#forgetting-a-memory). |
 | `memhive embed [--missing\|--rebuild]` | Compute embeddings for observations now. The daemon also backfills on its own (one batch per second while rows are missing) and drops every vector when `embed.model` or `embed.dims` changes. `--rebuild` drops every vector and embeds everything again. |
 | `memhive doctor` | Check settings, provider and embedder credentials, and daemon health. Reports whether each key is set; it never prints keys. |
 | `memhive daemon run\|start\|stop\|status` | Control the background daemon. |
@@ -190,6 +191,15 @@ Memory is grouped by project. The key is the repo's `origin` remote, normalized:
 - **Tool calls are sent to your LLM provider.** To write observations, the daemon sends the prompt (up to 2 000 characters) and each tool call's input and output (up to 4 000 characters each, after the stripping and redaction above) to the observer you configured. With a hosted provider, that is your code and command output leaving the machine. Use a local model through `openai-compat` to keep it on the machine.
 - **Cost.** The observer makes one LLM call per flush (8 tool calls, 5 s of idle, or stop) of at most about 17 000 input tokens (8 calls of up to 8 000 characters, at about 4 characters per token) and usually much less, plus one small summary call per turn. Multiply by your provider's price for the model; a small model such as the default keeps it low, and a local model costs nothing.
 - **Everything stays local** in the default setup. The only outbound calls are to the LLM and embedding endpoints you configure.
+
+### Forgetting a memory
+
+`memhive forget <id...>` (or the MCP `forget` tool) deletes a row for good: the row, its search index entry and its vector. Use it for a secret or a wrong fact recorded by mistake.
+
+- **Only your own rows.** Rows recorded on this machine can be forgotten. A teammate's row is refused as "recorded by someone else"; `memhive forget --force` removes only this machine's copy and tells nobody. The MCP tool never forces, so text in a repo cannot steer an agent into wiping teammates' memory. Ids of another project are reported as not found.
+- **On a linked hub the deletion travels.** The daemon queues a tombstone and pushes it. The hub deletes the row only for the user who pushed it, and every teammate drops their copy on the next pull. A forgotten id is never pulled or accepted back. A hub older than protocol 2 cannot take tombstones: they stay queued (with one warning in the log) until the hub is upgraded, and the row stays on the hub until then.
+- **Copies already made are out of reach.** A teammate's backup, or a client still on memhive 0.1, keeps what it already pulled. Rotate any secret that reached a hub.
+- **Edits are local.** Changing a row in place (title, narrative, facts) only changes this machine's copy; hub rows are immutable. To change a team row, forget it and record it again.
 
 ## Team hub
 
