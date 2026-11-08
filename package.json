@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Long-term memory for coding agents. Personal by default, shareable through a team hub.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trickstarcandina/memhive.git"
+  },
+  "homepage": "https://github.com/trickstarcandina/memhive#readme",
+  "bugs": {
+    "url": "https://github.com/trickstarcandina/memhive/issues"
+  },
   "type": "module",
   "bin": {
     "memhive": "./dist/memhive.cjs"
