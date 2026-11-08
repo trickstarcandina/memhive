@@ -104,4 +104,17 @@ describe('buildContext', () => {
     const withFiles = { ...hub, filesModified: ['/repo/a.ts'] };
     expect(contextScore(withFiles, { cwd: '/repo' }, now.getTime())).toBe(contextScore(hub, { cwd: '/repo' }, now.getTime()));
   });
+  it('pinned rows are always in context: first, before 40 fresh rows', () => {
+    const fresh = Array.from({ length: 40 }, (_, i) => obs({ projectId: 'p', sessionId: 's', title: `fresh ${i}`, type: 'decision', createdAt: at(0) }));
+    const pin = { ...obs({ projectId: 'p', sessionId: 's', title: 'ancient pinned rule', createdAt: at(90) }), pinned: true };
+    const c = buildContext({ ...base, observations: [...fresh, pin], budgetTokens: 2000 });
+    expect(c).toContain('ancient pinned rule'); expect(c.indexOf('ancient pinned rule')).toBeLessThan(c.indexOf('fresh 0'));
+  });
+  it('pinned rows past the budget: the oldest drop, with a note in the context', () => {
+    const pins = Array.from({ length: 20 }, (_, i) => ({ ...obs({ projectId: 'p', sessionId: 's', title: `pin ${i} ` + 'w'.repeat(80), facts: [], createdAt: at(i) }), pinned: true }));
+    const c = buildContext({ ...base, observations: pins, budgetTokens: 400 });
+    expect(c).toContain('pin 0 '); expect(c).not.toContain('pin 19 ');
+    expect(c).toMatch(/older pinned observation\(s\) did not fit/);
+    expect(estimateTokens(c)).toBeLessThanOrEqual(400);
+  });
 });

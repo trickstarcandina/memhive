@@ -96,7 +96,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     const r = await rpc.request<{ observation: Observation }>('POST', '/v1/observations/pin', { id: oid, pinned });
     return `${pinned ? 'Pinned' : 'Unpinned'} #${shortId(r.observation.id)} · ${r.observation.title.replace(/\s+/g, ' ')}`;
   };
-  idTool('pin', 'Pin an observation (full id or 8-char short id): it always appears in the session-start context and is never expired by retention.', pin(true));
+  idTool('pin', 'Pin an observation (full id or 8-char short id): it is listed first in the session-start context (within the token budget) and never expired by retention.', pin(true));
   idTool('unpin', 'Unpin an observation so it is ranked and expired like any other.', pin(false));
 
   return server;

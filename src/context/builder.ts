@@ -11,7 +11,7 @@ export interface ContextInput {
 
 const TYPE_WEIGHT: Record<ObservationType, number> = { decision: 1.5, bugfix: 1.4, problem: 1.2, workaround: 1.2, feature: 1.1, config: 1, refactor: 1, discovery: 0.9 };
 const HALF_LIFE_DAYS = 14;   // exp(-age / 14 d): a row loses about half its weight every 10 days
-const FACT_ROWS = 5; const FACTS_PER_ROW = 3;
+const FACT_ROWS = 5; const FACTS_PER_ROW = 3; const MAX_PINNED = 20;
 
 /** Relevance of one row to this session; higher first. */
 export function contextScore(o: Row, input: Pick<ContextInput, 'me' | 'cwd' | 'branch'>, now: number): number {
@@ -48,9 +48,10 @@ export function buildContext(input: ContextInput): string {
   const lines: string[] = [header, NOTICE];
   // Header and footer are fixed; every optional block is added whole or not at all, so the output never exceeds the budget.
   let total = estimateTokens(lines.join('\n')) + estimateTokens(footerText);
+  let reserve = 0;   // kept free while pinned rows are added, so the "did not fit" note always fits
   const add = (...ls: string[]): boolean => {
     const n = ls.reduce((a, l) => a + estimateTokens('\n' + l), 0);
-    if (total + n > budget) return false;
+    if (total + n > budget - reserve) return false;
     lines.push(...ls); total += n; return true;
   };
 
@@ -61,16 +62,27 @@ export function buildContext(input: ContextInput): string {
   }
 
   const t = now.getTime();
-  const ranked = input.observations.map((o) => ({ o, score: contextScore(o, input, t) }))
+  // Pinned rows are reserved first (newest first, so the oldest are the ones a tight budget drops); the rest is ranked.
+  const pinned = input.observations.filter((o) => o.pinned).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, MAX_PINNED);
+  const ranked = input.observations.filter((o) => !o.pinned).map((o) => ({ o, score: contextScore(o, input, t) }))
     .sort((a, b) => b.score - a.score || b.o.createdAt.localeCompare(a.o.createdAt)).slice(0, 30).map((x) => x.o);
 
-  if (ranked.length && add('', 'Observations (most relevant first):')) {
-    for (const [i, o] of ranked.entries()) {
+  if ((pinned.length || ranked.length) && add('', pinned.length ? 'Observations (pinned first, then most relevant):' : 'Observations (most relevant first):')) {
+    let shown = 0;
+    const emit = (o: Row): boolean => {
       const line = `#${oneLine(shortId(o.id))} · ${oneLine(o.type)}${o.pinned ? ' · pinned' : ''} · ${clip(o.title, 90)} · ${day(o.createdAt)} · ${oneLine(o.userId)}`;
       // Facts only for local rows: pulled rows stay a one-line title, to keep text others wrote out of the prompt.
-      const facts = i < FACT_ROWS && o.origin === 'local' ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${clip(f, 160)}`) : [];
-      if (!add(line, ...facts) && !add(line)) break;
-    }
+      const facts = shown < FACT_ROWS && o.origin === 'local' ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${clip(f, 160)}`) : [];
+      const ok = add(line, ...facts) || add(line);
+      if (ok) shown++;
+      return ok;
+    };
+    const note = (n: number) => `(${n} older pinned observation(s) did not fit the context budget; raise contextTokens or unpin some)`;
+    reserve = estimateTokens('\n' + note(pinned.length));
+    const fit = pinned.findIndex((o) => !emit(o));
+    reserve = 0;
+    if (fit !== -1) add(note(pinned.length - fit));
+    else for (const o of ranked) if (!emit(o)) break;
   }
   const out = lines.join('\n') + footerText;
   // Only a budget below the fixed header + notice + footer (~84 tokens) gets here over budget: cut, never overflow.
