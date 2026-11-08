@@ -5,7 +5,8 @@ export interface Prompt { id: string; sessionId: string; text: string; createdAt
 export interface Observation { id: string; projectId: string; sessionId: string; userId: string; type: ObservationType; title: string; subtitle: string; facts: string[]; narrative: string; concepts: string[]; filesRead: string[]; filesModified: string[]; createdAt: string; embeddingModel: string | null; origin: 'local' | 'hub'; syncedAt: string | null; seenCount?: number; lastSeenAt?: string | null; pinned?: boolean }   // seen*, pinned: local only
 export type ContextObservation = Observation & { branch: string | null; sessionCwd: string | null };
 export interface Summary { id: string; projectId: string; sessionId: string; userId: string; request: string; learned: string; completed: string; nextSteps: string; createdAt: string; origin: 'local' | 'hub'; syncedAt: string | null }
-export interface SearchFilters { projectId: string; type?: ObservationType; userId?: string; since?: string; limit: number }
+/** projectId undefined: every project (CLI `--all-projects` only). offset: rows to skip after ranking. */
+export interface SearchFilters { projectId?: string; type?: ObservationType; userId?: string; since?: string; limit: number; offset?: number }
 export interface SearchHit { id: string; score: number }
 /** One search result: an observation or a session summary. */
 export type SearchResult = (Observation & { kind: 'observation' }) | (Summary & { kind: 'summary' });
@@ -65,6 +66,7 @@ export interface Store {
   transaction<T>(fn: () => T): T;                          // nests (savepoint); a throw rolls back only its own level
   resolveIdPrefix(prefix: string): string | null;          // unique prefix of an observation id, else null
   listRecentObservations(projectId: string, limit: number): Observation[];
+  listObservations(f: SearchFilters): Observation[];        // newest first, filtered, limit and offset applied
   /** Candidates for the session-start context: the newest `limit` rows plus every pinned row, each with its session's branch. */
   listContextObservations(projectId: string, limit: number): ContextObservation[];
   listSessionObservations(sessionId: string, limit: number): Observation[];

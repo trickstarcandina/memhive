@@ -14,7 +14,7 @@ const show = (r: ForgetRow) => `  #${shortId(r.id)} · ${r.type} · ${r.title.re
 export async function forgetCommand(args: string[], io: CliIo, opts: { home?: string; cwd?: string; input?: Readable } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
   const { positional, flags } = parseArgs(args, 'forget');
-  if (!positional.length) { io.stderr(USAGE); return 2; }
+  if (!positional.length || (flags.json && flags.yes !== true)) { io.stderr(flags.json ? 'memhive forget: --json needs --yes (no prompt)\n' : USAGE); return 2; }
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
   const client = new DaemonClient(info);
@@ -25,14 +25,15 @@ export async function forgetCommand(args: string[], io: CliIo, opts: { home?: st
     if (preview.not_owner.length) io.stderr(`recorded by someone else (use --force to remove only this machine's copy):\n${preview.not_owner.map(show).join('')}`);
     if (preview.not_found.length) io.stderr(`not found in ${projectKey}: ${preview.not_found.join(', ')}\n`);
     if (!preview.deleted.length) { io.stderr('memhive forget: nothing to forget\n'); return 1; }
-    io.stdout(`will forget ${preview.deleted.length}:\n${preview.deleted.map(show).join('')}`);
+    if (!flags.json) io.stdout(`will forget ${preview.deleted.length}:\n${preview.deleted.map(show).join('')}`);
     if (flags.yes !== true) {
       io.stdout(`Forget ${preview.deleted.length} row(s) permanently? [y/N] `);
       const rl = createInterface({ input: opts.input ?? process.stdin, terminal: false });
       const answer = await new Promise<string>((r) => { rl.once('line', r); rl.once('close', () => r('')); }); rl.close();   // end of input = no
       if (!/^y(es)?$/i.test(answer.trim())) { io.stderr('aborted; nothing was deleted\n'); return 1; }
     }
-    io.stdout(formatForget(await client.request<ForgetResult>('POST', '/v1/forget', req)) + '\n');
+    const done = await client.request<ForgetResult>('POST', '/v1/forget', req);
+    io.stdout(flags.json ? JSON.stringify(done, null, 2) + '\n' : formatForget(done) + '\n');
     return 0;
   } catch (e) { io.stderr(`memhive forget: ${e instanceof DaemonError ? e.message : String(e)}\n`); return 1; }
 }

@@ -83,20 +83,36 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
   }
 
   if (method === 'GET' && path === '/v1/search') {
-    const key = q.get('project_key'); if (!key) return err(400, 'missing_project', 'project_key required');
-    const project = store.getProjectByKey(key); if (!project) return ok({ observations: [] });
+    // all_projects: the CLI only; MCP always sends the current (or an allowlisted) project_key.
+    const all = q.get('all_projects') === '1'; const key = q.get('project_key');
+    if (!all && !key) return err(400, 'missing_project', 'project_key required');
+    const project = all ? null : store.getProjectByKey(key!); if (!all && !project) return ok({ results: [], observations: [] });
     const type = q.get('type'); if (type && !OBSERVATION_TYPES.includes(type as ObservationType)) return err(400, 'bad_type', `type must be one of ${OBSERVATION_TYPES.join(', ')}`);
-    const f: SearchFilters = { projectId: project.id, type: (type as ObservationType) ?? undefined, userId: q.get('user') ?? undefined, since: parseSince(q.get('since')), limit: Math.min(Math.max(Number(q.get('limit') ?? 20) || 20, 1), 100) };
-    const results = await hybridSearch(store, ctx.embedder, q.get('q') ?? '', f);
+    const f: SearchFilters = { projectId: project?.id, type: (type as ObservationType) ?? undefined, userId: q.get('user') ?? undefined, since: parseSince(q.get('since')), limit: Math.min(Math.max(Number(q.get('limit') ?? 20) || 20, 1), 100), offset: Math.min(Math.max(Number(q.get('offset') ?? 0) || 0, 0), 10_000) };
+    const text = (q.get('q') ?? '').trim();
+    // No query: the newest observations under the filters (recent, or "everything since 2d").
+    const results = text ? await hybridSearch(store, ctx.embedder, text, f) : store.listObservations(f).map((o) => ({ ...o, kind: 'observation' as const }));
     return ok({ results, observations: results.filter((r) => r.kind === 'observation') });   // observations: for 0.1 clients
   }
 
-  if (method === 'POST' && path === '/v1/observations/pin') {
-    const b = (body ?? {}) as { id?: unknown; pinned?: unknown };
-    if (typeof b.id !== 'string' || typeof b.pinned !== 'boolean') return err(400, 'bad_pin', 'id and pinned (boolean) required');
-    const [id] = resolveIds(ctx, b.id);
-    if (!id || !store.setPinned(id, b.pinned)) return err(404, 'not_found', 'no such observation');
-    return ok({ observation: store.getObservations([id])[0] });
+  // Edit one observation of the caller's project. Text changes stay on this machine and need an own row (origin local);
+  // pinning is local only, so any row of the project can be pinned.
+  if (method === 'POST' && path === '/v1/observations/edit') {
+    const b = (body ?? {}) as { projectKey?: unknown; id?: unknown; title?: unknown; narrative?: unknown; pinned?: unknown };
+    const str = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    if (typeof b.projectKey !== 'string' || typeof b.id !== 'string' || !str(b.title, 2000) || !str(b.narrative, 20000) || (b.pinned !== undefined && typeof b.pinned !== 'boolean')) return err(400, 'bad_edit', 'projectKey and id required; title (max 2000), narrative (max 20000) strings, pinned boolean');
+    if (b.title === undefined && b.narrative === undefined && b.pinned === undefined) return err(400, 'bad_edit', 'nothing to change (title, narrative or pinned)');
+    const project = store.getProjectByKey(b.projectKey);
+    const hits = project ? store.matchIdPrefix(project.id, b.id.replace(/^#/, '')).filter((h) => h.kind === 'observation') : [];
+    if (hits.length > 1) return err(400, 'ambiguous_id', 'id matches more than one observation, use more characters');
+    const o = hits.length ? store.getObservations([hits[0].id])[0] : undefined;
+    if (!o) return err(404, 'not_found', `no such observation in ${b.projectKey.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)}`);
+    const clean = (v: unknown) => (typeof v === 'string' ? redactSecrets(stripPrivate(v)).trim() : undefined);
+    const title = clean(b.title); const narrative = clean(b.narrative);
+    if (title === '') return err(400, 'bad_edit', 'title cannot be empty');
+    if ((title !== undefined || narrative !== undefined) && o.origin !== 'local') return err(403, 'not_owner', 'recorded by someone else; only its pin can change on this machine');
+    store.updateObservation(o.id, { title: title?.slice(0, 200), narrative, pinned: b.pinned as boolean | undefined });
+    return ok({ observation: store.getObservations([o.id])[0] });
   }
 
   // Forget observations or summaries of one project. Only this machine's own rows (origin local) are forgotten and pushed as

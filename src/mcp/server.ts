@@ -56,7 +56,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }) as typeof cb);
 
   tool('search', {
-    description: 'Step 1 of 3. Search past observations and session summaries for this project. Returns a compact index (ids, types, titles; summaries have type session-summary). Follow with timeline and get_observations.',
+    description: 'Step 1 of 3. Search past observations and session summaries for this project. Returns a compact index (ids, types, titles; summaries have type session-summary). An empty query lists the newest observations (narrow it with since or type). Follow with timeline and get_observations.',
     inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().max(200).optional(), since: z.string().max(64).optional().describe('ISO date or relative like 7d, 12h'), project: z.string().max(1000).optional().describe('project key; defaults to the current repo (others only if allowlisted in settings)'), limit: z.number().int().min(1).max(100).default(20) },
   }, async (a) => {
     // Another project's memory only when allowlisted: text in an untrusted repo must not steer the agent into reading it.
@@ -99,7 +99,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const idTool = (name: string, description: string, run: (id: string) => Promise<string>) =>
     tool(name, { description, inputSchema: { id } }, async (a) => textResult(await run(a.id)));
   const pin = (pinned: boolean) => async (oid: string) => {
-    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/observations/pin', { id: oid, pinned });
+    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/observations/edit', { projectKey: await projectKey(), id: oid, pinned });
     return `${pinned ? 'Pinned' : 'Unpinned'} #${shortId(r.observation.id)} · ${r.observation.title.replace(/\s+/g, ' ')}`;
   };
   idTool('pin', 'Pin an observation (full id or 8-char short id): it is listed first in the session-start context (within the token budget) and never expired by retention.', pin(true));

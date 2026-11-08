@@ -15,6 +15,7 @@ export async function syncCommand(_args: string[], io: CliIo, opts: { home?: str
   if (!info) { io.stderr(daemonUnavailableMessage(home)); return 1; }
   try {
     const r = await new DaemonClient(info).request<{ pushed: { accepted: { observations: number; summaries: number; sessions: number }; rejected: unknown[] } | null; pulled: number; error?: string }>('POST', '/v1/sync', { cwd }, opts.waitMs ?? SYNC_WAIT_MS);
+    if (_args.includes('--json')) { io.stdout(JSON.stringify(r, null, 2) + '\n'); return r.error ? 1 : 0; }
     io.stdout(r.pushed ? `pushed ${r.pushed.accepted.observations} observations, ${r.pushed.accepted.summaries} summaries (${r.pushed.rejected.length} rejected); pulled ${r.pulled} rows\n` : `push skipped (not logged in or key rejected); pulled ${r.pulled} rows\n`);
     if (r.error) { io.stderr(`memhive sync: ${r.error}\n`); return 1; }
     return 0;

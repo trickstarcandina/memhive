@@ -22,7 +22,8 @@ const TOMB_TABLE: Record<TombstoneTable, SyncTable> = { observation: 'observatio
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: r.origin, syncedAt: r.synced_at ?? null });
 
 function filterSql(f: SearchFilters, alias: string): { sql: string; params: unknown[] } {
-  const parts = [`${alias}.project_id = ?`]; const params: unknown[] = [f.projectId];
+  const parts = ['1 = 1']; const params: unknown[] = [];
+  if (f.projectId !== undefined) { parts.push(`${alias}.project_id = ?`); params.push(f.projectId); }
   if (f.type) { parts.push(`${alias}.type = ?`); params.push(f.type); }
   if (f.userId) { parts.push(`${alias}.user_id = ?`); params.push(f.userId); }
   if (f.since) { parts.push(`${alias}.created_at >= ?`); params.push(f.since); }
@@ -213,6 +214,10 @@ export class SqliteStore implements Store {
   listRecentObservations(projectId: string, limit: number): Observation[] {
     return (this.db.prepare('SELECT * FROM observations WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToObservation);
   }
+  listObservations(f: SearchFilters): Observation[] {
+    const w = filterSql(f, 'o');
+    return (this.db.prepare(`SELECT o.* FROM observations o WHERE ${w.sql} ORDER BY o.created_at DESC, o.rowid DESC LIMIT ? OFFSET ?`).all(...w.params, f.limit, f.offset ?? 0) as Row[]).map(rowToObservation);
+  }
   listContextObservations(projectId: string, limit: number): ContextObservation[] {
     const sel = 'SELECT o.*, s.branch AS branch, s.cwd AS session_cwd FROM observations o LEFT JOIN sessions s ON s.id = o.session_id WHERE o.project_id = ?';
     const rows = this.db.prepare(`${sel} ORDER BY o.created_at DESC, o.rowid DESC LIMIT ?`).all(projectId, limit) as Row[];
@@ -323,13 +328,14 @@ export class SqliteStore implements Store {
   searchObservationsVector(vec: number[], f: SearchFilters): SearchHit[] {
     if (!this.dims || vec.length !== this.dims) return [];
     const buf = Buffer.from(new Float32Array(vec).buffer);
-    const knn = this.db.prepare('SELECT id, distance FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = ? ORDER BY distance');
+    const all = f.projectId === undefined;
+    const knn = this.db.prepare(`SELECT id, distance FROM vec_observations WHERE embedding MATCH ?${all ? '' : ' AND project_id = ?'} AND k = ? ORDER BY distance`);
     const w = filterSql(f, 'o');
     // vec0 filters only on the partition key, so type/user/since apply after the k-NN. When too few neighbours survive
     // a selective filter, widen k (x4) until the limit fills, the partition runs out, or k reaches the cap. Simpler than
     // pre-filtering ids into the vec0 query, and exact up to the cap.
     for (let k = Math.max(f.limit * 4, 50); ; k = Math.min(k * 4, VEC_K_CAP)) {
-      const candidates = knn.all(buf, f.projectId, k) as Row[];
+      const candidates = (all ? knn.all(buf, k) : knn.all(buf, f.projectId, k)) as Row[];
       if (candidates.length === 0) return [];
       const ids = candidates.map((c) => c.id);
       const keep = new Set<string>();
@@ -406,7 +412,8 @@ export class SqliteStore implements Store {
   }
   searchSummariesFts(query: string, f: SearchFilters): SearchHit[] {
     const q = toFtsQuery(query); if (!q) return [];
-    const parts = ['s.project_id = ?']; const params: unknown[] = [f.projectId];
+    const parts = ['1 = 1']; const params: unknown[] = [];
+    if (f.projectId !== undefined) { parts.push('s.project_id = ?'); params.push(f.projectId); }
     if (f.userId) { parts.push('s.user_id = ?'); params.push(f.userId); }
     if (f.since) { parts.push('s.created_at >= ?'); params.push(f.since); }
     const rows = this.db.prepare(`SELECT s.id AS id, bm25(summaries_fts) AS score FROM summaries_fts JOIN summaries s ON s.rowid = summaries_fts.rowid WHERE summaries_fts MATCH ? AND ${parts.join(' AND ')} ORDER BY score LIMIT ?`).all(q, ...params, f.limit) as Row[];

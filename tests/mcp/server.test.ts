@@ -84,6 +84,12 @@ describe('mcp', () => {
     const full = text(await client.callTool({ name: 'get_observations', arguments: { ids: ['77777777'] } }));
     expect(full).toContain('Learned: quokka needs node 22');
   });
+  it('search with an empty query and a type lists the newest rows of that type', async () => {
+    await client.callTool({ name: 'save_memory', arguments: { text: 'We picked option B', title: 'Workaround picked', type: 'workaround' } });
+    const r = text(await client.callTool({ name: 'search', arguments: { query: '', type: 'workaround' } }));
+    expect(r).toContain('Workaround picked');
+    expect(text(await client.callTool({ name: 'search', arguments: { query: '', type: 'bugfix' } }))).toBe('No observations found.');
+  });
   it('search with no hits says so', async () => {
     expect(text(await client.callTool({ name: 'search', arguments: { query: 'zzzz-nothing' } }))).toContain('No observations');
   });

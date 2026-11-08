@@ -11,7 +11,7 @@ import { DatabaseNewerThanBinary } from '../../store/sqlite/store.js';
 
 export async function daemonCommand(args: string[], io: CliIo, opts: { home?: string } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home;
-  const sub = args[0] ?? 'status';
+  const sub = args.find((a) => !a.startsWith('--')) ?? 'status';
   if (sub === 'run') {
     let h;
     try { h = await startDaemon(createDaemonContext(home)); }
@@ -34,6 +34,7 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
   const info = readDaemonInfo(home);
   const alive = info ? await new DaemonClient(info).health() : false;
   if (sub === 'status') {
+    if (args.includes('--json')) { io.stdout(JSON.stringify(alive ? { running: true, port: info!.port, pid: info!.pid, startedAt: info!.startedAt, version: info!.version ?? null } : { running: false }, null, 2) + '\n'); return alive ? 0 : 1; }
     io.stdout(alive ? `memhive daemon running on port ${info!.port} (pid ${info!.pid}, since ${info!.startedAt})\n` : 'memhive daemon not running\n');
     return alive ? 0 : 1;
   }
