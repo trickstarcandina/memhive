@@ -104,6 +104,14 @@ export class SqliteStore implements Store {
     return r ? { id: r.id, sessionId: r.session_id, text: r.text, createdAt: r.created_at } : null;
   }
 
+  prunePrompts(keep: number, endedBefore: string): number {
+    return this.db.transaction(() => {
+      const ended = this.db.prepare('DELETE FROM prompts WHERE session_id IN (SELECT id FROM sessions WHERE ended_at IS NOT NULL AND ended_at < ?)').run(endedBefore).changes;
+      const extra = this.db.prepare(`DELETE FROM prompts WHERE rowid IN (SELECT rowid FROM (SELECT rowid, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC, rowid DESC) AS n FROM prompts) WHERE n > ?)`).run(keep).changes;
+      return ended + extra;
+    })();
+  }
+
   insertObservations(obs: Observation[]): void {
     const stmt = this.db.prepare(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, origin, synced_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`);

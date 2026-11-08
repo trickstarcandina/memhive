@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createJsonServer } from './http.js';
 import { handleRoute } from './routes.js';
+import { runMaintenance } from './maintenance.js';
 import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, type DaemonInfo } from './info.js';
 import { DaemonClient, healthProof } from './client.js';
 import type { DaemonContext } from './context.js';
@@ -152,7 +153,8 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
   touch();
   ctx.logger.info('daemon started', { port: info.port });
 
-  const embedTimer = setInterval(() => void ctx.observer.embedMissing().catch(() => {}), 10 * 60 * 1000); embedTimer.unref?.();
+  runMaintenance(ctx);
+  const embedTimer = setInterval(() => { runMaintenance(ctx); void ctx.observer.embedMissing().catch(() => {}); }, 10 * 60 * 1000); embedTimer.unref?.();
 
   const close = () => closing ??= (async () => {
     if (idleTimer) clearTimeout(idleTimer); clearInterval(embedTimer);

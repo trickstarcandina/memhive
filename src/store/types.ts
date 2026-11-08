@@ -25,6 +25,8 @@ export interface Store {
   endSession(id: string, endedAt: string): void;
   insertPrompt(p: Prompt): void;
   latestPrompt(sessionId: string): Prompt | null;
+  /** Keeps the newest `keep` prompts per session and drops every prompt of sessions that ended before `endedBefore`. */
+  prunePrompts(keep: number, endedBefore: string): number;
   insertObservations(obs: Observation[]): void;           // ignores ids that already exist
   getObservations(ids: string[]): Observation[];           // order = input order
   hasObservations(ids: string[]): Set<string>;             // the ids that exist
