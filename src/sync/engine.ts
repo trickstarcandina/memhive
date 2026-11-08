@@ -164,9 +164,10 @@ export class SyncEngine implements SyncHooks {
       }
       const now = new Date().toISOString();
       for (const s of page.sessions) {
-        // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes); our own sessions are never overwritten.
+        // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes). Our own sessions, and a
+        // session of another project or user that happens to share the id, are never overwritten.
         const cur = store.getSession(s.id);
-        if (cur && (cur.origin !== 'hub' || (cur.endedAt === s.endedAt && cur.cwd === s.cwd))) continue;
+        if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || (cur.endedAt === s.endedAt && cur.cwd === s.cwd))) continue;
         if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
       }
       // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.

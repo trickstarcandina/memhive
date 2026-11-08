@@ -187,6 +187,18 @@ describe('pull robustness', () => {
       expect(reset).not.toHaveBeenCalled();
     }
   });
+  it('a pulled session never rewrites a local session of another project or user', async () => {
+    let page: unknown = null;
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify(page), { status: 200 }) : inner(url, init) });
+    const other = t.store.getOrCreateProject('github.com/t/other', 'other');
+    const mine = sess(t.project.id, { userId: 'bob', origin: 'hub', cwd: '/b' });
+    const foreign = sess(other.id, { userId: 'bob', origin: 'hub', cwd: '/o' });
+    t.store.upsertSession(mine); t.store.upsertSession(foreign);
+    page = { sessions: [{ ...foreign, projectId: 'x', cwd: '/evil', endedAt: '2030-01-01T00:00:00.000Z' }, { ...mine, userId: 'mallory', cwd: '/evil', endedAt: '2030-01-01T00:00:00.000Z' }], observations: [], summaries: [], next_seq: 3, has_more: false };
+    await t.engine.pull(t.project, 2000);
+    expect(t.store.getSession(foreign.id)).toMatchObject({ projectId: other.id, cwd: '/o', endedAt: null });
+    expect(t.store.getSession(mine.id)).toMatchObject({ userId: 'bob', cwd: '/b', endedAt: null });
+  });
   it('a pulled row that cannot be stored is skipped; the rest apply and the cursor advances', async () => {
     const good = { id: newId(), projectId: 'x', userId: 'bob', host: 'codex', hostSessionId: 'h', cwd: '/b', startedAt: new Date().toISOString(), endedAt: null, syncedAt: null };
     const bad = { ...good, id: newId(), hostSessionId: 'h2', host: null };   // NOT NULL violation locally
