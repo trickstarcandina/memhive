@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { main } from '../../src/cli/index.js';
 
-for (const cmd of ['install', 'uninstall', 'daemon', 'search', 'embed', 'doctor', 'hook', 'mcp']) {
+for (const cmd of ['install', 'uninstall', 'daemon', 'search', 'forget', 'embed', 'doctor', 'hook', 'mcp']) {
   for (const flag of ['--help', '-h']) {
     it(`${cmd} ${flag} prints usage and has no side effects`, async () => {
       const home = mkdtempSync(path.join(tmpdir(), 'mh-help-'));

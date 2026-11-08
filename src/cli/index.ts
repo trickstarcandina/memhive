@@ -13,6 +13,7 @@ usage: memhive <command>
   daemon <run|start|stop|status>
   mcp
   search <query> [--type t] [--user u] [--since 7d] [--limit n]
+  forget <id...> [--yes] [--force] [--project key]
   embed [--missing|--rebuild]
   serve [--reset-vectors]
   key <create|list|revoke|rotate>   user <list|remove>   project list
@@ -30,6 +31,7 @@ const SUB_USAGE: Record<string, string> = {
   daemon: 'usage: memhive daemon <run|start|stop|status>\n',
   mcp: 'usage: memhive mcp\n',
   search: 'usage: memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
+  forget: 'usage: memhive forget <id...> [--yes] [--force] [--project key]   (deletes observations or summaries; asks first unless --yes)\n  --force  also remove someone else\'s row, from this machine only (the hub and teammates keep it)\n',
   embed: 'usage: memhive embed [--missing|--rebuild]\n',
   serve: 'usage: memhive serve [--reset-vectors]   (env: DATABASE_URL, PORT, MEMHIVE_EMBED_MODEL, MEMHIVE_EMBED_DIMS, MEMHIVE_RESET_VECTORS)\n  --reset-vectors  after a MEMHIVE_EMBED_DIMS change, drop every stored vector instead of refusing to start\n',
   key: 'usage: memhive key <create --user <name> [--label <text>] | list | revoke <id> | rotate <id|user>> [--json]   (env: DATABASE_URL of the hub)\n',
@@ -60,6 +62,7 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'daemon': return (await import('./commands/daemon.js')).daemonCommand(rest, { stdout, stderr });
     case 'mcp': return (await import('../mcp/server.js')).runMcp();
     case 'search': return (await import('./commands/search.js')).searchCommand(rest, { stdout, stderr });
+    case 'forget': return (await import('./commands/forget.js')).forgetCommand(rest, { stdout, stderr });
     case 'embed': return (await import('./commands/embed.js')).embedCommand(rest, { stdout, stderr });
     case 'doctor': return (await import('./commands/doctor.js')).doctorCommand(rest, { stdout, stderr });
     case 'install': return (await import('./commands/install.js')).installCommand(rest, { stdout, stderr });

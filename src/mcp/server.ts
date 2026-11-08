@@ -12,6 +12,7 @@ import { loadSettings } from '../shared/settings.js';
 import { VERSION } from '../shared/version.js';
 import { OBSERVATION_TYPES, type Observation, type SearchResult, type Summary } from '../store/types.js';
 import { formatFull, formatIndex } from './format.js';
+import { formatForget, type ForgetResult } from './format-forget.js';
 
 // Accepts the `#abcd1234` form the context footer and index print.
 const id = z.preprocess((v) => (typeof v === 'string' ? v.replace(/^#/, '') : v), z.string().max(64).regex(/^[0-9a-f-]+$/i));
@@ -109,21 +110,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
   });
 
   return server;
-}
-
-export interface ForgetRow { id: string; kind: 'observation' | 'summary'; type: string; title: string; userId: string; createdAt: string }
-export interface ForgetResult { deleted: ForgetRow[]; not_owner: ForgetRow[]; not_found: string[]; propagates: boolean | null }
-const line = (r: ForgetRow) => `#${shortId(r.id)} · ${r.type} · ${r.title.replace(/\s+/g, ' ').slice(0, 200)}`;
-export function formatForget(r: ForgetResult, verb = 'Forgot'): string {
-  const out: string[] = [];
-  if (r.deleted.length) out.push(`${verb} ${r.deleted.length}:`, ...r.deleted.map(line));
-  else out.push('Nothing was forgotten.');
-  if (r.not_owner.length) out.push('Not forgotten (recorded by someone else; only rows recorded on this machine can be forgotten):', ...r.not_owner.map(line));
-  if (r.not_found.length) out.push(`Not found in this project: ${r.not_found.map((x) => x.replace(/[^0-9a-f#-]/gi, '?').slice(0, 64)).join(', ')}`);
-  if (r.deleted.length) out.push(r.propagates === true ? 'The deletion is pushed to the hub and removed from teammates on their next pull.'
-    : r.propagates === null ? 'The hub could not be reached; the deletion is queued and pushed once the hub answers (protocol 2 or later).'
-    : 'Removed from this machine only (project not linked to a hub, or the hub is older than protocol 2: the deletion stays queued).');
-  return out.join('\n');
 }
 
 /** MEMHIVE_CWD from the plugin's .mcp.json, unless the host left it empty or unexpanded; then the process cwd. */
