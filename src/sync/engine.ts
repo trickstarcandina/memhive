@@ -36,10 +36,12 @@ const cut = (v: string, n: number) => redactSecrets(v).slice(0, n);
 const cutList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => cut(v, MAX_ITEM));
 // Outgoing rows are clipped to the same caps: the hub refuses an over-cap row, and a refused row would be lost.
 const clipList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => v.slice(0, MAX_ITEM));
-const clipObs = <T extends Observation>(o: T): T => ({ ...o, title: o.title.slice(0, MAX_SHORT), subtitle: o.subtitle.slice(0, MAX_SHORT), narrative: o.narrative.slice(0, MAX_LONG), facts: clipList(o.facts), concepts: clipList(o.concepts), filesRead: clipList(o.filesRead), filesModified: clipList(o.filesModified), embeddingModel: o.embeddingModel?.slice(0, MAX_SHORT) ?? null });
+// seenCount, lastSeenAt and pinned are this machine's bookkeeping, not part of the shared row.
+const clipObs = <T extends Observation>({ seenCount: _s, lastSeenAt: _l, pinned: _p, ...o }: T): T => ({ ...(o as T), title: o.title.slice(0, MAX_SHORT), subtitle: o.subtitle.slice(0, MAX_SHORT), narrative: o.narrative.slice(0, MAX_LONG), facts: clipList(o.facts), concepts: clipList(o.concepts), filesRead: clipList(o.filesRead), filesModified: clipList(o.filesModified), embeddingModel: o.embeddingModel?.slice(0, MAX_SHORT) ?? null });
 const clipSum = (m: Summary): Summary => ({ ...m, request: m.request.slice(0, MAX_LONG), learned: m.learned.slice(0, MAX_LONG), completed: m.completed.slice(0, MAX_LONG), nextSteps: m.nextSteps.slice(0, MAX_LONG) });
 // cwd stays local: it is a path on this machine, the hub neither needs nor keeps it.
-const clipSess = ({ cwd: _cwd, ...x }: Session): Omit<Session, 'cwd'> => ({ ...x, host: x.host.slice(0, MAX_SHORT), hostSessionId: x.hostSessionId.slice(0, MAX_SHORT) });
+// cwd and branch stay on this machine: both can name clients, tickets or home directories.
+const clipSess = ({ cwd: _cwd, branch: _branch, ...x }: Session): Omit<Session, 'cwd' | 'branch'> => ({ ...x, host: x.host.slice(0, MAX_SHORT), hostSessionId: x.hostSessionId.slice(0, MAX_SHORT) });
 // Fields clipped above: a hub that still refuses one has smaller caps, so the row stays queued for a client that matches it.
 const CLIPPED = new Set(['title', 'subtitle', 'narrative', 'facts', 'concepts', 'filesRead', 'filesModified', 'embeddingModel', 'request', 'learned', 'completed', 'nextSteps', 'host', 'hostSessionId']);
 // Hub errors that mean "the hub or the path to it is unwell", not "this batch is bad": rows stay queued and the project backs off.

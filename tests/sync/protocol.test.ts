@@ -15,7 +15,7 @@ function setup(config: Record<string, unknown>) {
   saveCredentials(home, { hubs: { [hubUrl]: { key: 'mh_' + 'A'.repeat(43), user: 'alice' } } });
   const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
   const p = store.getOrCreateProject('github.com/t/proto', 'proto'); store.setProjectHub(p.id, hubUrl);
-  const s = sess(p.id, { userId: 'alice', cwd: '/home/alice/secret-client/app' }); store.upsertSession(s);
+  const s = sess(p.id, { userId: 'alice', cwd: '/home/alice/secret-client/app', branch: 'acme-ticket-42' }); store.upsertSession(s);
   store.insertObservations([obs({ projectId: p.id, sessionId: s.id, userId: 'alice' })]);
   const bodies: any[] = []; const urls: string[] = [];
   const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -49,11 +49,15 @@ describe('hub protocol', () => {
     expect(t.warns.filter((w) => w.includes('older than this client'))).toHaveLength(1);
     expect(t.engine.hubErrors()).toEqual([]);
   });
-  it('push bodies never carry cwd', async () => {
+  it('push bodies never carry cwd, branch or local bookkeeping', async () => {
     const t = setup({ ...base, protocol: 1 });
+    const [o] = t.store.listRecentObservations(t.project.id, 1); t.store.setPinned(o.id, true); t.store.bumpSeen(o.id, new Date().toISOString());
     await t.engine.push(t.project);
     expect(t.bodies[0].sessions).toHaveLength(1);
-    expect(t.bodies[0].sessions[0]).not.toHaveProperty('cwd');
+    expect(t.bodies[0].sessions[0]).not.toHaveProperty('cwd'); expect(t.bodies[0].sessions[0]).not.toHaveProperty('branch');
+    expect(JSON.stringify(t.bodies)).not.toContain('acme-ticket');
+    for (const k of ['pinned', 'seenCount', 'lastSeenAt']) expect(t.bodies[0].observations[0]).not.toHaveProperty(k);
+    expect(t.store.getSession(t.bodies[0].sessions[0].id)!.branch).toBe('acme-ticket-42');
     expect(JSON.stringify(t.bodies)).not.toContain('secret-client');
     expect(t.store.getSession(t.bodies[0].sessions[0].id)!.cwd).toBe('/home/alice/secret-client/app');   // kept locally
   });

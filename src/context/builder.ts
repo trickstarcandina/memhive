@@ -19,7 +19,8 @@ export function contextScore(o: Row, input: Pick<ContextInput, 'me' | 'cwd' | 'b
   const own = o.origin === 'local' || (input.me !== undefined && o.userId === input.me);
   const cwd = input.cwd ? path.resolve(input.cwd) + path.sep : null;
   // Absolute paths must lie under cwd; relative ones are taken as relative to it (what the agent usually prints).
-  const underCwd = !!cwd && [...o.filesModified, ...o.filesRead].some((f) => (path.isAbsolute(f) ? path.resolve(f).startsWith(cwd) : !f.startsWith('..')));
+  // Only local rows: a pulled row's file list is whatever its pusher chose, so it must not buy a place in context.
+  const underCwd = !!cwd && o.origin === 'local' && [...o.filesModified, ...o.filesRead].some((f) => (path.isAbsolute(f) ? path.resolve(f).startsWith(cwd) : !f.startsWith('..')));
   return Math.exp(-age / HALF_LIFE_DAYS) * (TYPE_WEIGHT[o.type] ?? 1) * (own ? 1.5 : 1) * (underCwd ? 1.3 : 1) * (o.pinned ? 3 : 1)
     * (1 + 0.1 * Math.min(Math.max((o.seenCount ?? 1) - 1, 0), 5)) * (input.branch && o.branch === input.branch ? 1.2 : 1);
 }
@@ -66,7 +67,8 @@ export function buildContext(input: ContextInput): string {
   if (ranked.length && add('', 'Observations (most relevant first):')) {
     for (const [i, o] of ranked.entries()) {
       const line = `#${oneLine(shortId(o.id))} · ${oneLine(o.type)}${o.pinned ? ' · pinned' : ''} · ${clip(o.title, 90)} · ${day(o.createdAt)} · ${oneLine(o.userId)}`;
-      const facts = i < FACT_ROWS ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${clip(f, 160)}`) : [];
+      // Facts only for local rows: pulled rows stay a one-line title, to keep text others wrote out of the prompt.
+      const facts = i < FACT_ROWS && o.origin === 'local' ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${clip(f, 160)}`) : [];
       if (!add(line, ...facts) && !add(line)) break;
     }
   }
