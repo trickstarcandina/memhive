@@ -40,6 +40,11 @@ const SUB_USAGE: Record<string, string> = {
   sync: 'usage: memhive sync   (push and pull the current project now)\n',
 };
 
+// engines is advisory to npm; without this an old Node fails with a native ABI or syntax error.
+export function nodeVersionError(version: string = process.versions.node): string | null {
+  return Number(version.split('.')[0]) >= 22 ? null : `memhive requires Node.js >= 22 (found v${version})\n`;
+}
+
 export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<number> {
   const { stdout, stderr } = { ...defaultIo, ...io };
   const [cmd, ...rest] = argv;
@@ -69,6 +74,8 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
 }
 
 const isEntry = typeof require !== 'undefined' && require.main === module;
+const tooOld = isEntry ? nodeVersionError() : null;
+if (tooOld) { process.stderr.write(tooOld); process.exit(1); }
 if (isEntry || process.env.MEMHIVE_FORCE_MAIN === '1') {
   const argv = process.argv.slice(2);
   // daemon run, serve and mcp are long-lived; everything else must not linger on open handles.
