@@ -239,7 +239,7 @@ export class SqliteStore implements Store {
   private forget(tbl: TombstoneTable, ids: string[], opts: DeleteOpts = {}): number {
     const at = new Date().toISOString();
     const pick = this.db.prepare(`SELECT project_id FROM ${TOMB_TABLE[tbl]} WHERE id = ?`);
-    const tomb = this.db.prepare('INSERT INTO tombstones(id, tbl, project_id, deleted_at, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING');
+    const tomb = this.db.prepare('INSERT INTO tombstones(id, tbl, project_id, deleted_at, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING');
     const delVec = this.dims ? this.db.prepare('DELETE FROM vec_observations WHERE id = ?') : null;
     const drop = (t: TombstoneTable, id: string) => { if (t === 'observation') delVec?.run(id); this.db.prepare(`DELETE FROM ${TOMB_TABLE[t]} WHERE id = ?`).run(id); };
     return this.db.transaction(() => {
@@ -262,20 +262,20 @@ export class SqliteStore implements Store {
       return n;
     })();
   }
-  forgottenIds(ids: string[]): Set<string> {
+  forgottenIds(projectId: string, ids: string[]): Set<string> {
     const out = new Set<string>();
     for (let i = 0; i < ids.length; i += 500) {   // stays far below SQLite's bound-parameter limit
       const part = ids.slice(i, i + 500);
-      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE id IN (${part.map(() => '?').join(',')})`).all(...part) as Row[]) out.add(r.id);
+      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND id IN (${part.map(() => '?').join(',')})`).all(projectId, ...part) as Row[]) out.add(r.id);
     }
     return out;
   }
   listPendingTombstones(projectId: string, limit: number): Tombstone[] {
     return (this.db.prepare('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = ? AND synced_at IS NULL ORDER BY rowid LIMIT ?').all(projectId, limit) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at }));
   }
-  markTombstonesSynced(ids: string[], at: string): void {
+  markTombstonesSynced(projectId: string, ids: string[], at: string): void {
     if (!ids.length) return;
-    this.db.prepare(`UPDATE tombstones SET synced_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`).run(at, ...ids);
+    this.db.prepare(`UPDATE tombstones SET synced_at = ? WHERE project_id = ? AND synced_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(at, projectId, ...ids);
   }
   deleteExpired(cutoffs: Partial<Record<ObservationType, string>>): number {
     const pick = this.db.prepare(`SELECT o.id FROM observations o JOIN projects p ON p.id = o.project_id

@@ -22,10 +22,10 @@ describe('forget in the local store', () => {
     expect(s.searchObservationsFts('walrus', f(pid))).toEqual([]);
     expect(s.searchObservationsVector([1, 0], f(pid))).toEqual([]);
     expect(s.listPendingTombstones(pid, 10)).toEqual([{ id: o.id, tbl: 'observation', deletedAt: expect.any(String) }]);
-    expect(s.forgottenIds([o.id, 'not-there'])).toEqual(new Set([o.id]));
-    s.markTombstonesSynced([o.id], new Date().toISOString());
+    expect(s.forgottenIds(pid, [o.id, 'not-there'])).toEqual(new Set([o.id]));
+    s.markTombstonesSynced(pid, [o.id], new Date().toISOString());
     expect(s.listPendingTombstones(pid, 10)).toEqual([]);
-    expect(s.forgottenIds([o.id]).size).toBe(1);   // still remembered after it was pushed
+    expect(s.forgottenIds(pid, [o.id]).size).toBe(1);   // still remembered after it was pushed
   });
 
   it('deleteSummaries removes the FTS entry (new delete trigger)', () => {
@@ -44,7 +44,7 @@ describe('forget in the local store', () => {
     expect(s.getSession(sid)).toBeNull(); expect(s.getObservations([o.id])).toEqual([]); expect(s.getSummaries([m.id])).toEqual([]);
     expect(s.latestPrompt(sid)).toBeNull();
     expect(s.listPendingTombstones(pid, 10)).toEqual([{ id: sid, tbl: 'session', deletedAt: expect.any(String) }]);
-    expect(s.forgottenIds([sid, o.id, m.id]).size).toBe(3);
+    expect(s.forgottenIds(pid, [sid, o.id, m.id]).size).toBe(3);
   });
 
   it('a remembered-only delete (pulled tombstone, forced removal) is never pushed and respects the project', () => {
@@ -56,7 +56,19 @@ describe('forget in the local store', () => {
     const ghost = crypto.randomUUID();
     expect(s.deleteObservations([o.id, ghost], { syncedAt: at, projectId: pid })).toBe(1);
     expect(s.listPendingTombstones(pid, 10)).toEqual([]);
-    expect(s.forgottenIds([o.id, ghost]).size).toBe(2);   // ids with no row are remembered under projectId
+    expect(s.forgottenIds(pid, [o.id, ghost]).size).toBe(2);   // ids with no row are remembered under projectId
+  });
+
+  it('a tombstone in one project never blocks or deletes the same id in another', () => {
+    const b = s.getOrCreateProject('github.com/t/b', 'b').id; const bs = sess(b); s.upsertSession(bs);
+    const o = obs({ projectId: b, sessionId: bs.id }); s.insertObservations([o]);
+    s.deleteObservations([o.id], { syncedAt: new Date().toISOString(), projectId: pid });   // project A's pull names B's id
+    expect(s.getObservations([o.id])).toHaveLength(1);
+    expect(s.forgottenIds(b, [o.id]).size).toBe(0);
+    expect(s.deleteObservations([o.id])).toBe(1);   // B's own forget still works with A's tombstone present
+    expect(s.listPendingTombstones(b, 10).map((t) => t.id)).toEqual([o.id]);
+    s.markTombstonesSynced(pid, [o.id], new Date().toISOString());
+    expect(s.listPendingTombstones(b, 10)).toHaveLength(1);
   });
 
   it('updateObservation refreshes FTS and drops the vector for re-embedding', () => {

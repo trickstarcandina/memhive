@@ -50,9 +50,9 @@ export interface Store {
   deleteObservations(ids: string[], opts?: DeleteOpts): number;
   deleteSummaries(ids: string[], opts?: DeleteOpts): number;
   deleteSession(id: string, opts?: DeleteOpts): number;     // also its observations, summaries and prompts (remembered, not pushed)
-  forgottenIds(ids: string[]): Set<string>;                 // the ids that have a tombstone, any table
+  forgottenIds(projectId: string, ids: string[]): Set<string>;   // the ids with a tombstone in this project, any table
   listPendingTombstones(projectId: string, limit: number): Tombstone[];
-  markTombstonesSynced(ids: string[], at: string): void;
+  markTombstonesSynced(projectId: string, ids: string[], at: string): void;
   /**
    * Deletes unpinned rows of each type last seen before its cutoff, only where nothing is lost for the team: rows
    * already synced, or rows of projects with no hub. Returns the count.
