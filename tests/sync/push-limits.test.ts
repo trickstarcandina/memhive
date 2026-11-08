@@ -197,6 +197,15 @@ describe('pull robustness', () => {
     expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
     expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(1);
   });
+  it('two pulls started together from a cursor past max_seq reset the project once', async () => {
+    const t = await setup({ dims: null });
+    addObs(t, 1, null);
+    await t.engine.push(t.project);
+    t.store.setPullCursor(t.project.id, 999);
+    const reset = vi.spyOn(t.store, 'resetProjectSync');
+    await Promise.all([t.engine.pull(t.project, 2000), t.engine.pull(t.project, 2000)]);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
   it('a hub that always reports max_seq below the cursor triggers one reset, and pull() terminates', async () => {
     let pulls = 0;
     const page = (since: number) => ({ sessions: [], observations: [], summaries: [], next_seq: since + 1, has_more: true, max_seq: since - 1 });

@@ -156,7 +156,17 @@ export class SyncEngine implements SyncHooks {
     return { accepted: { sessions: 0, observations: 0, summaries: 0 }, rejected: [...body.sessions, ...body.observations, ...body.summaries].map((r) => ({ id: r.id, reason })) };
   }
 
-  async pull(project: Project, timeoutMs: number): Promise<number> {
+  // One pull per project at a time: two pulls from the same old cursor would both reset and could move the cursor back.
+  // A second caller joins the pull in flight (it fetches the same rows) instead of queueing, so its wait stays bounded.
+  private pulling = new Map<string, Promise<number>>();
+  pull(project: Project, timeoutMs: number): Promise<number> {
+    const cur = this.pulling.get(project.id); if (cur) return cur;
+    const run = this.pullOnce(project, timeoutMs).finally(() => this.pulling.delete(project.id));
+    this.pulling.set(project.id, run);
+    return run;
+  }
+
+  private async pullOnce(project: Project, timeoutMs: number): Promise<number> {
     const client = this.clientFor(project); if (!client) return 0;
     const { store, embedDims, embedModel, logger } = this.deps;
     let applied = 0; let since = store.getPullCursor(project.id);
