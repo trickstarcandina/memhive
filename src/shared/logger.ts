@@ -1,4 +1,4 @@
-import { appendFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ensureHomeDir, resolvePaths } from './paths.js';
 
@@ -12,7 +12,9 @@ function rotate(file: string, maxBytes: number): void {
   const lock = `${file}.rotate`;
   try { writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 }); }
   catch { try { if (Date.now() - statSync(lock).mtimeMs > 10000) rmSync(lock, { force: true }); } catch { /* gone */ } return; }
-  try { if (fileSize(file) > maxBytes) renameSync(file, `${file}.1`); } finally { rmSync(lock, { force: true }); }
+  try { if (fileSize(file) > maxBytes) renameSync(file, `${file}.1`); }
+  catch { /* rename refused (Windows EBUSY/EPERM): keep appending to the big file */ }
+  finally { rmSync(lock, { force: true }); }
 }
 
 export function createLogger(home: string, name: string, env: NodeJS.ProcessEnv = process.env, opts: { maxBytes?: number } = {}): Logger {
@@ -23,7 +25,10 @@ export function createLogger(home: string, name: string, env: NodeJS.ProcessEnv 
   let dirReady = false;
   const write = (level: string, msg: string, data?: object) => {
     try {
-      if (!dirReady) { ensureHomeDir(dir); dirReady = true; }
+      if (!dirReady) {
+        ensureHomeDir(dir); dirReady = true;
+        for (const f of [file, `${file}.1`]) try { chmodSync(f, 0o600); } catch { /* not there yet */ }   // logs made by older builds were 0644
+      }
       if (fileSize(file) > maxBytes) rotate(file, maxBytes);
       appendFileSync(file, JSON.stringify({ ...(data ?? {}), t: new Date().toISOString(), level, msg }) + '\n', { mode: 0o600 });   // mode applies on create
     } catch { /* logging must never throw */ }

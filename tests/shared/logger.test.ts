@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createLogger } from '../../src/shared/logger.js';
@@ -29,6 +29,24 @@ describe('logger', () => {
     for (let i = 0; i < 10; i++) log.info('x'.repeat(40));
     expect(readFileSync(path.join(home, 'logs', 'hook.log.1'), 'utf8')).toBe('old rotated\n');
     expect(readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8').split('\n').length).toBeGreaterThan(10);
+  });
+});
+
+describe('logger robustness', () => {
+  it('still appends when the rotation rename fails', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    mkdirSync(path.join(home, 'logs', 'hook.log.1', 'busy'), { recursive: true });   // rename onto a non-empty dir fails
+    writeFileSync(path.join(home, 'logs', 'hook.log'), 'x'.repeat(200) + '\n');
+    const log = createLogger(home, 'hook', {}, { maxBytes: 100 });
+    log.info('kept');
+    expect(readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8')).toContain('"msg":"kept"');
+  });
+  it.skipIf(process.platform === 'win32')('tightens a log file left 0644 by an older build', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    mkdirSync(path.join(home, 'logs'), { recursive: true });
+    writeFileSync(path.join(home, 'logs', 'hook.log'), 'old\n', { mode: 0o644 });
+    createLogger(home, 'hook', {}).info('x');
+    expect(statSync(path.join(home, 'logs', 'hook.log')).mode & 0o777).toBe(0o600);
   });
 });
 
