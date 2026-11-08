@@ -10,7 +10,8 @@ export async function serveCommand(_args: string[], io: CliIo, env: NodeJS.Proce
   try { await store.migrate(); } catch (e) { io.stderr(`memhub serve: database unreachable or migration failed: ${e instanceof Error ? e.message : e}\n`); await store.close().catch(() => {}); return 1; }
   const admin = await ensureAdminKey(store);
   if (admin) io.stdout(`First start: created user "admin". API key (shown once):\n  ${admin}\n`);
-  const hub = await startHub(store, cfg, createLogger(resolvePaths(env.MEMHUB_HOME).home, 'hub', env));
+  let hub; try { hub = await startHub(store, cfg, createLogger(resolvePaths(env.MEMHUB_HOME).home, 'hub', env)); }
+  catch (e) { io.stderr(`memhub serve: cannot listen on :${cfg.port}: ${e instanceof Error ? e.message : e}\n`); await store.close().catch(() => {}); return 1; }
   io.stdout(`memhub hub listening on :${hub.port} (embedding ${cfg.embeddingModel ?? 'none'}${cfg.embeddingDims ? `/${cfg.embeddingDims}` : ''})\n`);
   const stop = () => void hub.close().then(() => process.exit(0));
   process.on('SIGTERM', stop); process.on('SIGINT', stop);

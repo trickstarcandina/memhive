@@ -83,3 +83,76 @@ describe('createHubStore', () => {
     expect(hubConfigFromEnv({ PORT: '8080', MEMHUB_EMBED_MODEL: 'm', MEMHUB_EMBED_DIMS: '8' })).toEqual({ port: 8080, embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
   });
 });
+
+describe('hub push hardening', () => {
+  const PK = 'github.com/t/hard';
+  const push = (key: string, body: object) => call(key, 'POST', '/v1/sync/push', { projectKey: PK, projectName: 'hard', sessions: [], observations: [], summaries: [], ...body });
+  const sum = (sessionId: string, id = newId()) => ({ id, projectId: 'x', sessionId, userId: 'u', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null });
+
+  it('rejects orphan observations and summaries instead of 500', async () => {
+    const o = hobs({ projectId: 'x', sessionId: newId(), title: 'orphan' }); const m = sum(newId());
+    const r = await push(aliceKey, { observations: [o], summaries: [m] });
+    expect(r.status).toBe(200);
+    expect(r.json.accepted).toEqual({ sessions: 0, observations: 0, summaries: 0 });
+    expect(r.json.rejected).toEqual(expect.arrayContaining([{ id: o.id, reason: 'unknown_session' }, { id: m.id, reason: 'unknown_session' }]));
+  });
+  it('rejects malformed ids per row, never drops silently', async () => {
+    const bad = '-'.repeat(36); const sid = newId();
+    const r = await push(aliceKey, { sessions: [hsess('x', { id: bad }), hsess('x', { id: sid })], observations: [hobs({ projectId: 'x', sessionId: sid, id: bad }), hobs({ projectId: 'x', sessionId: bad })], summaries: [sum(sid, bad)] });
+    expect(r.json.accepted.sessions).toBe(1);
+    expect(r.json.rejected.filter((x: any) => x.reason === 'invalid_id')).toHaveLength(4);
+  });
+  it("another user cannot overwrite or attach to someone else's rows", async () => {
+    const sid = newId(); const s = hsess('x', { id: sid, cwd: '/alice' }); const o = hobs({ projectId: 'x', sessionId: sid, title: 'alice-obs' });
+    expect((await push(aliceKey, { sessions: [s], observations: [o] })).json.accepted).toMatchObject({ sessions: 1, observations: 1 });
+    const mine = hobs({ projectId: 'x', sessionId: sid, title: 'bob-on-alice-session' });
+    const r = await push(bobKey, { sessions: [{ ...s, cwd: '/bob', endedAt: '2030-01-01T00:00:00.000Z' }], observations: [{ ...o, title: 'hijacked' }, mine] });
+    expect(r.json.accepted).toEqual({ sessions: 0, observations: 0, summaries: 0 });
+    expect(r.json.rejected.map((x: any) => x.reason)).toEqual(['unknown_session', 'unknown_session']);
+    expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', cwd: '/alice', endedAt: null });
+    expect((await store.getObservations([o.id]))[0]).toMatchObject({ userId: 'alice', title: 'alice-obs' });
+  });
+  it('invalid vectors are rejected per row', async () => {
+    const sid = newId(); const bad = hobs({ projectId: 'x', sessionId: sid, title: 'nan', embedding: [1, 'a' as any, 0, 0], embeddingModel: 'bge-m3' });
+    const r = await push(aliceKey, { sessions: [hsess('x', { id: sid })], observations: [bad] });
+    expect(r.json.rejected).toEqual([{ id: bad.id, reason: 'invalid_vector' }]);
+  });
+  it('pull paginates with has_more and caps limit at 1000', async () => {
+    const sid = newId(); const rows = Array.from({ length: 1001 }, (_, i) => hobs({ projectId: 'x', sessionId: sid, title: `p${i}` }));
+    const pk = 'github.com/t/pages';
+    expect((await call(aliceKey, 'POST', '/v1/sync/push', { projectKey: pk, projectName: 'p', sessions: [hsess('x', { id: sid })], observations: rows, summaries: [] })).json.accepted.observations).toBe(1001);
+    const p1 = await call(bobKey, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(pk)}&since=0&limit=2`);
+    expect(p1.json.has_more).toBe(true); expect(p1.json.sessions.length + p1.json.observations.length).toBe(2);
+    const big = await call(bobKey, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(pk)}&since=0&limit=5000`);
+    expect(big.json.sessions.length + big.json.observations.length).toBe(1000); expect(big.json.has_more).toBe(true);
+    const nan = await call(bobKey, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(pk)}&since=abc&limit=xyz`);
+    expect(nan.status).toBe(200);
+  });
+});
+
+describe('hub isolated servers', () => {
+  const open = async (cfg: Partial<Parameters<typeof startHub>[1]> & { dims?: number }, logs: unknown[] = []) => {
+    const st = new SqliteHubStore(':memory:', { dims: cfg.dims ?? 4 }); await st.migrate();
+    await st.createUser('u'); const k = generateApiKey(); await st.createApiKey('u', 'l', k.hash);
+    const log = { info: (...a: unknown[]) => logs.push(a), warn: (...a: unknown[]) => logs.push(a), error: (...a: unknown[]) => logs.push(a), debug: (...a: unknown[]) => logs.push(a) };
+    const h = await startHub(st, { port: 0, embeddingModel: 'bge-m3', embeddingDims: 4, bodyLimit: 2_000_000, ...cfg }, log);
+    return { h, key: k.raw, st };
+  };
+  it('HubDimsMismatch from the store keeps valid rows and rejects the bad row', async () => {
+    const { h, key } = await open({ embeddingModel: null, embeddingDims: 2, dims: 4 });
+    const sid = newId(); const ok = hobs({ projectId: 'x', sessionId: sid, title: 'plain' }); const bad = hobs({ projectId: 'x', sessionId: sid, title: 'vec', embedding: [1, 0] });
+    const res = await fetch(`http://127.0.0.1:${h.port}/v1/sync/push`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify({ projectKey: 'k/r', projectName: 'r', sessions: [hsess('x', { id: sid })], observations: [ok, bad], summaries: [] }) });
+    const j: any = await res.json();
+    expect(res.status).toBe(200); expect(j.accepted.observations).toBe(1); expect(j.rejected).toEqual([{ id: bad.id, reason: 'embedding_model_mismatch' }]);
+    await h.close();
+  });
+  it('enforces body limit (413) and 401 before buffering without a key; raw keys never reach logs', async () => {
+    const logs: unknown[] = []; const { h, key } = await open({ bodyLimit: 100 }, logs);
+    const url = `http://127.0.0.1:${h.port}/v1/sync/push`; const big = JSON.stringify({ pad: 'x'.repeat(500) });
+    expect((await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: big })).status).toBe(413);
+    expect((await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: big })).status).toBe(401);
+    await fetch(url, { method: 'POST', headers: { authorization: 'Bearer mh_secretwrongkey', 'content-type': 'application/json' }, body: '{}' });
+    expect(JSON.stringify(logs)).not.toContain(key); expect(JSON.stringify(logs)).not.toContain('mh_secretwrongkey');
+    await h.close();
+  });
+});

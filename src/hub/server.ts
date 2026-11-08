@@ -40,7 +40,8 @@ export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Pr
     if (!limiter.allow(auth.keyId)) return { status: 429, body: { error: { code: 'rate_limited', message: '60 requests per minute per key' } } };
     try { return await handleHubRoute(store, cfg, auth, method, url, body); }
     catch (e) { log.error('hub route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
-  }, undefined, cfg.bodyLimit);
+  }, // shortcut: sync pre-check only rejects missing/malformed credentials before buffering the body; a well-formed wrong key is still rejected after, by the DB lookup.
+  (url, headers) => url.pathname === '/healthz' || /^Bearer\s+mh_[A-Za-z0-9_-]+$/.test(String(headers.authorization ?? '')), cfg.bodyLimit);
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(cfg.port, '0.0.0.0', resolve); });
   const port = (server.address() as AddressInfo).port;
   log.info('hub listening', { port });
