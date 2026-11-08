@@ -21,3 +21,14 @@ describe('logger', () => {
     expect(existsSync(path.join(home, 'logs', 'hook.log.1'))).toBe(true);
   });
 });
+
+describe('logger field order', () => {
+  it('lets fixed fields win over caller data', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const log = createLogger(home, 'hook', {});
+    log.info('real', { msg: 'fake', level: 'fake', t: 'fake' });
+    const row = JSON.parse(readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8').trim());
+    expect(row).toMatchObject({ level: 'info', msg: 'real' });
+    expect(row.t).not.toBe('fake');
+  });
+});

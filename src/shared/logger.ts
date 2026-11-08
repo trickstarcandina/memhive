@@ -13,7 +13,7 @@ export function createLogger(home: string, name: string, env: NodeJS.ProcessEnv 
     try {
       mkdirSync(dir, { recursive: true });
       try { if (statSync(file).size > maxBytes) renameSync(file, `${file}.1`); } catch { /* no file yet */ }
-      appendFileSync(file, JSON.stringify({ t: new Date().toISOString(), level, msg, ...(data ?? {}) }) + '\n');
+      appendFileSync(file, JSON.stringify({ ...(data ?? {}), t: new Date().toISOString(), level, msg }) + '\n');
     } catch { /* logging must never throw */ }
   };
   return {
