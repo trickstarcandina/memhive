@@ -134,7 +134,8 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
   "contextTokens": 2000,
   "context": { "scope": "team" },
   "excludeProjects": ["github.com/acme/secret-*", "/home/me/clients/**"],
-  "retentionDays": { "default": null, "discovery": 180 }
+  "retentionDays": { "default": null, "discovery": 180 },
+  "mcp": { "allowProjects": [] }
 }
 ```
 
@@ -157,6 +158,7 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
 | `MEMHIVE_CONTEXT_SCOPE` | `team` | `mine` keeps teammates' pulled rows out of the session-start context; MCP search still finds them (`context.scope`). The older `context.includeOtherUsers: false` / `MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS=0` still work as a deprecated alias for `mine`. |
 | `MEMHIVE_EXCLUDE_PROJECTS` | none | Comma-separated project keys or globs that are never recorded (`excludeProjects`). See [Opting out](#opting-out). |
 | `MEMHIVE_RETENTION_DAYS` | unset | Days to keep observations of types without their own entry (`retentionDays.default`; unset or `0`: forever). `retentionDays` also takes one entry per type, and `discovery` defaults to 180. Age counts from the last time a row was recorded again. Pinned rows are never removed, and in a linked project only rows already pushed to the hub are. The daemon applies it at start and every 10 minutes. |
+| `MEMHIVE_MCP_ALLOW_PROJECTS` | none | Comma-separated project keys or globs the MCP `search` tool may read when the agent passes `project` (`mcp.allowProjects`). Any other key is ignored and the current project is searched, so text in one repo cannot make the agent read another project's memory. |
 | `MEMHIVE_DISABLED` | unset | Set to `1` to turn memhive off: hooks exit at once without contacting the daemon, and MCP tools answer "memhive disabled". |
 | `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
 

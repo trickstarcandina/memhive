@@ -13,6 +13,8 @@ export interface Settings {
   excludeProjects: string[];
   /** Days to keep observations, per type, else `default`; null keeps forever. Pinned rows are always kept. */
   retentionDays: RetentionDays;
+  /** Project keys or globs MCP `search` may read besides the current project (default none). */
+  mcp: { allowProjects: string[] };
 }
 export type RetentionDays = { default: number | null } & Partial<Record<ObservationType, number | null>>;
 
@@ -25,6 +27,7 @@ export const DEFAULT_SETTINGS: Settings = {
   context: { scope: 'team' },
   excludeProjects: [],
   retentionDays: { default: null, discovery: 180 },
+  mcp: { allowProjects: [] },
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -73,7 +76,9 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const retentionDays: RetentionDays = { ...DEFAULT_SETTINGS.retentionDays };
   for (const k of ['default', ...OBSERVATION_TYPES] as const) { const d = days(fr[k]); if (d !== undefined) retentionDays[k] = d; }
   if (env.MEMHIVE_RETENTION_DAYS !== undefined && env.MEMHIVE_RETENTION_DAYS !== '') retentionDays.default = posInt(env.MEMHIVE_RETENTION_DAYS) ?? null;   // 0 or junk: keep forever
-  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { scope }, excludeProjects, retentionDays };
+  const fm = isObj(file.mcp) ? (file.mcp as Record<string, unknown>) : {};
+  const allowProjects = env.MEMHIVE_MCP_ALLOW_PROJECTS !== undefined ? env.MEMHIVE_MCP_ALLOW_PROJECTS.split(',').map((x) => x.trim()).filter(Boolean) : list(fm.allowProjects) ?? [];
+  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { scope }, excludeProjects, retentionDays, mcp: { allowProjects } };
 }
 
 export function saveSettings(home: string, settings: Settings): void {

@@ -100,4 +100,11 @@ describe('settings', () => {
     expect(loadSettings(home, { MEMHIVE_RETENTION_DAYS: '90' }).retentionDays.default).toBe(90);
     expect(loadSettings(home, { MEMHIVE_RETENTION_DAYS: '0' }).retentionDays.default).toBeNull();
   });
+  it('mcp.allowProjects: default empty, file list, env comma list', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    expect(loadSettings(home, {}).mcp.allowProjects).toEqual([]);
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ mcp: { allowProjects: ['github.com/acme/*'] } }));
+    expect(loadSettings(home, {}).mcp.allowProjects).toEqual(['github.com/acme/*']);
+    expect(loadSettings(home, { MEMHIVE_MCP_ALLOW_PROJECTS: 'a, b' }).mcp.allowProjects).toEqual(['a', 'b']);
+  });
 });

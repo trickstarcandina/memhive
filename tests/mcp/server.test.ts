@@ -117,3 +117,36 @@ it('takes MEMHIVE_CWD from the plugin env only when it is an expanded absolute p
   expect(mcpCwd({ MEMHIVE_CWD: '/work/app' }, '/x')).toBe('/work/app');
   for (const v of [undefined, '', '${CLAUDE_PROJECT_DIR:-}', 'rel/dir']) expect(mcpCwd({ MEMHIVE_CWD: v }, '/x')).toBe('/x');
 });
+
+describe('mcp hardening', () => {
+  const connect = async (deps: Parameters<typeof createMcpServer>[0]) => {
+    const server = createMcpServer(deps); const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a);
+    const c = new Client({ name: 't', version: '0' }); await c.connect(b); return c;
+  };
+  it('reconnects when daemon.json token changed or vanished (L5)', async () => {
+    const real = new DaemonClient(h.info);
+    const stale = new DaemonClient({ ...h.info, token: 'old-token' });
+    let tokenNow: string | null = h.info.token; let reconnects = 0;
+    const c = await connect({ client: stale, cwd: home, currentToken: () => tokenNow, reconnect: async () => { reconnects++; tokenNow = h.info.token; return real; } });   // ensureDaemon rewrites daemon.json
+    await c.callTool({ name: 'search', arguments: { query: 'pnpm' } });
+    expect(reconnects).toBe(1);   // cached token differs from daemon.json
+    await c.callTool({ name: 'search', arguments: { query: 'pnpm' } });
+    expect(reconnects).toBe(1);   // now in step
+    tokenNow = null;
+    await c.callTool({ name: 'search', arguments: { query: 'pnpm' } });
+    expect(reconnects).toBe(2);   // daemon.json gone
+    await c.close();
+  });
+  it('search ignores foreign project keys unless allowlisted (L10)', async () => {
+    const dc = new DaemonClient(h.info);
+    await dc.request('POST', '/v1/memories', { projectKey: 'github.com/acme/secret-repo', text: 'the vault password rotates monthly', title: 'Vault rotation' });
+    const plain = await connect({ client: dc, cwd: home });
+    const denied = text(await plain.callTool({ name: 'search', arguments: { query: 'vault', project: 'github.com/acme/secret-repo' } }));
+    expect(denied).toContain('not in settings.mcp.allowProjects'); expect(denied).not.toContain('Vault rotation');
+    const allowed = await connect({ client: dc, cwd: home, allowProjects: ['github.com/acme/*'] });
+    expect(text(await allowed.callTool({ name: 'search', arguments: { query: 'vault', project: 'github.com/acme/secret-repo' } }))).toContain('Vault rotation');
+    const key = (await dc.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
+    expect(text(await plain.callTool({ name: 'search', arguments: { query: 'pnpm', project: key } }))).not.toContain('allowProjects');
+    await plain.close(); await allowed.close();
+  });
+});

@@ -11,6 +11,7 @@ export class DaemonClient {
   private fetchImpl: typeof fetch;
   constructor(private info: DaemonInfo, fetchImpl?: typeof fetch) { this.fetchImpl = fetchImpl ?? fetch; }
   get baseUrl(): string { return `http://127.0.0.1:${this.info.port}`; }
+  get token(): string { return this.info.token; }
   async request<T = unknown>(method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 5000): Promise<T> {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
