@@ -1,0 +1,60 @@
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { SqliteStore } from '../../src/store/sqlite/store.js';
+import { SyncEngine } from '../../src/sync/engine.js';
+import { saveCredentials } from '../../src/sync/credentials.js';
+import { handleRoute } from '../../src/daemon/routes.js';
+import type { DaemonContext } from '../../src/daemon/context.js';
+import { obs, sess } from '../store/store-contract.js';
+
+const hubUrl = 'http://127.0.0.1:9';
+function setup(config: Record<string, unknown>) {
+  const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+  saveCredentials(home, { hubs: { [hubUrl]: { key: 'mh_' + 'A'.repeat(43), user: 'alice' } } });
+  const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
+  const p = store.getOrCreateProject('github.com/t/proto', 'proto'); store.setProjectHub(p.id, hubUrl);
+  const s = sess(p.id, { userId: 'alice', cwd: '/home/alice/secret-client/app' }); store.upsertSession(s);
+  store.insertObservations([obs({ projectId: p.id, sessionId: s.id, userId: 'alice' })]);
+  const bodies: any[] = []; const urls: string[] = [];
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    const u = String(url); urls.push(u);
+    if (u.endsWith('/v1/config')) return new Response(JSON.stringify(config), { status: 200 });
+    if (u.endsWith('/v1/sync/push')) { const b = JSON.parse(String(init!.body)); bodies.push(b); return new Response(JSON.stringify({ accepted: { sessions: b.sessions.length, observations: b.observations.length, summaries: b.summaries.length }, rejected: [] }), { status: 200 }); }
+    return new Response(JSON.stringify({ sessions: [], observations: [], summaries: [], next_seq: 0, has_more: false, max_seq: 0 }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const warns: string[] = [];
+  const engine = new SyncEngine({ store, home, logger: { info() {}, debug() {}, error() {}, warn(m: string) { warns.push(m); } }, embedDims: null, fetchImpl });
+  return { store, project: store.getProject(p.id)!, engine, bodies, urls, warns };
+}
+const base = { version: 'x', embedding_model: null, embedding_dims: null, body_limit: 2_000_000 };
+
+describe('hub protocol', () => {
+  it('a hub with a newer protocol: no push or pull, hub_protocol error in sync output and status', async () => {
+    const t = setup({ ...base, protocol: 2 });
+    const r = await t.engine.syncNow(t.project);
+    expect(r.pushed).toBeNull(); expect(r.pulled).toBe(0);
+    expect(r.error).toMatch(/^hub_protocol: .*protocol 2.*upgrade memhive/);
+    expect(t.urls.filter((u) => !u.endsWith('/v1/config'))).toEqual([]);
+    const ctx = { store: t.store, sync: t.engine, observer: { authFailed: false } } as unknown as DaemonContext;
+    const st = (await handleRoute(ctx, 'GET', new URL('http://x/v1/status'), undefined)).body as { hubErrors: Array<{ hub: string; error: string }> };
+    expect(st.hubErrors).toEqual([{ hub: hubUrl, error: expect.stringContaining('hub_protocol') }]);
+  });
+  it.each([['missing', {}], ['lower', { protocol: 0 }]])('a hub with a %s protocol: warn once, sync goes on', async (_n, extra) => {
+    const t = setup({ ...base, ...extra });
+    const r = await t.engine.syncNow(t.project);
+    expect(r.error).toBeUndefined(); expect(r.pushed!.accepted.observations).toBe(1);
+    await t.engine.syncNow(t.project);
+    expect(t.warns.filter((w) => w.includes('older than this client'))).toHaveLength(1);
+    expect(t.engine.hubErrors()).toEqual([]);
+  });
+  it('push bodies never carry cwd', async () => {
+    const t = setup({ ...base, protocol: 1 });
+    await t.engine.push(t.project);
+    expect(t.bodies[0].sessions).toHaveLength(1);
+    expect(t.bodies[0].sessions[0]).not.toHaveProperty('cwd');
+    expect(JSON.stringify(t.bodies)).not.toContain('secret-client');
+    expect(t.store.getSession(t.bodies[0].sessions[0].id)!.cwd).toBe('/home/alice/secret-client/app');   // kept locally
+  });
+});

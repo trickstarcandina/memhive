@@ -2,7 +2,7 @@ import type { Logger } from '../shared/logger.js';
 import type { Observation, Project, Session, Store, Summary } from '../store/types.js';
 import type { SyncHooks } from '../daemon/context.js';
 import { z } from 'zod';
-import { HubObservationSchema, HubSessionSchema, HubSummarySchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
+import { HUB_PROTOCOL, HubObservationSchema, HubSessionSchema, HubSummarySchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
 import { redactSecrets } from '../hooks/sanitize.js';
 import type { HubObservation } from '../hub/store/types.js';
 import { HubClient, HubError, type HubConfigInfo } from './client.js';
@@ -27,9 +27,10 @@ const cutList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => cut(v, MAX_ITEM
 const clipList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => v.slice(0, MAX_ITEM));
 const clipObs = <T extends Observation>(o: T): T => ({ ...o, title: o.title.slice(0, MAX_SHORT), subtitle: o.subtitle.slice(0, MAX_SHORT), narrative: o.narrative.slice(0, MAX_LONG), facts: clipList(o.facts), concepts: clipList(o.concepts), filesRead: clipList(o.filesRead), filesModified: clipList(o.filesModified), embeddingModel: o.embeddingModel?.slice(0, MAX_SHORT) ?? null });
 const clipSum = (m: Summary): Summary => ({ ...m, request: m.request.slice(0, MAX_LONG), learned: m.learned.slice(0, MAX_LONG), completed: m.completed.slice(0, MAX_LONG), nextSteps: m.nextSteps.slice(0, MAX_LONG) });
-const clipSess = (x: Session): Session => ({ ...x, host: x.host.slice(0, MAX_SHORT), hostSessionId: x.hostSessionId.slice(0, MAX_SHORT), cwd: x.cwd.slice(0, MAX_SHORT) });
+// cwd stays local: it is a path on this machine, the hub neither needs nor keeps it.
+const clipSess = ({ cwd: _cwd, ...x }: Session): Omit<Session, 'cwd'> => ({ ...x, host: x.host.slice(0, MAX_SHORT), hostSessionId: x.hostSessionId.slice(0, MAX_SHORT) });
 // Fields clipped above: a hub that still refuses one has smaller caps, so the row stays queued for a client that matches it.
-const CLIPPED = new Set(['title', 'subtitle', 'narrative', 'facts', 'concepts', 'filesRead', 'filesModified', 'embeddingModel', 'request', 'learned', 'completed', 'nextSteps', 'host', 'hostSessionId', 'cwd']);
+const CLIPPED = new Set(['title', 'subtitle', 'narrative', 'facts', 'concepts', 'filesRead', 'filesModified', 'embeddingModel', 'request', 'learned', 'completed', 'nextSteps', 'host', 'hostSessionId']);
 // Hub errors that mean "the hub or the path to it is unwell", not "this batch is bad": rows stay queued and the project backs off.
 // A fetch that rejects (connection refused, DNS, timeout) gets the same backoff ladder as a 5xx, so a hub that is down is not
 // hammered on every trigger.
@@ -64,7 +65,25 @@ export class SyncEngine implements SyncHooks {
   private async hubConfig(client: HubClient, hubUrl: string, refresh = false): Promise<HubConfigInfo | null> {
     const hit = this.hubCfg.get(hubUrl);
     if (!refresh && hit && Date.now() - hit.at < CONFIG_TTL_MS) return hit.cfg;
-    try { const c = await client.config(); this.hubCfg.set(hubUrl, { cfg: c, at: Date.now() }); return c; } catch { return null; }   // unknown: send vectors, the reject path resends without
+    try {
+      const c = await client.config(); this.hubCfg.set(hubUrl, { cfg: c, at: Date.now() });
+      if ((c.protocol ?? 0) < HUB_PROTOCOL && !this.oldHubWarned.has(hubUrl)) { this.oldHubWarned.add(hubUrl); this.deps.logger.warn('hub is older than this client (no or lower protocol); syncing anyway, upgrade the hub', { hub: hubUrl, protocol: c.protocol ?? null }); }
+      return c;
+    } catch { return null; }   // unknown: send vectors, the reject path resends without
+  }
+  private oldHubWarned = new Set<string>();
+  /** A hub newer than this client may send or expect shapes we do not know: refuse to sync with it. */
+  private async protocolError(client: HubClient, project: Project): Promise<string | null> {
+    const p = (await this.hubConfig(client, project.hubUrl!))?.protocol;
+    if (p === undefined || p <= HUB_PROTOCOL) return null;
+    const msg = `hub_protocol: the hub speaks sync protocol ${p}, this memhive speaks ${HUB_PROTOCOL}; upgrade memhive`;
+    this.lastError.set(project.id, msg);
+    this.deps.logger.warn('sync refused: hub protocol is newer than this client', { hub: project.hubUrl, protocol: p });
+    return msg;
+  }
+  /** Hubs whose protocol is newer than this client, with the error (shown by doctor). */
+  hubErrors(): Array<{ hub: string; error: string }> {
+    return [...this.hubCfg].filter(([, h]) => (h.cfg.protocol ?? 0) > HUB_PROTOCOL).map(([hub, h]) => ({ hub, error: `hub_protocol: hub speaks protocol ${h.cfg.protocol}, this memhive speaks ${HUB_PROTOCOL}` }));
   }
 
   schedulePush(projectId: string): void {
@@ -100,6 +119,7 @@ export class SyncEngine implements SyncHooks {
     if (off && !opts.force && Date.now() < off.until) return null;
     let cap = BATCH;   // rows per body; halved on 413 for the rest of this call
     let isolating = false;   // sending row by row to find a row a bare 4xx keeps refusing
+    { const c = this.clientFor(project); if (c && await this.protocolError(c, project)) return null; }
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const client = this.clientFor(project); if (!client) return round === 0 ? null : total;
       const { store, logger } = this.deps;
@@ -197,6 +217,7 @@ export class SyncEngine implements SyncHooks {
 
   private async pullOnce(project: Project, timeoutMs: number): Promise<number> {
     const client = this.clientFor(project); if (!client) return 0;
+    if (await this.protocolError(client, project)) return 0;
     const { store, embedDims, embedModel, logger } = this.deps;
     let applied = 0; let since = store.getPullCursor(project.id);
     const deadline = Date.now() + timeoutMs; let wasReset = false;
@@ -239,10 +260,10 @@ export class SyncEngine implements SyncHooks {
       const observations = rows(page.observations, HubObservationSchema).map((o) => ({ ...o, title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) }));
       const summaries = rows(page.summaries, HubSummarySchema).map((m) => ({ ...m, request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) }));
       for (const s of sessions) {
-        // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes). Our own sessions, and a
+        // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
         // session of another project or user that happens to share the id, are never overwritten.
         const cur = store.getSession(s.id);
-        if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || (cur.endedAt === s.endedAt && cur.cwd === s.cwd))) continue;
+        if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || cur.endedAt === s.endedAt)) continue;
         if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
       }
       // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.

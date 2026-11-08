@@ -12,6 +12,8 @@ export interface SyncHooks {
   schedulePush(projectId: string): void;
   /** Project ids whose push keeps failing with a 404 or a bare 4xx. */
   blockedProjects?(): string[];
+  /** Hubs this client refuses to sync with (protocol newer than ours). */
+  hubErrors?(): Array<{ hub: string; error: string }>;
   syncNow(project: Project): Promise<{ pushed: { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> } | null; pulled: number; error?: string }>;
   close(): void | Promise<void>;
 }
