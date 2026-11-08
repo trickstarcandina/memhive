@@ -4,6 +4,14 @@ export interface HubObservation extends Observation { embedding: number[] | null
 export interface HubApiKey { id: string; userName: string; label: string; createdAt: string; revokedAt: string | null }
 export type SyncTable = 'sessions' | 'observations' | 'summaries';
 export interface SyncLogEntry { seq: number; table: SyncTable; rowId: string }
+/** Thrown by insertObservations after the batch is written when some rows had a vector of the wrong length; those rows are not written. */
+export class HubDimsMismatch extends Error {
+  constructor(public rowId: string, public expected: number, public actual: number, public inserted: string[] = [], public rejected: string[] = [rowId]) {
+    super(`embedding_dims_mismatch: row ${rowId} has ${actual} dims, expected ${expected}`);
+    this.name = 'HubDimsMismatch';
+  }
+}
+// upsertSessions / insertObservations / insertSummaries append the sync_log entries for exactly the rows they wrote, in the same transaction.
 export interface HubStore {
   migrate(): Promise<void>; close(): Promise<void>;
   getOrCreateProject(key: string, name: string): Promise<Project>;
@@ -11,7 +19,6 @@ export interface HubStore {
   upsertSessions(rows: Session[]): Promise<string[]>;                 // ids inserted or updated
   insertObservations(rows: HubObservation[]): Promise<string[]>;      // ids newly inserted (existing ignored)
   insertSummaries(rows: Summary[]): Promise<string[]>;
-  appendSyncLog(projectId: string, entries: Array<{ table: SyncTable; rowId: string }>): Promise<void>;
   listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]>;
   maxSeq(projectId: string): Promise<number>;
   getSessions(ids: string[]): Promise<Session[]>;

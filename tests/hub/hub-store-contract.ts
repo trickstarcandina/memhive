@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { HubDimsMismatch } from '../../src/hub/store/types.js';
 import type { HubStore, HubObservation } from '../../src/hub/store/types.js';
 import type { Session, Summary } from '../../src/store/types.js';
 import { newId } from '../../src/shared/ids.js';
@@ -47,18 +48,51 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>): v
       expect((await s.getSummaries([sm.id]))[0].request).toBe('r');
     });
 
-    it('sync log is ordered, filtered by project, cursor-safe', async () => {
-      const p = await s.getOrCreateProject('k', 'n'); const q = await s.getOrCreateProject('k2', 'n2');
-      await s.appendSyncLog(p.id, [{ table: 'sessions', rowId: 's1' }, { table: 'observations', rowId: 'o1' }]);
-      await s.appendSyncLog(q.id, [{ table: 'observations', rowId: 'o9' }]);
-      await s.appendSyncLog(p.id, [{ table: 'summaries', rowId: 'm1' }]);
-      const all = await s.listSyncLog(p.id, 0, 10);
-      expect(all.map((e) => e.rowId)).toEqual(['s1', 'o1', 'm1']);
-      expect(all[0].seq).toBeLessThan(all[2].seq);
-      expect((await s.listSyncLog(p.id, all[0].seq, 10)).map((e) => e.rowId)).toEqual(['o1', 'm1']);
+    it('sync log is written atomically and idempotently', async () => {
+      const p = await s.getOrCreateProject('k', 'n'); const a = hsess(p.id);
+      const o = hobs({ projectId: p.id, sessionId: a.id });
+      const sm: Summary = { id: newId(), projectId: p.id, sessionId: a.id, userId: 'alice', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null };
+      const push = async () => [await s.upsertSessions([a]), await s.insertObservations([o]), await s.insertSummaries([sm])];
+      expect(await push()).toEqual([[a.id], [o.id], [sm.id]]);
+      const first = await s.listSyncLog(p.id, 0, 10);
+      expect(first.map((e) => [e.table, e.rowId])).toEqual([['sessions', a.id], ['observations', o.id], ['summaries', sm.id]]);
+      expect(first[0].seq).toBeLessThan(first[2].seq);
+      expect(await push()).toEqual([[], [], []]);
+      expect(await s.listSyncLog(p.id, 0, 10)).toEqual(first);
+      expect(await s.maxSeq(p.id)).toBe(first[2].seq);
+      expect((await s.listSyncLog(p.id, first[0].seq, 10)).map((e) => e.rowId)).toEqual([o.id, sm.id]);
       expect(await s.listSyncLog(p.id, 10_000, 10)).toEqual([]);
-      expect(await s.maxSeq(p.id)).toBe(all[2].seq);
       expect(await s.listSyncLog(p.id, 0, 1)).toHaveLength(1);
+      const q = await s.getOrCreateProject('k2', 'n2');
+      expect(await s.listSyncLog(q.id, 0, 10)).toEqual([]);
+      expect(await s.maxSeq(q.id)).toBe(0);
+    });
+
+    it('same session from two machines: one row, one log entry per real change', async () => {
+      const p = await s.getOrCreateProject('k', 'n'); const a = hsess(p.id);
+      await s.upsertSessions([a]);
+      expect(await s.upsertSessions([a])).toEqual([]);
+      expect(await s.upsertSessions([{ ...a, endedAt: '2026-01-02T00:00:00.000Z' }])).toEqual([a.id]);
+      expect(await s.upsertSessions([{ ...a, endedAt: '2026-01-01T00:00:00.000Z' }])).toEqual([]); // older end does not win
+      expect((await s.getSessions([a.id]))[0].endedAt).toBe('2026-01-02T00:00:00.000Z');
+      expect(await s.upsertSessions([{ ...a, userId: 'mallory', endedAt: '2026-02-01T00:00:00.000Z' }])).toEqual([]); // foreign owner ignored
+      expect((await s.getSessions([a.id]))[0].userId).toBe('alice');
+      expect(await s.listSyncLog(p.id, 0, 10)).toHaveLength(2);
+    });
+
+    it('dims mismatch rejects only that row', async () => {
+      const p = await s.getOrCreateProject('k', 'n'); const a = hsess(p.id); await s.upsertSessions([a]);
+      const bad = hobs({ projectId: p.id, sessionId: a.id, embedding: [1, 2], embeddingModel: 'm' });
+      const good = hobs({ projectId: p.id, sessionId: a.id, embedding: [1, 0, 0, 0], embeddingModel: 'm' });
+      const err = await s.insertObservations([bad, good]).catch((e) => e);
+      expect(err).toBeInstanceOf(HubDimsMismatch); expect(err.rowId).toBe(bad.id); expect(err.inserted).toEqual([good.id]);
+      expect(await s.getObservations([bad.id, good.id])).toHaveLength(1);
+      expect((await s.listSyncLog(p.id, 0, 10)).map((e) => e.rowId)).toEqual([a.id, good.id]);
+    });
+
+    it('concurrent getOrCreateProject yields one project', async () => {
+      const [x, y] = await Promise.all([s.getOrCreateProject('k', 'n'), s.getOrCreateProject('k', 'n')]);
+      expect(x.id).toBe(y.id);
     });
 
     it('fts search', async () => {
@@ -66,7 +100,7 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>): v
       await s.insertObservations([hobs({ projectId: p.id, sessionId: a.id, title: 'Rotate JWT secret', type: 'decision' })]);
       expect(await s.searchObservationsFts('jwt', { projectId: p.id, limit: 5 })).toHaveLength(1);
       expect(await s.searchObservationsFts('jwt', { projectId: p.id, type: 'bugfix', limit: 5 })).toHaveLength(0);
-      expect(await s.searchObservationsFts('a: "b" OR *', { projectId: p.id, limit: 5 })).toBeDefined();
+      expect(Array.isArray(await s.searchObservationsFts('a: "b" OR * ) ( NEAR', { projectId: p.id, limit: 5 }))).toBe(true);
     });
 
     it('users and keys', async () => {

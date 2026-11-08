@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { HubDimsMismatch } from './types.js';
 import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
 import { HUB_SQLITE_MIGRATIONS } from './migrations-sqlite.js';
@@ -9,7 +10,7 @@ type Row = Record<string, any>;
 const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 const vecToBlob = (v: number[] | null) => (v ? Buffer.from(new Float32Array(v).buffer) : null);
-const blobToVec = (b: Buffer | null): number[] | null => (b ? Array.from(new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4)) : null);
+const blobToVec = (b: Buffer | null): number[] | null => (b ? Array.from(new Float32Array(Uint8Array.from(b).buffer)) : null);
 const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: null });
 const rowToObs = (r: Row): HubObservation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: 'hub', syncedAt: null, embedding: blobToVec(r.embedding ?? null) });
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: 'hub', syncedAt: null });
@@ -18,9 +19,11 @@ const inList = (ids: string[]) => ids.map(() => '?').join(',');
 
 export class SqliteHubStore implements HubStore {
   private db: Database.Database;
-  constructor(file: string, _opts: { dims: number | null }) {
+  private dims: number | null;
+  constructor(file: string, opts: { dims: number | null }) {
+    this.dims = opts.dims;
     this.db = new Database(file);
-    this.db.pragma('journal_mode = WAL'); this.db.pragma('busy_timeout = 5000');
+    this.db.pragma('journal_mode = WAL'); this.db.pragma('busy_timeout = 5000'); this.db.pragma('foreign_keys = ON');
   }
   async migrate(): Promise<void> {
     this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
@@ -31,32 +34,38 @@ export class SqliteHubStore implements HubStore {
 
   async getProjectByKey(key: string): Promise<Project | null> { const r = this.db.prepare('SELECT * FROM projects WHERE key = ?').get(key) as Row | undefined; return r ? { id: r.id, key: r.key, name: r.name, hubUrl: null, createdAt: r.created_at } : null; }
   async getOrCreateProject(key: string, name: string): Promise<Project> {
-    const ex = await this.getProjectByKey(key); if (ex) return ex;
-    const p: Project = { id: newId(), key, name, hubUrl: null, createdAt: new Date().toISOString() };
-    this.db.prepare('INSERT INTO projects(id, key, name, created_at) VALUES (?, ?, ?, ?)').run(p.id, p.key, p.name, p.createdAt);
-    return p;
+    this.db.prepare('INSERT INTO projects(id, key, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO NOTHING').run(newId(), key, name, new Date().toISOString());
+    return (await this.getProjectByKey(key))!;
   }
+  private logStmt?: Database.Statement;
+  private get log(): Database.Statement { return (this.logStmt ??= this.db.prepare('INSERT INTO sync_log(project_id, tbl, row_id) VALUES (?, ?, ?)')); }
   async upsertSessions(rows: Session[]): Promise<string[]> {
+    const newEnd = `CASE WHEN excluded.ended_at IS NULL THEN sessions.ended_at WHEN sessions.ended_at IS NULL THEN excluded.ended_at ELSE MAX(sessions.ended_at, excluded.ended_at) END`;
     const stmt = this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at) VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt)
-      ON CONFLICT(id) DO UPDATE SET ended_at = COALESCE(excluded.ended_at, sessions.ended_at), cwd = excluded.cwd`);
-    this.db.transaction(() => { for (const r of rows) stmt.run({ id: r.id, projectId: r.projectId, userId: r.userId, host: r.host, hostSessionId: r.hostSessionId, cwd: r.cwd, startedAt: r.startedAt, endedAt: r.endedAt ?? null }); })();
-    return rows.map((r) => r.id);
+      ON CONFLICT(id) DO UPDATE SET ended_at = ${newEnd}, cwd = excluded.cwd
+      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id AND (sessions.cwd IS NOT excluded.cwd OR sessions.ended_at IS NOT (${newEnd}))`);
+    const changed: string[] = [];
+    this.db.transaction(() => { for (const r of rows) { if (stmt.run({ id: r.id, projectId: r.projectId, userId: r.userId, host: r.host, hostSessionId: r.hostSessionId, cwd: r.cwd, startedAt: r.startedAt, endedAt: r.endedAt ?? null }).changes) { changed.push(r.id); this.log.run(r.projectId, 'sessions', r.id); } } })();
+    return changed;
   }
   async insertObservations(rows: HubObservation[]): Promise<string[]> {
     const stmt = this.db.prepare(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`);
-    const inserted: string[] = [];
-    this.db.transaction(() => { for (const o of rows) { const r = stmt.run(o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, j(o.facts), o.narrative, j(o.concepts), j(o.filesRead), j(o.filesModified), o.createdAt, o.embeddingModel, vecToBlob(o.embedding)); if (r.changes) inserted.push(o.id); } })();
+    const inserted: string[] = []; const rejected: HubObservation[] = [];
+    this.db.transaction(() => {
+      for (const o of rows) {
+        if (this.dims !== null && o.embedding && o.embedding.length !== this.dims) { rejected.push(o); continue; }
+        const r = stmt.run(o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, j(o.facts), o.narrative, j(o.concepts), j(o.filesRead), j(o.filesModified), o.createdAt, o.embeddingModel, vecToBlob(o.embedding));
+        if (r.changes) { inserted.push(o.id); this.log.run(o.projectId, 'observations', o.id); }
+      }
+    })();
+    if (rejected.length) throw new HubDimsMismatch(rejected[0].id, this.dims!, rejected[0].embedding!.length, inserted, rejected.map((o) => o.id));
     return inserted;
   }
   async insertSummaries(rows: Summary[]): Promise<string[]> {
     const stmt = this.db.prepare(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`);
     const inserted: string[] = [];
-    this.db.transaction(() => { for (const s of rows) { const r = stmt.run(s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt); if (r.changes) inserted.push(s.id); } })();
+    this.db.transaction(() => { for (const s of rows) { if (stmt.run(s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt).changes) { inserted.push(s.id); this.log.run(s.projectId, 'summaries', s.id); } } })();
     return inserted;
-  }
-  async appendSyncLog(projectId: string, entries: Array<{ table: SyncTable; rowId: string }>): Promise<void> {
-    const stmt = this.db.prepare('INSERT INTO sync_log(project_id, tbl, row_id) VALUES (?, ?, ?)');
-    this.db.transaction(() => { for (const e of entries) stmt.run(projectId, e.table, e.rowId); })();
   }
   async listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]> {
     return (this.db.prepare('SELECT seq, tbl, row_id FROM sync_log WHERE project_id = ? AND seq > ? ORDER BY seq LIMIT ?').all(projectId, sinceSeq, limit) as Row[]).map((r) => ({ seq: Number(r.seq), table: r.tbl, rowId: r.row_id }));
@@ -75,7 +84,7 @@ export class SqliteHubStore implements HubStore {
     if (f.type) { parts.push('o.type = ?'); params.push(f.type); }
     if (f.userId) { parts.push('o.user_id = ?'); params.push(f.userId); }
     if (f.since) { parts.push('o.created_at >= ?'); params.push(f.since); }
-    const rows = this.db.prepare(`SELECT o.* FROM observations_fts JOIN observations o ON o.rowid = observations_fts.rowid WHERE observations_fts MATCH ? AND ${parts.join(' AND ')} ORDER BY bm25(observations_fts) LIMIT ?`).all(q, ...params, f.limit) as Row[];
+    const rows = this.db.prepare(`SELECT o.id, o.project_id, o.session_id, o.user_id, o.type, o.title, o.subtitle, o.facts, o.narrative, o.concepts, o.files_read, o.files_modified, o.created_at, o.embedding_model FROM observations_fts JOIN observations o ON o.rowid = observations_fts.rowid WHERE observations_fts MATCH ? AND ${parts.join(' AND ')} ORDER BY bm25(observations_fts) LIMIT ?`).all(q, ...params, f.limit) as Row[];
     return rows.map((r) => { const { embedding: _e, ...rest } = rowToObs(r); return rest; });
   }
   async countUsers(): Promise<number> { return Number((this.db.prepare('SELECT COUNT(*) c FROM users').get() as Row).c); }
