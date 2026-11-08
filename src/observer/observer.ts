@@ -30,6 +30,8 @@ export class Observer {
   constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger; reloadProvider?: () => LlmProvider | null }, opts: Partial<ObserverOptions> = {}) {
     this.opts = { ...DEFAULTS, ...opts };
   }
+  /** In memory, since the daemon started (`memhive stats`): provider calls, failed calls, unparseable answers, rows stored, duplicates skipped. */
+  readonly counters = { since: new Date().toISOString(), calls: 0, failures: 0, unparseable: 0, stored: 0, duplicates: 0 };
   /** Test seam: live session entries. */
   get sessionCount(): number { return this.sessions.size; }
   get authFailed(): boolean { return this.authFailedAt !== null; }
@@ -126,11 +128,12 @@ export class Observer {
       if (latest && this.summarizedPrompt.get(ctx.sessionId)?.promptId === latest.id) { if (prev) this.summarizedPrompt.set(ctx.sessionId, prev); else this.summarizedPrompt.delete(ctx.sessionId); }
       s.turnObservations = [...observations, ...s.turnObservations];
     };
+    this.counters.calls++;
     try {
       const text = await this.deps.provider.complete({ system: SUMMARY_SYSTEM, user: buildSummaryPrompt({ projectName: ctx.projectName, prompt, observations }), maxTokens: 1024 });
       const parsed = parseSummary(text);
       const draft = parsed && { request: redactSecrets(parsed.request), learned: redactSecrets(parsed.learned), completed: redactSecrets(parsed.completed), nextSteps: redactSecrets(parsed.nextSteps) };
-      if (!draft) { this.deps.logger.warn('summary unparseable', { sessionId: ctx.sessionId }); return; }
+      if (!draft) { this.counters.unparseable++; this.deps.logger.warn('summary unparseable', { sessionId: ctx.sessionId }); return; }
       const summary: Summary = { id: newId(), projectId: ctx.projectId, sessionId: ctx.sessionId, userId: ctx.userId, ...draft, createdAt: new Date().toISOString(), origin: 'local', syncedAt: null };
       this.deps.store.insertSummaries([summary]);
       this.onStored?.(ctx.projectId);
@@ -161,10 +164,11 @@ export class Observer {
     const prompt = store.latestPrompt(ctx.sessionId)?.text ?? null;
     const recentTitles = store.listSessionObservations(ctx.sessionId, 10).map((o) => o.title);
     let text: string;
+    this.counters.calls++;
     try { text = await provider.complete({ system: OBSERVER_SYSTEM, user: buildObservationPrompt({ projectName: ctx.projectName, prompt, recentTitles, events }), maxTokens: this.opts.maxTokens }); }
     catch (e) { this.handleProviderError(e, 'observation'); return; }
     const drafts = parseObservations(text);
-    if (drafts === null) { logger.warn('observer output unparseable, batch dropped', { sessionId: ctx.sessionId, events: events.length }); return; }
+    if (drafts === null) { this.counters.unparseable++; logger.warn('observer output unparseable, batch dropped', { sessionId: ctx.sessionId, events: events.length }); return; }
     if (drafts.length === 0) return;
     const rows = drafts.slice(0, 20).map((d) => this.toRow(ctx, d));
     // Vectors first, so a near-duplicate can be caught by meaning too; a failed embedding leaves the row to the backfill.
@@ -179,6 +183,7 @@ export class Observer {
       if (v) { try { store.setObservationEmbeddings([{ id: o.id, vec: v, model: this.deps.embedder!.model }]); } catch (e) { logger.warn('vector not stored, left for backfill', { error: String(e) }); } }
     }
     s.turnObservations.push(...rows);
+    this.counters.stored += stored; this.counters.duplicates += rows.length - stored;
     logger.info('observations stored', { sessionId: ctx.sessionId, count: stored, duplicates: rows.length - stored });
     if (stored) this.onStored?.(ctx.projectId);
   }
@@ -265,6 +270,7 @@ export class Observer {
 
   private handleProviderError(e: unknown, stage: string): void {
     const kind = e instanceof ProviderError ? e.kind : 'other';
+    this.counters.failures++;
     if (kind === 'auth') this.authFailedAt = Date.now();
     this.deps.logger.warn(`${stage} dropped: provider ${kind}`, { error: e instanceof Error ? e.message : String(e) });
   }

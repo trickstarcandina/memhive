@@ -29,6 +29,7 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'recent': return (await import('./commands/search.js')).searchCommand(rest, { stdout, stderr }, { recent: true });
     case 'show': return (await import('./commands/observation.js')).showCommand(rest, { stdout, stderr });
     case 'edit': return (await import('./commands/observation.js')).editCommand(rest, { stdout, stderr });
+    case 'stats': return (await import('./commands/stats.js')).statsCommand(rest, { stdout, stderr });
     case 'forget': return (await import('./commands/forget.js')).forgetCommand(rest, { stdout, stderr });
     case 'embed': return (await import('./commands/embed.js')).embedCommand(rest, { stdout, stderr });
     case 'doctor': return (await import('./commands/doctor.js')).doctorCommand(rest, { stdout, stderr });

@@ -33,6 +33,13 @@ describe('Observer', () => {
     expect((complete.mock.calls[0] as any)[0].user).toContain('/f3');
   });
 
+  it('counts provider calls, failures, unparseable answers, stored rows and duplicates', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(obsJson(2)).mockResolvedValueOnce('not json').mockRejectedValueOnce(new ProviderError('down', 'transport')).mockResolvedValueOnce(obsJson(1));
+    const { ctx, observer } = setup({ complete });
+    for (let round = 0; round < 4; round++) { for (let i = 0; i < 8; i++) observer.onTool(ctx, tool(round * 8 + i)); await vi.runAllTimersAsync(); }
+    expect(observer.counters).toMatchObject({ calls: 4, failures: 1, unparseable: 1, stored: 2, duplicates: 1 });   // the last "obs 0" repeats the first
+  });
+
   it('flushes on idle', async () => {
     const complete = vi.fn(async () => obsJson(1));
     const { ctx, observer } = setup({ complete });

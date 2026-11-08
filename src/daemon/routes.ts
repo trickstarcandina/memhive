@@ -1,9 +1,11 @@
+import { statSync } from 'node:fs';
 import type { DaemonContext } from './context.js';
+import { resolvePaths } from '../shared/paths.js';
 import type { HookEvent } from '../hooks/types.js';
 import { hybridSearch } from '../search/hybrid.js';
 import { buildContext } from '../context/builder.js';
 import { newId } from '../shared/ids.js';
-import { OBSERVATION_TYPES, type Observation, type ObservationType, type SearchFilters } from '../store/types.js';
+import { OBSERVATION_TYPES, type Project, type Observation, type ObservationType, type SearchFilters } from '../store/types.js';
 import { projectKeyFor } from '../shared/project-key.js';
 import { matchesAny } from '../shared/optout.js';
 import { embeddingText } from '../observer/observer.js';
@@ -43,6 +45,18 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
         key: p.key, name: p.name, hubUrl: p.hubUrl, stats: store.projectStats(p.id), sync: store.getSyncState(p.id),
         protocol: p.hubUrl && ctx.sync?.hubProtocol ? await ctx.sync.hubProtocol(p).catch(() => null) : null,
       }))) } : {}),
+    });
+  }
+
+  if (method === 'GET' && path === '/v1/stats') {
+    const key = q.get('project_key');
+    const projects = key ? [store.getProjectByKey(key)].filter((p): p is Project => !!p) : store.listProjects();
+    const size = (f: string) => { try { return statSync(f).size; } catch { return 0; } };
+    const db = resolvePaths(ctx.home).db;
+    return ok({
+      db_bytes: size(db) + size(`${db}-wal`),
+      projects: projects.map((p) => { const st = store.getSyncState(p.id); return { key: p.key, name: p.name, hubUrl: p.hubUrl, ...store.projectStats(p.id), lastPushAt: st.lastPushAt, lastPullAt: st.lastPullAt }; }),
+      observer: ctx.observer.counters,
     });
   }
 

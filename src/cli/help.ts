@@ -12,6 +12,9 @@ export const COMMANDS: Record<string, CommandSpec> = {
   --no-ping  skip the provider and embedder calls
   --json     {"version", "home", "problems", "checks": [{"status": "ok|warn|fail|info", "check", "message", "hint"?}]}
 `, [], ['no-ping', 'json']),
+  stats: spec(`usage: memhive stats [--project key] [--json]   (row counts per project; observer counters since the daemon started)
+  --json  {"db_bytes", "projects": [{"key", "name", "hubUrl", "observations": {"local", "hub"}, "byType", "sessions", "summaries", "pinned", "unsynced", "missingEmbedding", "lastPushAt", "lastPullAt"}], "observer": {"since", "calls", "failures", "unparseable", "stored", "duplicates"}}
+`, ['project'], ['json']),
   hook: spec('usage: memhive hook <claude-code|codex> <event>\n'),
   daemon: spec('usage: memhive daemon <run|start|stop|status> [--json]   (--json: status only, {"running", "port", "pid", "startedAt", "version"})\n', [], ['json']),
   mcp: spec('usage: memhive mcp\n'),
@@ -42,7 +45,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
 
 export const USAGE = `memhive ${VERSION}
 usage: memhive <command>   (memhive <command> --help for its flags)
-  install | uninstall | doctor
+  install | uninstall | doctor [--json] | stats [--project key] [--json]
   hook <claude-code|codex> <event>
   daemon <run|start|stop|status>
   mcp
