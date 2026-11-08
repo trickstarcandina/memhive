@@ -109,21 +109,48 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 
 | Command | Purpose |
 | --- | --- |
-| `memhive install` / `memhive uninstall` | Wire memhive into Claude Code and Codex, or remove it. Your memory is kept. |
-| `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations and session summaries from the terminal. |
-| `memhive forget <id...> [--yes] [--force] [--project key]` | Delete observations or session summaries (full ids, prefixes or 8-char short ids) of the current project. Shows each row's title, author and date and asks first unless `--yes`. See [Forgetting a memory](#forgetting-a-memory). |
+| `memhive install [--yes] [--host claude-code,codex] [--provider anthropic\|openai-compat] [--no-ping]` | Wire memhive into Claude Code and Codex. |
+| `memhive uninstall [--purge [--yes]]` | Remove the plugin; your memory is kept unless `--purge`. See [Uninstall and data removal](#uninstall-and-data-removal). |
+| `memhive doctor [--no-ping] [--json]` | Check the setup; see [Doctor](#doctor). Exits 1 when a check fails. |
+| `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n] [--offset n] [--project key\|--all-projects] [--json]` | Search observations and session summaries from the terminal. An empty query with `--since` or `--type` lists the newest observations under those filters. |
+| `memhive recent [--limit n] [--project key\|--all-projects] [--json]` | The newest observations of the project (same filters as `search`). |
+| `memhive show <id...> [--json]` | Full observations or session summaries. |
+| `memhive edit <id> [--title t] [--narrative t] [--pin\|--unpin] [--json]` | Change an observation. Title and narrative only for your own rows, and the change stays on this machine; any row of the project can be pinned. |
+| `memhive forget <id...> [--yes] [--force] [--project key] [--json]` | Delete observations or session summaries (full ids, prefixes or 8-char short ids) of the current project. Shows each row's title, author and date and asks first unless `--yes`. See [Forgetting a memory](#forgetting-a-memory). |
+| `memhive stats [--project key] [--json]` | Row counts per project, type and origin (own and team), pinned rows, DB size, last push and pull, and observer counters since the daemon started. |
+| `memhive backup [path] [--json]` | A consistent copy of the database (`VACUUM INTO` through the daemon), mode 0600. Default `./memhive-backup-<time>.db`; never inside `~/.memhive`. |
+| `memhive export [--project key] [--format jsonl\|md] [--out file [--force]]` | Every session, observation and summary of a project. `jsonl`: one row per line with `kind`; `md`: grouped by session. `--out` is created 0600 and only replaced with `--force`. |
+| `memhive import <file.jsonl> [--project key] [--sync] [--json]` | Load an export. Rows are cleaned like rows pulled from a hub (secrets redacted, `<private>` blocks and control characters removed). Ids already present or forgotten are skipped. Rows are marked synced, so nothing is pushed, unless `--sync`, which imports them as your own rows. |
 | `memhive embed [--missing\|--rebuild]` | Compute embeddings for observations now. The daemon also backfills on its own (one batch per second while rows are missing) and drops every vector when `embed.model` or `embed.dims` changes. `--rebuild` drops every vector and embeds everything again. |
-| `memhive doctor` | Check settings, provider and embedder credentials, and daemon health. Reports whether each key is set; it never prints keys. |
-| `memhive daemon run\|start\|stop\|status` | Control the background daemon. |
+| `memhive daemon run\|start\|stop\|status [--json]` | Control the background daemon. |
 | `memhive hook <claude-code\|codex> <event>` | Hook entry point; called by the host, not by you. |
 | `memhive mcp` | MCP server over stdio; called by the host. |
-| `memhive serve` | Run the team hub. Configured by environment variables; see [Team hub](#team-hub). |
-| `memhive key create --user <name> [--label <text>]\|list\|revoke <id>` | Manage hub API keys. Run it where the hub's `DATABASE_URL` is set. |
+| `memhive serve [--reset-vectors]` | Run the team hub. Configured by environment variables; see [Team hub](#team-hub). |
+| `memhive key create --user <name> [--label <text>]\|list\|revoke <id>\|rotate <id\|user> [--json]` | Manage hub API keys. Run it where the hub's `DATABASE_URL` is set. |
+| `memhive user list\|remove <name> [--json]` / `memhive project list [--json]` | Hub users and projects. |
 | `memhive login <hub-url> [--key-stdin]` | Store an API key for a hub. Prompts without echo; `--key-stdin` reads the key from stdin. |
 | `memhive link <hub-url>` / `memhive unlink` | Start or stop syncing the current project with a hub you are logged in to. |
-| `memhive sync` | Push and pull the current project now. |
+| `memhive sync [--json]` | Push and pull the current project now. |
 | `memhive pause [30m\|1h\|2d]` / `memhive resume` | Stop recording for a while (no duration: until `resume`). See [Opting out](#opting-out). |
 | `memhive version` | Print the version. |
+
+`memhive <command> --help` prints that command's flags and, for `--json`, the shape of its output. `--json` output is meant for scripts: the shapes are stable. An unknown flag is refused. Exit codes: 0 ok, 1 error, 2 usage.
+
+### Doctor
+
+`memhive doctor` prints one line per check: `ok`, `warn`, `FAIL` or `info`, with a fix hint where there is one. It checks:
+
+- the Node.js version (memhive needs 22 or newer);
+- `settings.json`: whether it parses (with the line and column of the first error), the provider and embedder, and whether their API keys are set (never the keys);
+- a provider and embedder ping (skip with `--no-ping`);
+- the database schema version against the one this memhive knows;
+- the rendered plugin files (`hooks.json`, `codex-hooks.json`, `.mcp.json`): the Node binary and bundle they run must exist and be this one, and the version that rendered them;
+- whether capture is paused or the current project is excluded;
+- the daemon: running, its version against the CLI's, observer auth failures, sqlite-vec loaded or degraded, observations still missing an embedding;
+- each linked project: hub, login and rejected keys, hub protocol, unsynced backlog, backoff and last error, last push and pull, quarantined rows;
+- log file sizes and rotation.
+
+`--json` prints `{"version", "home", "problems", "checks": [{"status", "check", "message", "hint"}]}`.
 
 ## Configuration
 
@@ -308,13 +335,13 @@ memhive uninstall
 npm uninstall -g memhive
 ```
 
-`memhive uninstall` stops the daemon, removes the plugin from Claude Code and Codex (in Codex it also sets the plugin to `enabled = false` in `config.toml`), and deletes the rendered plugin files in `~/.memhive/marketplace`. It leaves `[features] hooks = true` in Codex's `config.toml`, because other plugins may need it.
+`memhive uninstall` stops the daemon, removes the plugin from Claude Code and Codex (in Codex it also sets the plugin to `enabled = false` in `config.toml`), and deletes the rendered plugin files in `~/.memhive/marketplace`. It sets Codex's `[features] hooks` back to `false` only if `memhive install` turned it on; if it was on before, or memhive 0.1 installed it (nothing recorded), it is left as it is and uninstall says so.
 
-Your data stays in `~/.memhive`: the memory database (`memhive.db`), logs, `settings.json` with your LLM and embedding API keys, and `credentials.json` with your hub keys. Delete the folder to remove all of it. Revoke the hub key on the hub (`memhive key revoke <id>`) and rotate the provider keys if the machine is not yours to keep. Rows already pushed to a hub stay on the hub.
+Your data stays in `~/.memhive`: the memory database (`memhive.db`), logs, `settings.json` with your LLM and embedding API keys, and `credentials.json` with your hub keys. uninstall prints the `rm -rf` line that deletes it; `memhive uninstall --purge` deletes it after asking (`--yes` skips the question). It refuses when the folder holds files memhive did not create. Run `memhive backup` or `memhive export` first to keep a copy. Revoke the hub key on the hub (`memhive key revoke <id>`) and rotate the provider keys if the machine is not yours to keep. Rows already pushed to a hub stay on the hub.
 
 ## Troubleshooting
 
-- Run `memhive doctor` first. It checks settings, credentials and daemon health.
+- Run `memhive doctor` first. It checks settings, credentials, plugin paths, the daemon and sync; see [Doctor](#doctor).
 - Logs are in `~/.memhive/logs/` (`hook.log`, `daemon.log`, and others). Set `MEMHIVE_DEBUG=1` for more detail.
 - If session context is missing, check that `memhive daemon status` reports the daemon running. Hooks start it automatically on the next session.
 
