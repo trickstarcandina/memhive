@@ -17,9 +17,22 @@ usage: memhub <command>
   version
 `;
 
+const SUB_USAGE: Record<string, string> = {
+  install: 'usage: memhub install [--yes] [--host claude-code,codex] [--provider anthropic|openai-compat] [--no-ping]\n',
+  uninstall: 'usage: memhub uninstall\n',
+  doctor: 'usage: memhub doctor\n',
+  hook: 'usage: memhub hook <claude-code|codex> <event>\n',
+  daemon: 'usage: memhub daemon <run|start|stop|status>\n',
+  mcp: 'usage: memhub mcp\n',
+  search: 'usage: memhub search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
+  embed: 'usage: memhub embed [--missing|--rebuild]\n',
+};
+
 export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<number> {
   const { stdout, stderr } = { ...defaultIo, ...io };
   const [cmd, ...rest] = argv;
+  // --help/-h never reaches a subcommand, so it cannot spawn or write anything.
+  if (cmd && cmd in SUB_USAGE && rest.some((a) => a === '--help' || a === '-h')) { stdout(SUB_USAGE[cmd]); return 0; }
   switch (cmd) {
     case undefined: case 'help': case '--help': case '-h': stdout(USAGE); return 0;
     case 'version': case '--version': case '-v': stdout(`${VERSION}\n`); return 0;
