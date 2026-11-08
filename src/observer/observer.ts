@@ -71,7 +71,15 @@ export class Observer {
     s.timer.unref?.();
   }
 
-  async onStop(ctx: SessionCtx): Promise<void> {
+  // Stop/SessionEnd run detached from the HTTP request; close() waits for them so the store is never closed under them.
+  private work = new Set<Promise<unknown>>();
+  private track<T>(p: Promise<T>): Promise<T> {
+    this.work.add(p); const done = () => { this.work.delete(p); }; p.then(done, done);
+    return p;
+  }
+
+  onStop(ctx: SessionCtx): Promise<void> { return this.track(this.stop(ctx)); }
+  private async stop(ctx: SessionCtx): Promise<void> {
     const s = this.state(ctx);
     try {
       await this.flush(s);
@@ -82,13 +90,25 @@ export class Observer {
     }
   }
 
-  /** Session end: summarize only if the last Stop did not already cover the latest prompt. */
-  async onSessionEnd(ctx: SessionCtx): Promise<void> {
-    try { await this.onStop(ctx); } finally {
-      this.summarizedPrompt.delete(ctx.sessionId);
-      const s = this.sessions.get(ctx.sessionId);
-      if (s && s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);   // no retry after the end
-    }
+  /** Session end: summarize only if the last Stop did not already cover the latest prompt; then mark the session ended. */
+  onSessionEnd(ctx: SessionCtx, endedAt?: string): Promise<void> {
+    return this.track((async () => {
+      try { await this.stop(ctx); } finally {
+        this.summarizedPrompt.delete(ctx.sessionId);
+        const s = this.sessions.get(ctx.sessionId);
+        if (s && s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);   // no retry after the end
+      }
+      if (endedAt) this.deps.store.endSession(ctx.sessionId, endedAt);
+    })());
+  }
+
+  /** Flushes buffers and waits for running Stop/SessionEnd work and the backfill, at most `capMs`; nothing new starts after. */
+  async close(capMs = 10_000): Promise<void> {
+    this.closed = true;
+    let timer: NodeJS.Timeout | undefined;
+    const cap = new Promise<void>((r) => { timer = setTimeout(r, capMs); timer.unref?.(); });
+    try { await Promise.race([Promise.allSettled([this.flushAll(), ...this.work, ...(this.backfilling ? [this.backfilling] : [])]), cap]); }
+    finally { clearTimeout(timer); }
   }
 
   private async summarize(s: SessionState, ctx: SessionCtx): Promise<void> {

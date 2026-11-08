@@ -72,7 +72,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
       case 'prompt': ctx.observer.onPrompt(sctx, ev.prompt ?? ''); break;
       case 'tool': if (ev.tool) ctx.observer.onTool(sctx, { ...ev.tool, at: ev.at }); break;
       case 'stop': ctx.observer.onStop(sctx).catch(warn); break;
-      case 'session-end': ctx.observer.onSessionEnd(sctx).then(() => store.endSession(sctx.sessionId, ev.at)).catch(warn); break;
+      case 'session-end': ctx.observer.onSessionEnd(sctx, ev.at).catch(warn); break;
       case 'session-start': break;
     }
     return ok({}, 202);

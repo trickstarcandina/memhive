@@ -159,9 +159,9 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
 
   const close = () => closing ??= (async () => {
     if (idleTimer) clearTimeout(idleTimer); clearInterval(embedTimer);
-    try { await ctx.observer.flushAll(); } catch { /* best effort */ }
-    await new Promise<void>((r) => server.close(() => r()));
+    await new Promise<void>((r) => server.close(() => r()));   // no new events past this point
     server.closeAllConnections?.();
+    try { await ctx.observer.close(); } catch { /* best effort */ }   // running summaries finish before the store closes
     await ctx.sync?.close();   // a background pull may still be writing to the store; finish before the lock is released
     if (readDaemonInfo(ctx.home)?.token === token) removeDaemonInfo(ctx.home);   // never delete a successor's file
     try { if (Number(readFileSync(lock, 'utf8')) === process.pid) rmSync(lock, { force: true }); } catch { /* gone */ }
