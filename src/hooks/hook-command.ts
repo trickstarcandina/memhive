@@ -3,7 +3,7 @@ import { readStdin as defaultReadStdin, STDIN_LIMIT } from './stdin.js';
 import { ensureDaemon as defaultEnsureDaemon } from '../daemon/ensure.js';
 import { DaemonClient } from '../daemon/client.js';
 import { createLogger } from '../shared/logger.js';
-import { resolvePaths } from '../shared/paths.js';
+import { resolvePaths, setHomeWarningSink } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
 
 export interface HookDeps { readStdin(): Promise<string>; ensureDaemon: typeof defaultEnsureDaemon; fetchImpl: typeof fetch; stdout(s: string): void; home: string; now(): Date }
@@ -14,6 +14,7 @@ const START_TIMEOUT_MS = 5000;
 export async function runHook(args: string[], deps: Partial<HookDeps> = {}): Promise<number> {
   const d: HookDeps = { readStdin: defaultReadStdin, ensureDaemon: defaultEnsureDaemon, fetchImpl: fetch, stdout: (s) => process.stdout.write(s), home: resolvePaths().home, now: () => new Date(), ...deps };
   const log = createLogger(d.home, 'hook');
+  setHomeWarningSink((m) => log.warn(m.trim()));   // spec: a hook never writes to stderr
   try {
     const [host, hostEvent] = args;
     const adapter = getAdapter(host ?? '');

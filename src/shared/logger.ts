@@ -14,7 +14,7 @@ export function createLogger(home: string, name: string, env: NodeJS.ProcessEnv 
     try {
       if (!dirReady) { ensureHomeDir(dir); dirReady = true; }
       try { if (statSync(file).size > maxBytes) renameSync(file, `${file}.1`); } catch { /* no file yet */ }
-      appendFileSync(file, JSON.stringify({ ...(data ?? {}), t: new Date().toISOString(), level, msg }) + '\n');
+      appendFileSync(file, JSON.stringify({ ...(data ?? {}), t: new Date().toISOString(), level, msg }) + '\n', { mode: 0o600 });   // mode applies on create
     } catch { /* logging must never throw */ }
   };
   return {

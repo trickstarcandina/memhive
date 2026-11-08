@@ -32,12 +32,15 @@ export class SqliteStore implements Store {
   get vectorsDegraded(): boolean { return this.vecOff; }
 
   constructor(file: string, opts: { dims: number | null; warn?: (msg: string, data?: object) => void; loadVec?: (db: Database.Database) => void }) {
+    // Owner-only before SQLite opens it: SQLite creates -wal/-shm with the db file's mode.
+    const onDisk = file !== ':memory:' && !file.startsWith('file:');
+    if (onDisk) { fs.closeSync(fs.openSync(file, 'a', 0o600)); fs.chmodSync(file, 0o600); }
     this.db = new Database(file);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('foreign_keys = ON');
     this.dims = opts.dims;
-    try { if (fs.existsSync(file)) fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+    if (onDisk) for (const f of [`${file}-wal`, `${file}-shm`]) { try { fs.chmodSync(f, 0o600); } catch { /* not created yet */ } }
     if (this.dims) {
       try { (opts.loadVec ?? ((d) => sqliteVec.load(d)))(this.db); }
       catch (e) { opts.warn?.('sqlite-vec failed to load; vector search disabled (FTS only)', { error: String(e) }); this.dims = null; this.vecOff = true; }
