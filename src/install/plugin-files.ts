@@ -4,8 +4,9 @@ import path from 'node:path';
 // POSIX single-quote escaping, for hosts whose hook command is one shell string.
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 // Codex on Windows runs `%COMSPEC% /C "<commandWindows>"`; a Windows path cannot contain `"`, so double quotes suffice.
-// shortcut: a path with %NAME% of a defined env var is still expanded by cmd.exe; escape it if that ever shows up.
-const cmdq = (s: string) => `"${s}"`;
+// cmd.exe expands %NAME% even inside quotes, so each % is moved outside the quotes as ^% (the caret only escapes there);
+// the program still gets one argument, since "a"^%"b" joins back to a%b.
+const cmdq = (s: string) => `"${s.replace(/%/g, '"^%"')}"`;
 
 export function renderPluginDir(opts: { templateRoot: string; marketplaceRoot: string; nodePath: string; bundlePath: string; version: string }): void {
   rmSync(opts.marketplaceRoot, { recursive: true, force: true });
