@@ -11,6 +11,15 @@ export class HubDimsMismatch extends Error {
     this.name = 'HubDimsMismatch';
   }
 }
+/** Thrown by migrate() when the database was set up for other embedding dims than the hub is configured with. */
+export class HubDimsConflict extends Error {
+  constructor(public dbDims: number | null, public envDims: number | null) {
+    const show = (d: number | null) => (d === null ? 'unset' : String(d));
+    super(`hub embedding dims is ${show(dbDims)} in the database but MEMHIVE_EMBED_DIMS=${envDims === null ? '' : envDims}; ${dbDims === null ? 'unset MEMHIVE_EMBED_DIMS' : `set MEMHIVE_EMBED_DIMS=${dbDims}`} or run "memhive serve --reset-vectors"`);
+    this.name = 'HubDimsConflict';
+  }
+}
+export interface HubStoreOptions { dims: number | null; resetVectors?: boolean }   // resetVectors: on a dims conflict, drop every stored vector instead of refusing to start
 // upsertSessions / insertObservations / insertSummaries append the sync_log entries for exactly the rows they wrote, in the same transaction.
 export interface HubStore {
   migrate(): Promise<void>; close(): Promise<void>;

@@ -24,3 +24,21 @@ it('key create/list/revoke on a sqlite file, and --help is side-effect free', as
   const h = cap(); expect(await main(['serve', '--help'], h.io)).toBe(0); expect(h.o.out).toMatch(/usage: memhive serve/);
   const k = cap(); expect(await main(['key', '-h'], k.io)).toBe(0); expect(k.o.out).toMatch(/usage: memhive key/);
 });
+// Runs serve until `run` finishes, then stops it through the abort signal.
+export async function withServe(args: string[], env: NodeJS.ProcessEnv, run: (out: { out: string; err: string }) => Promise<void> = async () => {}): Promise<{ code: number; out: string; err: string }> {
+  const c = cap(); const ctl = new AbortController();
+  const done = serveCommand(args, c.io, env, { signal: ctl.signal });
+  const first = await Promise.race([done, (async () => { while (!c.o.out.includes('listening')) await new Promise((r) => setTimeout(r, 10)); return null; })()]);
+  if (first === null) { await run(c.o); ctl.abort(); }
+  return { code: await done, ...c.o };
+}
+const serveEnv = (dims: string) => { const dir = mkdtempSync(path.join(tmpdir(), 'mh-serve-')); return { DATABASE_URL: `sqlite:${path.join(dir, 'h.db')}`, MEMHIVE_HOME: dir, PORT: '0', MEMHIVE_EMBED_DIMS: dims }; };
+it('serve refuses to start on a dims change; --reset-vectors (flag or env) lets it start', async () => {
+  const env = serveEnv('4');
+  expect((await withServe([], env)).code).toBe(0);
+  const bad = await withServe([], { ...env, MEMHIVE_EMBED_DIMS: '8' });
+  expect(bad.code).toBe(1); expect(bad.err).toContain('hub embedding dims is 4 in the database but MEMHIVE_EMBED_DIMS=8'); expect(bad.err).not.toMatch(/unreachable/);
+  expect((await withServe(['--reset-vectors'], { ...env, MEMHIVE_EMBED_DIMS: '8' })).code).toBe(0);
+  expect((await withServe([], { ...env, MEMHIVE_EMBED_DIMS: '16', MEMHIVE_RESET_VECTORS: '1' })).code).toBe(0);
+  expect((await withServe([], { ...env, MEMHIVE_EMBED_DIMS: '8' })).code).toBe(1);
+});

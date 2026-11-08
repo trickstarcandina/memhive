@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import { HubDimsMismatch } from './types.js';
+import { HubDimsConflict, HubDimsMismatch, type HubStoreOptions } from './types.js';
 import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
 import { assertValidDims, hubPgMigrations } from './migrations-pg.js';
@@ -27,7 +27,7 @@ export function toTsQuery(text: string): string {
 
 export class PostgresHubStore implements HubStore {
   private pool: Pool;
-  constructor(databaseUrl: string, private opts: { dims: number | null }) {
+  constructor(databaseUrl: string, private opts: HubStoreOptions) {
     assertValidDims(opts.dims);
     this.pool = new Pool({ connectionString: databaseUrl, max: 10 });
     // idle-client errors (e.g. server restart) would otherwise crash the process; never log the URL
@@ -50,7 +50,27 @@ export class PostgresHubStore implements HubStore {
         try { await c.query('BEGIN'); await c.query(migrations[i]); await c.query('INSERT INTO schema_migrations VALUES ($1, now())', [i + 1]); await c.query('COMMIT'); }
         catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
       }
+      await this.checkDims(c);
     } finally { await c.query('SELECT pg_advisory_unlock(7346001)').catch((e) => { dead = e; }); c.release(dead); }   // a broken client is destroyed, not pooled
+  }
+  // The vector column type is fixed when the table is created; a later MEMHIVE_EMBED_DIMS change would make every insert with
+  // a vector fail in the DB (a 500 the client retries forever), so a conflict stops the hub here instead.
+  private async checkDims(c: PoolClient): Promise<void> {
+    const want = this.opts.dims;
+    const { rows: [col] } = await c.query(`SELECT format_type(atttypid, atttypmod) AS t, atttypmod AS m FROM pg_attribute WHERE attrelid = 'observations'::regclass AND attname = 'embedding'`);
+    const have = String(col.t).startsWith('vector') && col.m > 0 ? Number(col.m) : null;
+    if (have !== want) {
+      if (!this.opts.resetVectors) throw new HubDimsConflict(have, want);
+      try {
+        await c.query('BEGIN');
+        await c.query(`ALTER TABLE observations DROP COLUMN embedding, ADD COLUMN embedding ${want ? `vector(${want})` : 'real[]'}`);
+        await c.query('UPDATE observations SET embedding_model = NULL WHERE embedding_model IS NOT NULL');
+        await c.query(`INSERT INTO hub_meta VALUES ('embedding_dims', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [String(want ?? '')]);
+        await c.query('COMMIT');
+      } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
+      return;
+    }
+    await c.query(`INSERT INTO hub_meta VALUES ('embedding_dims', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [String(want ?? '')]);
   }
   async close(): Promise<void> { await this.pool.end(); }
 

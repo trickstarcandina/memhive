@@ -14,4 +14,6 @@ export const HUB_SQLITE_MIGRATIONS: string[] = [
   CREATE TABLE sync_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, tbl TEXT NOT NULL, row_id TEXT NOT NULL);
   CREATE INDEX sync_log_project ON sync_log(project_id, seq);
   `,
+  // Vectors are untyped blobs here, so the dims the hub was set up for live only in this table (checked at every start).
+  `CREATE TABLE hub_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
 ];

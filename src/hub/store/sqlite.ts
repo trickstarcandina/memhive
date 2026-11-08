@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { HubDimsMismatch } from './types.js';
+import { HubDimsConflict, HubDimsMismatch, type HubStoreOptions } from './types.js';
 import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
 import { HUB_SQLITE_MIGRATIONS } from './migrations-sqlite.js';
@@ -20,7 +20,7 @@ const inList = (ids: string[]) => ids.map(() => '?').join(',');
 export class SqliteHubStore implements HubStore {
   private db: Database.Database;
   private dims: number | null;
-  constructor(file: string, opts: { dims: number | null }) {
+  constructor(file: string, private opts: HubStoreOptions) {
     this.dims = opts.dims;
     this.db = new Database(file);
     this.db.pragma('journal_mode = WAL'); this.db.pragma('busy_timeout = 5000'); this.db.pragma('foreign_keys = ON');
@@ -29,6 +29,19 @@ export class SqliteHubStore implements HubStore {
     this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
     const applied = new Set(this.db.prepare('SELECT version FROM schema_migrations').all().map((r: any) => r.version));
     HUB_SQLITE_MIGRATIONS.forEach((sql, i) => { if (!applied.has(i + 1)) this.db.transaction(() => { this.db.exec(sql); this.db.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(i + 1, new Date().toISOString()); })(); });
+    this.checkDims();
+  }
+  // Same contract as the Postgres store. A database from before hub_meta existed is judged by a stored vector, if any.
+  private checkDims(): void {
+    const meta = this.db.prepare(`SELECT value FROM hub_meta WHERE key = 'embedding_dims'`).get() as Row | undefined;
+    const blob = meta ? undefined : (this.db.prepare('SELECT length(embedding) n FROM observations WHERE embedding IS NOT NULL LIMIT 1').get() as Row | undefined);
+    const have = meta ? (meta.value ? Number(meta.value) : null) : blob ? Number(blob.n) / 4 : this.dims;
+    const record = this.db.prepare(`INSERT INTO hub_meta VALUES ('embedding_dims', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    if (have !== this.dims && !this.opts.resetVectors) throw new HubDimsConflict(have, this.dims);
+    this.db.transaction(() => {
+      if (have !== this.dims) this.db.exec('UPDATE observations SET embedding = NULL, embedding_model = NULL WHERE embedding IS NOT NULL OR embedding_model IS NOT NULL');
+      record.run(String(this.dims ?? ''));
+    })();
   }
   async close(): Promise<void> { this.db.close(); }
 

@@ -163,7 +163,8 @@ Hub settings are environment variables:
 | `PORT` | `7777` | Listen port. |
 | `MEMHIVE_EMBED_MODEL` | none | Embedding model the hub expects. Compose sets `bge-m3`. |
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
-| `MEMHIVE_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. |
+| `MEMHIVE_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. Pull pages are capped to the same size. |
+| `MEMHIVE_RESET_VECTORS` | unset | `1` drops stored vectors when `MEMHIVE_EMBED_DIMS` changed (see below). |
 | `MEMHIVE_HOME` | `~/.memhive` | Directory for hub logs. Compose sets `/data`. |
 
 `POSTGRES_PASSWORD` is required: compose refuses to start without it. Compose reads it from `docker/.env` and passes it to the hub as `PGPASSWORD`, outside the connection URL, so any characters work.
@@ -211,6 +212,8 @@ Observations, summaries and session records of linked projects are pushed to the
 ### Embedding model must match
 
 Clients that embed must use the same embedding model and vector size as the hub. Set `MEMHIVE_EMBED_MODEL` and `MEMHIVE_EMBED_DIMS` on the hub to the `embed` model and dims in each client's `~/.memhive/settings.json`. The hub rejects a pushed row whose embedding model differs from its own, or whose vector length differs from `MEMHIVE_EMBED_DIMS`, with `422 embedding_model_mismatch`. Rows without a vector are accepted. `memhive login` warns when the local settings differ from the hub's.
+
+The vector size is fixed when the hub database is created. If `MEMHIVE_EMBED_DIMS` later differs from the database, the hub refuses to start and says so. To switch, start it once with `memhive serve --reset-vectors` (or `MEMHIVE_RESET_VECTORS=1`): this drops every vector stored on the hub (rows stay, and clients keep their local vectors). The flag does nothing when the sizes already match.
 
 Hub-side search is full-text only, because the hub runs no embedder. Client search stays hybrid over local rows, including rows pulled from the hub.
 

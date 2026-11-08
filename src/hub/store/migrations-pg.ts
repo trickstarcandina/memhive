@@ -23,5 +23,7 @@ export function hubPgMigrations(dims: number | null): string[] {
     CREATE TABLE sync_log (seq bigserial PRIMARY KEY, project_id uuid NOT NULL, tbl text NOT NULL, row_id uuid NOT NULL);
     CREATE INDEX sync_log_project ON sync_log(project_id, seq);
     `,
+    // Records the embedding dims the hub was set up for (checked at every start, see migrate()).
+    `CREATE TABLE hub_meta (key text PRIMARY KEY, value text NOT NULL);`,
   ];
 }

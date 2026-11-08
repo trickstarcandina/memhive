@@ -14,7 +14,7 @@ usage: memhive <command>
   mcp
   search <query> [--type t] [--user u] [--since 7d] [--limit n]
   embed [--missing|--rebuild]
-  serve
+  serve [--reset-vectors]
   key <create|list|revoke>
   login <hub-url> [--key-stdin]
   link <hub-url> | unlink | sync
@@ -30,7 +30,7 @@ const SUB_USAGE: Record<string, string> = {
   mcp: 'usage: memhive mcp\n',
   search: 'usage: memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
   embed: 'usage: memhive embed [--missing|--rebuild]\n',
-  serve: 'usage: memhive serve   (env: DATABASE_URL, PORT, MEMHIVE_EMBED_MODEL, MEMHIVE_EMBED_DIMS)\n',
+  serve: 'usage: memhive serve [--reset-vectors]   (env: DATABASE_URL, PORT, MEMHIVE_EMBED_MODEL, MEMHIVE_EMBED_DIMS, MEMHIVE_RESET_VECTORS)\n  --reset-vectors  after a MEMHIVE_EMBED_DIMS change, drop every stored vector instead of refusing to start\n',
   key: 'usage: memhive key <create --user <name> [--label <text>] | list | revoke <id>>\n',
   login: 'usage: memhive login <hub-url> [--key-stdin]   (prompts for the API key without echo; --key-stdin reads it from stdin)\n',
   link: 'usage: memhive link <hub-url>   (links the current project to a hub you are logged in to)\n',
