@@ -92,7 +92,7 @@ export class SqliteHubStore implements HubStore {
         if (r && (r.project_id !== projectId || r.user_id !== userName)) { rejected.push({ id: t.id, reason: 'not_owner' }); continue; }
         applied++;
         if (!r) continue;
-        if (t.tbl === 'session') for (const c of ['observations', 'summaries']) this.db.prepare(`DELETE FROM ${c} WHERE session_id = ?`).run(t.id);
+        if (t.tbl === 'session') for (const c of ['observations', 'summaries']) this.db.prepare(`DELETE FROM ${c} WHERE session_id = ? AND project_id = ? AND user_id = ?`).run(t.id, projectId, userName);   // only the pusher's own rows, whatever references them
         this.db.prepare(`DELETE FROM ${TOMB_TABLES[t.tbl]} WHERE id = ?`).run(t.id);
         this.db.prepare('INSERT INTO tombstones(id, tbl, project_id, user_id, deleted_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING').run(t.id, t.tbl, projectId, userName, t.deletedAt);
         this.log.run(projectId, 'tombstone', t.id);
@@ -100,7 +100,7 @@ export class SqliteHubStore implements HubStore {
     })();
     return { applied, rejected };
   }
-  async tombstoned(projectId: string, ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND id IN (${inList(ids)})`).all(projectId, ...ids) as Row[]).map((r) => r.id) : []); }
+  async tombstoned(projectId: string, tbl: Tombstone['tbl'], ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND tbl = ? AND id IN (${inList(ids)})`).all(projectId, tbl, ...ids) as Row[]).map((r) => r.id) : []); }
   async getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]> { return ids.length ? (this.db.prepare(`SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = ? AND id IN (${inList(ids)})`).all(projectId, ...ids) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at })) : []; }
   async maxSeq(projectId: string): Promise<number> { return Number((this.db.prepare('SELECT COALESCE(MAX(seq), 0) m FROM sync_log WHERE project_id = ?').get(projectId) as Row).m); }
   async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (this.db.prepare(`SELECT * FROM sessions WHERE id IN (${inList(ids)})`).all(...ids) as Row[]).map(rowToSession) : []; }

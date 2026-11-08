@@ -40,7 +40,7 @@ export interface HubStore {
    * and logs it for pull. A row of someone else is rejected not_owner; a row the hub does not have is accepted and ignored.
    */
   applyTombstones(projectId: string, userName: string, rows: Tombstone[]): Promise<{ applied: number; rejected: Array<{ id: string; reason: string }> }>;
-  tombstoned(projectId: string, ids: string[]): Promise<Set<string>>;   // ids the hub deleted in this project: never accepted again
+  tombstoned(projectId: string, tbl: Tombstone['tbl'], ids: string[]): Promise<Set<string>>;   // ids of this table the hub deleted in this project: never accepted again
   getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]>;
   getSessions(ids: string[]): Promise<Session[]>;
   getObservations(ids: string[]): Promise<HubObservation[]>;

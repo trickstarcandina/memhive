@@ -44,9 +44,21 @@ describe('memhive forget', () => {
 
       r = io();
       expect(await forgetCommand(['--force', their8, '--yes'], r.io, { home, cwd })).toBe(0);   // --force before the id: not swallowed
+      expect(r.out.join('')).toContain("someone else's, --force) removed from this machine only");
+      expect(r.out.join('')).not.toContain('pushed to the hub');
       expect(ctx.store.getObservations([theirs.id])).toEqual([]);
       expect(ctx.store.listPendingTombstones(p.id, 10).map((t) => t.id)).toEqual([mine.id]);   // the forced removal is not pushed
-      expect(ctx.store.forgottenIds(p.id, [theirs.id]).size).toBe(1);
+      expect(ctx.store.forgottenIds(p.id, 'observation', [theirs.id]).size).toBe(1);
+
+      // A prefix matching two rows is refused whole, even if the other table has exactly one match.
+      const twin = (tail: string) => obs({ projectId: p.id, sessionId: s.id, id: `0190abcd-0000-7000-8000-${tail}` });
+      ctx.store.insertObservations([twin('000000000001'), twin('000000000002')]);
+      ctx.store.insertSummaries([{ id: '0190abce-0000-7000-8000-000000000003', projectId: p.id, sessionId: s.id, userId: 'local', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null }]);
+      r = io();
+      expect(await forgetCommand(['0190abc', '--yes'], r.io, { home, cwd })).toBe(1);
+      expect(r.err.join('')).toContain('more than one row');
+      expect(ctx.store.getSummaries(['0190abce-0000-7000-8000-000000000003'])).toHaveLength(1);
+      expect(ctx.store.getObservations(['0190abcd-0000-7000-8000-000000000001'])).toHaveLength(1);
 
       r = io();
       expect(await forgetCommand([], r.io, { home, cwd })).toBe(1);

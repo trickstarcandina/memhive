@@ -162,6 +162,28 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>, op
       expect(tail.tombstones.map((t: { tbl: string }) => t.tbl)).toEqual(['session']);
     });
 
+    it('a session tombstone reusing a teammate observation id hides nothing; at most 200 tombstones per push', async () => {
+      const cfg = { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 };
+      const as = (user: string, method: string, path: string, body?: unknown) => handleHubRoute(s, cfg, { keyId: 'k', userName: user }, method, new URL('http://h' + path), body);
+      const a = hsess('x'); const o = hobs({ projectId: 'x', sessionId: a.id, title: 'Alice keeps this' });
+      await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/m1', sessions: [a], observations: [o] });
+      const at = new Date().toISOString();
+      // Bob pushes a session of his own whose id is Alice's observation id, then forgets it.
+      const bobs = await as('bob', 'POST', '/v1/sync/push', { projectKey: 'k/m1', sessions: [hsess('x', { id: o.id })] });
+      expect((bobs.body as any).accepted.sessions).toBe(1);
+      const t = await as('bob', 'POST', '/v1/sync/push', { projectKey: 'k/m1', tombstones: [{ id: o.id, tbl: 'session', deleted_at: at }, { id: o.id, tbl: 'observation', deleted_at: at }] });
+      expect((t.body as any).rejected).toEqual([{ id: o.id, reason: 'not_owner' }]);   // his session goes, her observation does not
+      expect(await s.getObservations([o.id])).toHaveLength(1);
+      const pull = (await as('carol', 'GET', '/v1/sync/pull?project_key=k%2Fm1&since=0')).body as any;
+      expect(pull.observations.map((x: { id: string }) => x.id)).toEqual([o.id]);
+      expect(pull.tombstones).toEqual([{ id: o.id, tbl: 'session', deleted_at: expect.any(String) }]);
+      // A re-push of her observation is not "forgotten": only the session id is.
+      const again = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/m1', observations: [o] });
+      expect((again.body as any).rejected).toEqual([]);
+      const many = Array.from({ length: 201 }, () => ({ id: newId(), tbl: 'observation', deleted_at: at }));
+      expect((await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/m1', tombstones: many })).status).toBe(400);
+    });
+
     it('rotate, list and remove users, list projects', async () => {
       await s.createUser('alice'); await s.createUser('bob');
       const k = await s.createApiKey('alice', 'laptop', 'h1'); await s.createApiKey('bob', 'desk', 'h2');

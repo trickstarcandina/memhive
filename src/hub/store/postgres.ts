@@ -161,7 +161,7 @@ export class PostgresHubStore implements HubStore {
         if (r && (r.project_id !== projectId || r.user_id !== userName)) { rejected.push({ id: t.id, reason: 'not_owner' }); continue; }
         applied++;
         if (!r) continue;
-        if (t.tbl === 'session') { await c.query('DELETE FROM observations WHERE session_id = $1', [t.id]); await c.query('DELETE FROM summaries WHERE session_id = $1', [t.id]); }
+        if (t.tbl === 'session') for (const table of ['observations', 'summaries']) await c.query(`DELETE FROM ${table} WHERE session_id = $1 AND project_id = $2 AND user_id = $3`, [t.id, projectId, userName]);   // only the pusher's own rows, whatever references them
         await c.query(`DELETE FROM ${TOMB_TABLES[t.tbl]} WHERE id = $1`, [t.id]);
         await c.query('INSERT INTO tombstones(id, tbl, project_id, user_id, deleted_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING', [t.id, t.tbl, projectId, userName, t.deletedAt]);
         done.push({ id: t.id, projectId });
@@ -170,7 +170,7 @@ export class PostgresHubStore implements HubStore {
       return { applied, rejected };
     });
   }
-  async tombstoned(projectId: string, ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (await this.q('SELECT id FROM tombstones WHERE project_id = $1 AND id = ANY($2::uuid[])', [projectId, ids])).map((r) => r.id) : []); }
+  async tombstoned(projectId: string, tbl: Tombstone['tbl'], ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (await this.q('SELECT id FROM tombstones WHERE project_id = $1 AND tbl = $2 AND id = ANY($3::uuid[])', [projectId, tbl, ids])).map((r) => r.id) : []); }
   async getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]> { return ids.length ? (await this.q('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = $1 AND id = ANY($2::uuid[])', [projectId, ids])).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: iso(r.deleted_at) })) : []; }
   async maxSeq(projectId: string): Promise<number> { const [r] = await this.q('SELECT COALESCE(MAX(seq), 0) m FROM sync_log WHERE project_id = $1', [projectId]); return Number(r.m); }
   async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (await this.q('SELECT * FROM sessions WHERE id = ANY($1::uuid[])', [ids])).map(rowToSession) : []; }

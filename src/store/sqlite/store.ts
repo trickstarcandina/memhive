@@ -241,6 +241,7 @@ export class SqliteStore implements Store {
     const pick = this.db.prepare(`SELECT project_id FROM ${TOMB_TABLE[tbl]} WHERE id = ?`);
     const tomb = this.db.prepare('INSERT INTO tombstones(id, tbl, project_id, deleted_at, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING');
     const delVec = this.dims ? this.db.prepare('DELETE FROM vec_observations WHERE id = ?') : null;
+    const unquarantine = this.db.prepare('DELETE FROM sync_quarantine WHERE project_id = ? AND lower(id) = ?');
     const drop = (t: TombstoneTable, id: string) => { if (t === 'observation') delVec?.run(id); this.db.prepare(`DELETE FROM ${TOMB_TABLE[t]} WHERE id = ?`).run(id); };
     return this.db.transaction(() => {
       let n = 0;
@@ -257,19 +258,29 @@ export class SqliteStore implements Store {
           }
           drop(tbl, id); n++;
         }
-        tomb.run(id.toLowerCase(), tbl, r?.project_id ?? opts.projectId, at, opts.syncedAt ?? null);   // lowercased, like forgottenIds looks them up
+        const pid = r?.project_id ?? opts.projectId;
+        tomb.run(id.toLowerCase(), tbl, pid, at, opts.syncedAt ?? null);   // lowercased, like forgottenIds looks them up
+        unquarantine.run(pid, id.toLowerCase());   // a forgotten row must not survive as a quarantined raw copy
       }
       return n;
     })();
   }
-  forgottenIds(projectId: string, ids: string[]): Set<string> {
+  forgottenIds(projectId: string, tbl: TombstoneTable, ids: string[]): Set<string> {
     // Case-insensitive (pulled ids may be upper case); returns the ids as given.
     const dead = new Set<string>();
     for (let i = 0; i < ids.length; i += 500) {   // stays far below SQLite's bound-parameter limit
       const part = ids.slice(i, i + 500).map((x) => x.toLowerCase());
-      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND id IN (${part.map(() => '?').join(',')})`).all(projectId, ...part) as Row[]) dead.add(r.id);
+      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND tbl = ? AND id IN (${part.map(() => '?').join(',')})`).all(projectId, tbl, ...part) as Row[]) dead.add(r.id);
     }
     return new Set(ids.filter((x) => dead.has(x.toLowerCase())));
+  }
+  matchIdPrefix(projectId: string, prefix: string): Array<{ id: string; kind: 'observation' | 'summary' }> {
+    if (prefix.length < 4) return [];
+    const p = prefix.toLowerCase();
+    const head = '(id >= @p AND id < @p || char(1114111))';
+    const obsTail = p.length === 8 ? 'short_id = @p' : 'substr(id, -length(@p)) = @p';
+    const q = (table: string, tail: string) => (this.db.prepare(`SELECT id FROM ${table} WHERE project_id = @pid AND (${head} OR ${tail}) LIMIT 2`).all({ p, pid: projectId }) as Row[]).map((r) => r.id as string);
+    return [...q('observations', obsTail).map((id) => ({ id, kind: 'observation' as const })), ...q('summaries', 'substr(id, -length(@p)) = @p').map((id) => ({ id, kind: 'summary' as const }))];
   }
   listPendingTombstones(projectId: string, limit: number): Tombstone[] {
     return (this.db.prepare('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = ? AND synced_at IS NULL ORDER BY rowid LIMIT ?').all(projectId, limit) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at }));
@@ -413,6 +424,8 @@ export class SqliteStore implements Store {
     this.db.transaction(() => {
       for (const t of ['sessions', 'observations', 'summaries']) this.db.prepare(`UPDATE ${t} SET synced_at = NULL WHERE project_id = ? AND origin = 'local'`).run(projectId);
       this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor, hub_epoch) VALUES (?, 0, NULL) ON CONFLICT(project_id) DO UPDATE SET pull_cursor = 0, hub_epoch = NULL, backoff_until = NULL, backoff_ms = NULL, strikes = 0').run(projectId);
+      // A restored hub may hold rows forgotten since its backup: send every tombstone again (a foreign one comes back not_owner).
+      this.db.prepare('UPDATE tombstones SET synced_at = NULL WHERE project_id = ?').run(projectId);
     })();
   }
   getSyncState(projectId: string): SyncState {

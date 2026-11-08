@@ -50,7 +50,9 @@ export interface Store {
   deleteObservations(ids: string[], opts?: DeleteOpts): number;
   deleteSummaries(ids: string[], opts?: DeleteOpts): number;
   deleteSession(id: string, opts?: DeleteOpts): number;     // also its observations, summaries and prompts (remembered, not pushed)
-  forgottenIds(projectId: string, ids: string[]): Set<string>;   // the ids with a tombstone in this project, any table
+  forgottenIds(projectId: string, tbl: TombstoneTable, ids: string[]): Set<string>;   // ids with a tombstone for this table in this project
+  /** Rows of the project whose id, head prefix or 8-char tail matches, from both tables; at most 2 per table (more = ambiguous). */
+  matchIdPrefix(projectId: string, prefix: string): Array<{ id: string; kind: 'observation' | 'summary' }>;
   listPendingTombstones(projectId: string, limit: number): Tombstone[];
   markTombstonesSynced(projectId: string, ids: string[], at: string): void;
   /**

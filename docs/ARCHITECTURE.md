@@ -121,7 +121,11 @@ a known id is skipped, never overwritten.
 (a session takes its observations and summaries with it). A row of another user or project is
 rejected `not_owner`; a row the hub does not have is accepted and ignored. Tombstones are applied
 after the rows of the same body. The hub records each tombstone, keyed by (project, table, id), and
-logs it in `sync_log`; a later push of a forgotten id into that project is rejected `forgotten`.
+logs it in `sync_log`; a later push of a forgotten id into the same table of that project is rejected
+`forgotten` (matching is per table: a session tombstone never hides an observation with the same id).
+A session tombstone deletes only the pusher's own rows under it. At most 200 tombstones per push
+(`400 bad_push` above). A client re-sends every tombstone after a hub reset, and keeps a body's
+tombstones queued when the hub refuses the whole body.
 Rows are otherwise immutable on the hub: local edits are not synced.
 
 **Protocol.** `/v1/config` reports `protocol` (2 since tombstones). A client refuses to sync with a

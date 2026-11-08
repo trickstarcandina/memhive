@@ -25,6 +25,7 @@ function rejection(row: unknown, issues: z.core.$ZodIssue[], kindFields: string[
 }
 // Postgres rejects NUL in text and jsonb; strip it everywhere so a row cannot fail in the DB after passing validation.
 const noNul = <T>(v: T): T => (typeof v === 'string' ? v.replace(/\u0000/g, '') : Array.isArray(v) ? v.map(noNul) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, noNul(x)])) : v) as T;
+const MAX_TOMBSTONES = 200;
 const PULL_CHUNK = 50;   // rows fetched per query while filling a page, so a page of large rows is never loaded whole
 const intParam = (v: string | null, def: number, min: number, max: number) => { const n = v === null ? NaN : Number(v); return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), min), max) : def; };
 
@@ -38,19 +39,22 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     // The envelope is checked whole (400); rows one by one, so one bad row never costs the rest of the batch.
     const env = PushBodySchema.pick({ projectKey: true, projectName: true }).safeParse(raw ?? {});
     if (!env.success) return err(400, 'bad_push', `invalid ${String(env.error.issues[0].path[0] ?? 'body')}`);
+    // Each tombstone is a lookup and a delete under the project lock; clients send at most 200 per body.
+    if (Array.isArray(raw?.tombstones) && raw.tombstones.length > MAX_TOMBSTONES) return err(400, 'bad_push', `at most ${MAX_TOMBSTONES} tombstones per push`);
     const rows = (k: string): unknown[] => (Array.isArray(raw?.[k]) ? (raw[k] as unknown[]) : []);
     const { projectKey, projectName } = env.data;
     const project = await store.getOrCreateProject(projectKey, projectName || (projectKey.split('/').pop() ?? projectKey));
     const rejected: PushResult['rejected'] = [];
     // A row the hub deleted (forgotten by its owner) is never taken back, e.g. from the owner's other machine.
     const ids = (k: string) => rows(k).flatMap((r) => { const v = PushTombstoneSchema.shape.id.safeParse((r as { id?: unknown } | null)?.id); return v.success ? [v.data] : []; });   // uuids only (Postgres casts them), lowercased like the parsed rows
-    const dead = await store.tombstoned(project.id, [...ids('sessions'), ...ids('observations'), ...ids('summaries')]);
-    const forgotten = (id: string) => { if (!dead.has(id)) return false; rejected.push({ id, reason: 'forgotten' }); return true; };
+    // Per table: one id can exist in several tables, and a session tombstone must not block another user's observation of that id.
+    const dead = { session: await store.tombstoned(project.id, 'session', ids('sessions')), observation: await store.tombstoned(project.id, 'observation', ids('observations')), summary: await store.tombstoned(project.id, 'summary', ids('summaries')) };
+    const forgotten = (tbl: keyof typeof dead, id: string) => { if (!dead[tbl].has(id)) return false; rejected.push({ id, reason: 'forgotten' }); return true; };
     // Order matters: observations and summaries reference sessions (foreign keys).
     const sessions: Session[] = [];
     for (const r of rows('sessions')) {
       const p = PushSessionSchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, [], 'invalid_row')); continue; }
-      if (forgotten(p.data.id)) continue;
+      if (forgotten('session', p.data.id)) continue;
       const { cwd: _cwd, ...s } = p.data;   // accepted for older clients, never stored (Session.cwd is '' on the hub)
       sessions.push({ ...s, cwd: '', endedAt: s.endedAt ?? null, projectId: project.id, userId: auth.userName, syncedAt: null });
     }
@@ -61,14 +65,14 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const obsIn: HubObservation[] = []; const sumIn: Summary[] = [];
     for (const r of rows('observations')) {
       const p = PushObservationSchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, ['title', 'type'], 'invalid_observation')); continue; }
-      const o = p.data; if (forgotten(o.id)) continue;
+      const o = p.data; if (forgotten('observation', o.id)) continue;
       const hasVec = !!o.embedding && o.embedding.length > 0;
       if ((o.embeddingModel && o.embeddingModel !== cfg.embeddingModel) || (hasVec && (o.embeddingModel !== cfg.embeddingModel || o.embedding!.length !== cfg.embeddingDims))) { rejected.push({ id: o.id, reason: 'embedding_model_mismatch' }); continue; }
       obsIn.push({ ...o, projectId: project.id, userId: auth.userName, origin: 'hub', syncedAt: null, embedding: hasVec ? o.embedding : null, embeddingModel: hasVec ? o.embeddingModel : null });
     }
     for (const r of rows('summaries')) {
       const p = PushSummarySchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, ['request'], 'invalid_summary')); continue; }
-      if (forgotten(p.data.id)) continue;
+      if (forgotten('summary', p.data.id)) continue;
       sumIn.push({ ...p.data, projectId: project.id, userId: auth.userName, origin: 'hub', syncedAt: null });
     }
     // A row must hang off a session this user owns in this project (avoids FK 500s and attaching rows to someone else's session).

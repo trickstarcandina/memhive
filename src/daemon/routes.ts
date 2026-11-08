@@ -102,15 +102,19 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const b = (body ?? {}) as { projectKey?: unknown; ids?: unknown; force?: unknown; preview?: unknown };
     if (typeof b.projectKey !== 'string' || !Array.isArray(b.ids) || !b.ids.length || b.ids.length > 100 || !b.ids.every((x) => typeof x === 'string')) return err(400, 'bad_forget', 'projectKey and ids (1-100 strings) required');
     const project = store.getProjectByKey(b.projectKey);
-    type Row = { id: string; kind: 'observation' | 'summary'; type: string; title: string; userId: string; createdAt: string; origin: string };
+    type Row = { id: string; kind: 'observation' | 'summary'; type: string; title: string; userId: string; createdAt: string; origin: string; local_only: boolean };
     const out = { deleted: [] as Row[], not_owner: [] as Row[], not_found: [] as string[] };
-    for (const raw of b.ids as string[]) {
-      const oid = store.resolveIdPrefix(raw); const sid = oid ? null : store.resolveSummaryIdPrefix(raw);
-      const o = oid ? store.getObservations([oid])[0] : undefined; const m = sid ? store.getSummaries([sid])[0] : undefined;
+    // An id must match exactly one row of this project across both tables: a prefix shared by several rows is refused whole,
+    // never resolved to whichever table happens to have a single match.
+    const matched = (b.ids as string[]).map((raw) => ({ raw, hits: project ? store.matchIdPrefix(project.id, raw.replace(/^#/, '')) : [] }));
+    const ambiguous = matched.filter((m) => m.hits.length > 1).map((m) => m.raw);
+    if (ambiguous.length) return err(400, 'ambiguous_id', `ids match more than one row, use more characters: ${ambiguous.map((x) => x.replace(/[^0-9a-f#-]/gi, '?').slice(0, 64)).join(', ')}`);
+    for (const { raw, hits: [hit] } of matched) {
+      const o = hit?.kind === 'observation' ? store.getObservations([hit.id])[0] : undefined; const m = hit?.kind === 'summary' ? store.getSummaries([hit.id])[0] : undefined;
       const x = o ?? m;
-      if (!x || !project || x.projectId !== project.id) { out.not_found.push(raw); continue; }
-      const row: Row = { id: x.id, kind: o ? 'observation' : 'summary', type: o ? o.type : 'session-summary', title: o ? o.title : m!.request.slice(0, 200), userId: x.userId, createdAt: x.createdAt, origin: x.origin };
+      if (!x || !project) { out.not_found.push(raw); continue; }
       const own = x.origin === 'local';
+      const row: Row = { id: x.id, kind: o ? 'observation' : 'summary', type: o ? o.type : 'session-summary', title: o ? o.title : m!.request.slice(0, 200), userId: x.userId, createdAt: x.createdAt, origin: x.origin, local_only: !own };
       if (!own && b.force !== true) { out.not_owner.push(row); continue; }
       if (b.preview !== true) {
         const opts = { syncedAt: own ? null : new Date().toISOString(), projectId: project.id };   // a forced foreign row: remembered, never pushed
@@ -118,9 +122,11 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
       }
       out.deleted.push(row);
     }
-    const protocol = project?.hubUrl && ctx.sync?.hubProtocol ? await ctx.sync.hubProtocol(project) : null;
-    // true: the team's copies go too; false: local only (not linked, or a hub before protocol 2); null: hub unreachable, queued.
-    const propagates = !project?.hubUrl ? false : protocol === null ? null : protocol >= 2;
+    // About own rows only (forced rows are local_only): true: the team's copies go too; false: local only (not linked, or a hub
+    // before protocol 2); null: hub unreachable, queued.
+    const own = out.deleted.some((r) => !r.local_only);
+    const protocol = own && project?.hubUrl && ctx.sync?.hubProtocol ? await ctx.sync.hubProtocol(project) : null;
+    const propagates = !own || !project?.hubUrl ? false : protocol === null ? null : protocol >= 2;
     if (project?.hubUrl && b.preview !== true && out.deleted.length) ctx.sync?.schedulePush(project.id);
     return ok({ ...out, propagates });
   }

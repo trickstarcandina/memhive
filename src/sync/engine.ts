@@ -125,6 +125,7 @@ export class SyncEngine implements SyncHooks {
     return (await this.hubConfig(c, project.hubUrl!, false, 3000))?.protocol ?? null;
   }
   private tombWarned = new Set<string>();
+  private tombKeptWarned = new Set<string>();
   hubErrors(): Array<{ hub: string; error: string }> {
     return [...this.hubCfg].filter(([, h]) => (h.cfg.protocol ?? 0) > HUB_PROTOCOL).map(([hub, h]) => ({ hub, error: `hub_protocol: hub speaks protocol ${h.cfg.protocol}, this memhive speaks ${HUB_PROTOCOL}` }));
   }
@@ -195,14 +196,14 @@ export class SyncEngine implements SyncHooks {
       };
       const hubObs = fit(observations.map((o) => toHub(clipObs(o)))); const sums = fit(summaries);
       const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: hubObs, summaries: sums, tombstones };   // tombstones are tiny: left out of the byte budget
-      let result: PushResult;
+      let result: PushResult; let refused = false;   // refused: the hub turned the whole body down (giveUp)
       try { result = await this.send(client, project, body); }
       catch (e) {
         if (e instanceof HubError && e.status === 401) { this.failed(project, 'push', e); return round === 0 ? null : total; }
         if (e instanceof HubError && e.status === 413 && taken > 1) { cap = Math.max(1, Math.floor(taken / 2)); continue; }
         if (e instanceof HubError && e.status === 413 && hubObs[0]?.embedding) {
           try { result = await this.send(client, project, { ...body, observations: [noVec(hubObs[0])] }); }
-          catch (e2) { if (!(e2 instanceof HubError) || e2.status !== 413) { this.failed(project, 'push', e2); return round === 0 ? null : total; } result = this.giveUp(project, body, e2); }
+          catch (e2) { if (!(e2 instanceof HubError) || e2.status !== 413) { this.failed(project, 'push', e2); return round === 0 ? null : total; } refused = true; result = this.giveUp(project, body, e2); }
         } else if (transient(e) || (e as HubError).status === 404 || (e as HubError).code === 'http_error') {
           // Policy: 408/429/5xx back off with rows kept, forever. 404 and a bare 4xx (no hub error body: proxy, WAF, wrong path, old hub)
           // also back off, but after MAX_STRIKES in a row a bare 4xx goes row by row and gives up the one row still refused (warn log),
@@ -213,7 +214,7 @@ export class SyncEngine implements SyncHooks {
           const strikes = (prev?.strikes ?? 0) + (bounded ? 1 : 0);
           if (bounded && status !== 404 && strikes >= MAX_STRIKES) {
             if (taken > 1) { cap = 1; isolating = true; this.backoff.set(project.id, { until: 0, delayMs: prev?.delayMs ?? BACKOFF_START_MS, strikes }); continue; }
-            this.backoff.delete(project.id); result = this.giveUp(project, body, e as HubError);
+            this.backoff.delete(project.id); refused = true; result = this.giveUp(project, body, e as HubError);
           } else {
             const delayMs = status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : this.ladder(prev, e);
             this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes });
@@ -222,7 +223,7 @@ export class SyncEngine implements SyncHooks {
             else logger.warn('push failed, backing off', { hub: project.hubUrl, status, retryInMs: delayMs, error: e instanceof Error ? e.message : String(e) });
             return round === 0 ? null : total;
           }
-        } else result = this.giveUp(project, body, e as HubError);
+        } else { refused = true; result = this.giveUp(project, body, e as HubError); }
       }
       // While isolating, a passing row keeps the strike count so the refused row is given up when it comes up.
       if (!isolating) this.backoff.delete(project.id);
@@ -250,7 +251,11 @@ export class SyncEngine implements SyncHooks {
       store.markSynced('sessions', done(sessions.map((s) => s.id)), now);
       store.markSynced('observations', done(hubObs.map((o) => o.id)), now);
       store.markSynced('summaries', done(sums.map((s) => s.id)), now);
-      store.markTombstonesSynced(project.id, tombstones.map((t) => t.id), now);   // a refused one (not_owner) is not retried either
+      // A tombstone the hub refused (not_owner) is not retried either. One sent in a body the hub turned down whole was never
+      // looked at: it stays queued and goes alone next round. A tombstone-only body that is turned down is given up, so this is bounded.
+      if (refused && tombstones.length && sessions.length + hubObs.length + sums.length > 0) {
+        if (!this.tombKeptWarned.has(project.id)) { this.tombKeptWarned.add(project.id); logger.warn('hub refused a push body; its tombstones stay queued', { hub: project.hubUrl, count: tombstones.length }); }
+      } else store.markTombstonesSynced(project.id, tombstones.map((t) => t.id), now);
       const lost = result.rejected.filter((r) => !kept.has(r.id) && r.reason !== 'given_up');
       if (lost.length) logger.warn('hub rejected rows; they will not be retried', { hub: project.hubUrl, count: lost.length, sample: lost.slice(0, 5) });
       total.accepted.sessions += result.accepted.sessions; total.accepted.observations += result.accepted.observations; total.accepted.summaries += result.accepted.summaries;
@@ -353,9 +358,11 @@ export class SyncEngine implements SyncHooks {
           // Scoped to this project, so another project's row with the same id is left alone.
           const del = { syncedAt: now, projectId: project.id };
           for (const t of tombs) pageApplied += t.tbl === 'observation' ? store.deleteObservations([t.id], del) : t.tbl === 'summary' ? store.deleteSummaries([t.id], del) : store.deleteSession(t.id, del);
-          const dead = store.forgottenIds(project.id, [...sessions, ...observations, ...summaries].map(({ row }) => row.id));
+          // Per table: a tombstone for a session id must not hide another user's observation that has the same id.
+          const ids = (l: Array<{ row: { id: string } }>) => l.map(({ row }) => row.id);
+          const dead = { s: store.forgottenIds(project.id, 'session', ids(sessions)), o: store.forgottenIds(project.id, 'observation', ids(observations)), m: store.forgottenIds(project.id, 'summary', ids(summaries)) };
           for (const { row: s, raw } of sessions) {
-            if (dead.has(s.id)) continue;
+            if (dead.s.has(s.id)) continue;
             // A session already pulled is updated when it ends (cwd is no longer relayed, so it is not compared). Our own sessions, and a
             // session of another project or user that happens to share the id, are never overwritten.
             const cur = store.getSession(s.id);
@@ -364,7 +371,7 @@ export class SyncEngine implements SyncHooks {
           }
           const haveObs = store.hasObservations(observations.map(({ row }) => row.id)); const haveSums = store.hasSummaries(summaries.map(({ row }) => row.id));
           for (const { row: o, raw } of observations) {
-            if (haveObs.has(o.id) || dead.has(o.id)) continue;
+            if (haveObs.has(o.id) || dead.o.has(o.id)) continue;
             if (!store.getSession(o.sessionId)) { hold('observations', raw, 'unknown session'); continue; }
             const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
             if (!apply('observations', raw, () => store.insertObservations([row]))) continue;
@@ -374,7 +381,7 @@ export class SyncEngine implements SyncHooks {
             }
           }
           for (const { row: m, raw } of summaries) {
-            if (haveSums.has(m.id) || dead.has(m.id)) continue;
+            if (haveSums.has(m.id) || dead.m.has(m.id)) continue;
             if (!store.getSession(m.sessionId)) { hold('summaries', raw, 'unknown session'); continue; }
             if (apply('summaries', raw, () => store.insertSummaries([{ ...m, projectId: project.id, origin: 'hub', syncedAt: now }]))) pageApplied++;
           }
