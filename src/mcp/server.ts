@@ -37,7 +37,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string; recon
 
   server.registerTool('search', {
     description: 'Step 1 of 3. Search past observations for this project. Returns a compact index (ids, types, titles). Follow with timeline and get_observations.',
-    inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().optional(), since: z.string().optional().describe('ISO date or relative like 7d, 12h'), project: z.string().optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
+    inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().max(200).optional(), since: z.string().max(64).optional().describe('ISO date or relative like 7d, 12h'), project: z.string().max(1000).optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
   }, async (a) => {
     const q = new URLSearchParams({ q: a.query, project_key: a.project ?? (await projectKey()), limit: String(a.limit) });
     if (a.type) q.set('type', a.type);
