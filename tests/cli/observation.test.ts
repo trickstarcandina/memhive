@@ -65,7 +65,7 @@ describe('search flags', () => {
     let r = io(); expect(await searchCommand(['--limit', '2'], r.io, { home, cwd, recent: true })).toBe(0);
     expect(r.text()).toContain('Zebra parser fixed'); expect(r.text()).toContain('Bob zebra note'); expect(r.text()).not.toContain('Old zebra');
     r = io(); await searchCommand(['--json', '--all-projects'], r.io, { home, cwd, recent: true });
-    expect(ids(r.text())).toHaveLength(4);
+    expect(ids(r.text())).toEqual(expect.arrayContaining([mine.id, old.id, theirs.id, other.id]));   // edit/forget tests may add their own rows first
   });
 });
 
@@ -81,11 +81,15 @@ describe('show', () => {
 });
 
 describe('edit', () => {
+  // edits go to a row of their own: search and show tests read `mine` and may run after these (VITEST_SHUFFLE)
+  const ancient = new Date(Date.now() - 500 * 864e5).toISOString();
+  let ed: ReturnType<typeof obs>;
+  beforeAll(() => { ed = obs({ projectId: mine.projectId, sessionId: mine.sessionId, title: 'Edit target', type: 'config', createdAt: ancient }); ctx.store.insertObservations([ed]); });
   it('changes title and narrative of an own row, keeps it unsynced state, and drops its vector', async () => {
     const r = io();
-    expect(await editCommand([mine.id.slice(-8), '--title', 'Zebra parser fixed for good', '--narrative', 'longer story', '--json'], r.io, { home, cwd })).toBe(0);
-    expect(JSON.parse(r.text()).observation).toMatchObject({ id: mine.id, title: 'Zebra parser fixed for good', narrative: 'longer story' });
-    expect(ctx.store.getObservations([mine.id])[0].embeddingModel).toBeNull();
+    expect(await editCommand([ed.id.slice(-8), '--title', 'Edit target renamed', '--narrative', 'longer story', '--json'], r.io, { home, cwd })).toBe(0);
+    expect(JSON.parse(r.text()).observation).toMatchObject({ id: ed.id, title: 'Edit target renamed', narrative: 'longer story' });
+    expect(ctx.store.getObservations([ed.id])[0].embeddingModel).toBeNull();
   });
   it('pins and unpins any row of the project, but refuses to rewrite someone else\'s', async () => {
     let r = io(); expect(await editCommand([theirs.id.slice(-8), '--pin'], r.io, { home, cwd })).toBe(0);
@@ -100,19 +104,21 @@ describe('edit', () => {
     let r = io(); expect(await editCommand([other.id.slice(-8), '--pin'], r.io, { home, cwd })).toBe(1);
     expect(r.errText()).toContain('no such observation');
     expect(ctx.store.getObservations([other.id])[0].pinned).toBe(false);
-    r = io(); expect(await editCommand([mine.id], r.io, { home, cwd })).toBe(2);
-    r = io(); expect(await editCommand([mine.id, '--pin', '--unpin'], r.io, { home, cwd })).toBe(2);
-    r = io(); expect(await editCommand([mine.id, '--title', ''], r.io, { home, cwd })).toBe(1);   // empty after trim
-    r = io(); expect(await editCommand([mine.id, '--title', 'key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH'], r.io, { home, cwd })).toBe(0);
-    expect(ctx.store.getObservations([mine.id])[0].title).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');   // redacted like save_memory
+    r = io(); expect(await editCommand([ed.id], r.io, { home, cwd })).toBe(2);
+    r = io(); expect(await editCommand([ed.id, '--pin', '--unpin'], r.io, { home, cwd })).toBe(2);
+    r = io(); expect(await editCommand([ed.id, '--title', ''], r.io, { home, cwd })).toBe(1);   // empty after trim
+    r = io(); expect(await editCommand([ed.id, '--title', 'key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH'], r.io, { home, cwd })).toBe(0);
+    expect(ctx.store.getObservations([ed.id])[0].title).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');   // redacted like save_memory
   });
 });
 
 describe('--json on forget and daemon status', () => {
+  let gone: ReturnType<typeof obs>;
+  beforeAll(() => { gone = obs({ projectId: mine.projectId, sessionId: mine.sessionId, title: 'Forget target', type: 'config', createdAt: new Date(Date.now() - 600 * 864e5).toISOString() }); ctx.store.insertObservations([gone]); });
   it('forget --json needs --yes and prints the result object', async () => {
-    let r = io(); expect(await forgetCommand([old.id, '--json'], r.io, { home, cwd })).toBe(2);
-    r = io(); expect(await forgetCommand([old.id, '--json', '--yes'], r.io, { home, cwd })).toBe(0);
-    expect(JSON.parse(r.text())).toMatchObject({ deleted: [{ id: old.id }], not_owner: [], not_found: [], propagates: false });
+    let r = io(); expect(await forgetCommand([gone.id, '--json'], r.io, { home, cwd })).toBe(2);
+    r = io(); expect(await forgetCommand([gone.id, '--json', '--yes'], r.io, { home, cwd })).toBe(0);
+    expect(JSON.parse(r.text())).toMatchObject({ deleted: [{ id: gone.id }], not_owner: [], not_found: [], propagates: false });
   });
   it('daemon status --json', async () => {
     const r = io(); expect(await daemonCommand(['status', '--json'], r.io, { home })).toBe(0);

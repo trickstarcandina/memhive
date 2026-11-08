@@ -6,6 +6,8 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'], testTimeout: 15000,
     globalSetup: ['tests/helpers/global-setup.ts'], setupFiles: ['tests/helpers/no-spawn.ts'],
+    // isolation stays on (tests mutate process.env and process.stdin); VITEST_SHUFFLE=1 flushes out order dependence
+    sequence: { shuffle: process.env.VITEST_SHUFFLE === '1' },
     // `npm run test:coverage`; no threshold, the numbers are reported only
     coverage: { provider: 'v8', include: ['src/**/*.ts'], reporter: ['text-summary', 'text', 'json-summary'], reportsDirectory: 'coverage' },
   },

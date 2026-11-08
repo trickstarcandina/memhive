@@ -34,7 +34,7 @@ describe.each(hubStores('rt'))('$name', ({ open }) => {
   });
   afterAll(async () => { await hub.close(); });
 
-  describe('sync round trip', () => {
+  describe('sync round trip', { shuffle: false }, () => {   // a scripted conversation between clients A and B
     it('A pushes, B pulls, origin=hub, vectors carried, idempotent, cursor advances', async () => {
       const a = client('alice', keys.alice, 2); const b = client('bob', keys.bob, 2);
       const s = sess(a.project.id, { userId: 'alice' }); a.store.upsertSession(s);

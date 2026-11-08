@@ -2,6 +2,12 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: 'Shuffle test order (VITEST_SHUFFLE=1) to find order-dependent tests'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,6 +20,8 @@ jobs:
         node: [22, 24]
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      VITEST_SHUFFLE: ${{ inputs.nightly && '1' || '' }}
     defaults:
       run:
         # One POSIX shell everywhere; Git Bash on Windows.
@@ -48,6 +56,8 @@ jobs:
 
   postgres:
     runs-on: ubuntu-latest
+    env:
+      VITEST_SHUFFLE: ${{ inputs.nightly && '1' || '' }}
     services:
       db:
         image: pgvector/pgvector:pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8

@@ -97,8 +97,13 @@ describe('daemon HTTP edges', () => {
     expect((await raw('/v1/events', '{}')).status).toBe(400);   // the daemon still serves
   });
   it('/v1/shutdown stops the daemon and removes daemon.json', async () => {
-    expect((await raw('/v1/shutdown', '')).status).toBe(200);
-    await waitFor(() => !existsSync(path.join(home, 'daemon.json')), { what: 'daemon.json removed' });
-    expect(existsSync(path.join(home, 'daemon.lock'))).toBe(false);
+    // its own daemon, so the other tests here never meet a stopped one
+    const own = mkdtempSync(path.join(tmpdir(), 'mh-routes-')); const d = await startDaemon(createDaemonContext(own, env), { port: 0, idleMs: 60_000 });
+    try {
+      const r = await fetch(`http://127.0.0.1:${d.info.port}/v1/shutdown`, { method: 'POST', headers: { 'x-memhive-daemon-token': d.info.token } });
+      expect(r.status).toBe(200);
+      await waitFor(() => !existsSync(path.join(own, 'daemon.json')), { what: 'daemon.json removed' });
+      expect(existsSync(path.join(own, 'daemon.lock'))).toBe(false);
+    } finally { await d.close(); }
   });
 });

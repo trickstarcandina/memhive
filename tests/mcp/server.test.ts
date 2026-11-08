@@ -76,6 +76,7 @@ describe('mcp', () => {
     expect(full).toContain('Use pnpm, not npm');
   });
   it('search and get_observations include session summaries', async () => {
+    await client.callTool({ name: 'save_memory', arguments: { text: 'creates the manual session this test hangs a summary on' } });   // whatever ran before
     const dc = new DaemonClient(h.info);
     const key = (await dc.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
     const store = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' }).store;

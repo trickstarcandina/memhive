@@ -25,7 +25,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await handle.close(); });
 
-describe('daemon', () => {
+describe('daemon', { shuffle: false }, () => {   // one daemon; later tests read what earlier ones recorded
   it('writes daemon.json and answers healthz', async () => {
     expect(readDaemonInfo(home)!.port).toBe(handle.info.port);
     expect(await client.health()).toBe(true);
