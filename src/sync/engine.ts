@@ -143,7 +143,7 @@ export class SyncEngine implements SyncHooks {
     const client = this.clientFor(project); if (!client) return 0;
     const { store, embedDims, embedModel, logger } = this.deps;
     let applied = 0; let since = store.getPullCursor(project.id);
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Date.now() + timeoutMs; let wasReset = false;
     // One bad row must not stall the cursor: it is logged (once per id) and skipped.
     const apply = (id: string, fn: () => void): boolean => {
       try { fn(); return true; }
@@ -155,9 +155,12 @@ export class SyncEngine implements SyncHooks {
       catch (e) { this.failed(project, 'pull', e); break; }
       // A cursor past the hub's last seq means the hub lost its data (restored or recreated): pull from 0 and push local rows again.
       // An older hub without max_seq skips this check.
-      if (typeof page.max_seq === 'number' && since > page.max_seq) {
+      // At most one reset per call, and the deadline still applies, so a buggy hub cannot loop us.
+      if (!wasReset && Number.isSafeInteger(page.max_seq) && page.max_seq >= 0 && since > page.max_seq) {
         logger.warn('pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
-        store.resetProjectSync(project.id); since = 0; this.schedulePush(project.id); continue;
+        store.resetProjectSync(project.id); since = 0; wasReset = true; this.schedulePush(project.id);
+        if (Date.now() > deadline) break;
+        continue;
       }
       const now = new Date().toISOString();
       for (const s of page.sessions) {

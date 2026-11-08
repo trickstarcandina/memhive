@@ -165,6 +165,28 @@ describe('pull robustness', () => {
     expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
     expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(1);
   });
+  it('a hub that always reports max_seq below the cursor triggers one reset, and pull() terminates', async () => {
+    let pulls = 0;
+    const page = (since: number) => ({ sessions: [], observations: [], summaries: [], next_seq: since + 1, has_more: true, max_seq: since - 1 });
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => {
+      if (!String(url).includes('/v1/sync/pull')) return inner(url, init);
+      pulls++; return new Response(JSON.stringify(page(Number(new URL(String(url)).searchParams.get('since')))), { status: 200 });
+    } });
+    const reset = vi.spyOn(t.store, 'resetProjectSync');
+    t.store.setPullCursor(t.project.id, 50);
+    await t.engine.pull(t.project, 300);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(pulls).toBeGreaterThan(1);
+  });
+  it('a max_seq that is not a safe non-negative integer is ignored', async () => {
+    for (const max_seq of [-1, 1.5, 'x', 1e300]) {
+      const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify({ sessions: [], observations: [], summaries: [], next_seq: 50, has_more: false, max_seq }), { status: 200 }) : inner(url, init) });
+      const reset = vi.spyOn(t.store, 'resetProjectSync');
+      t.store.setPullCursor(t.project.id, 50);
+      await t.engine.pull(t.project, 1000);
+      expect(reset).not.toHaveBeenCalled();
+    }
+  });
   it('a pulled row that cannot be stored is skipped; the rest apply and the cursor advances', async () => {
     const good = { id: newId(), projectId: 'x', userId: 'bob', host: 'codex', hostSessionId: 'h', cwd: '/b', startedAt: new Date().toISOString(), endedAt: null, syncedAt: null };
     const bad = { ...good, id: newId(), hostSessionId: 'h2', host: null };   // NOT NULL violation locally
