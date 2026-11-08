@@ -15,7 +15,7 @@ usage: memhive <command>
   search <query> [--type t] [--user u] [--since 7d] [--limit n]
   embed [--missing|--rebuild]
   serve [--reset-vectors]
-  key <create|list|revoke>
+  key <create|list|revoke|rotate>   user <list|remove>   project list
   login <hub-url> [--key-stdin]
   link <hub-url> | unlink | sync
   version
@@ -31,7 +31,9 @@ const SUB_USAGE: Record<string, string> = {
   search: 'usage: memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]\n',
   embed: 'usage: memhive embed [--missing|--rebuild]\n',
   serve: 'usage: memhive serve [--reset-vectors]   (env: DATABASE_URL, PORT, MEMHIVE_EMBED_MODEL, MEMHIVE_EMBED_DIMS, MEMHIVE_RESET_VECTORS)\n  --reset-vectors  after a MEMHIVE_EMBED_DIMS change, drop every stored vector instead of refusing to start\n',
-  key: 'usage: memhive key <create --user <name> [--label <text>] | list | revoke <id>>\n',
+  key: 'usage: memhive key <create --user <name> [--label <text>] | list | revoke <id> | rotate <id|user>> [--json]   (env: DATABASE_URL of the hub)\n',
+  user: 'usage: memhive user <list | remove <name>> [--json]   (remove revokes every key of the user; their rows stay on the hub)\n',
+  project: 'usage: memhive project list [--json]   (projects on the hub with row counts)\n',
   login: 'usage: memhive login <hub-url> [--key-stdin]   (prompts for the API key without echo; --key-stdin reads it from stdin)\n',
   link: 'usage: memhive link <hub-url>   (links the current project to a hub you are logged in to)\n',
   unlink: 'usage: memhive unlink   (stops syncing the current project)\n',
@@ -55,6 +57,8 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'install': return (await import('./commands/install.js')).installCommand(rest, { stdout, stderr });
     case 'serve': return (await import('./commands/serve.js')).serveCommand(rest, { stdout, stderr });
     case 'key': return (await import('./commands/key.js')).keyCommand(rest, { stdout, stderr });
+    case 'user': return (await import('./commands/hub-admin.js')).userCommand(rest, { stdout, stderr });
+    case 'project': return (await import('./commands/hub-admin.js')).projectCommand(rest, { stdout, stderr });
     case 'login': return (await import('./commands/login.js')).loginCommand(rest, { stdout, stderr });
     case 'link': return (await import('./commands/link.js')).linkCommand(rest, { stdout, stderr });
     case 'unlink': return (await import('./commands/link.js')).linkCommand(rest, { stdout, stderr }, { unlink: true });

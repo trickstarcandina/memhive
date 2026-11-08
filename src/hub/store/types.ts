@@ -1,6 +1,9 @@
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
 
 export interface HubObservation extends Observation { embedding: number[] | null }
+export interface HubUserInfo { name: string; createdAt: string; activeKeys: number; observations: number; lastSeen: string | null }   // lastSeen: newest session or observation time the user's clients reported
+export interface HubProjectInfo { key: string; name: string; createdAt: string; observations: number; sessions: number; summaries: number; lastActivity: string | null }
+export interface HubUserRemoval { revokedKeys: number; observations: number; sessions: number; summaries: number }   // rows counted here stay on the hub
 export interface HubApiKey { id: string; userName: string; label: string; createdAt: string; revokedAt: string | null }
 export type SyncTable = 'sessions' | 'observations' | 'summaries';
 export interface SyncLogEntry { seq: number; table: SyncTable; rowId: string }
@@ -39,5 +42,9 @@ export interface HubStore {
   createApiKey(userName: string, label: string, keyHash: string): Promise<HubApiKey>;
   listApiKeys(): Promise<HubApiKey[]>;
   revokeApiKey(id: string): Promise<boolean>;
+  rotateApiKey(id: string, newHash: string): Promise<HubApiKey | null>;   // revokes the active key id and adds one for the same user and label, atomically; null when id is not active
+  listUsers(): Promise<HubUserInfo[]>;
+  removeUser(name: string): Promise<HubUserRemoval | null>;              // revokes every key of the user, keeps rows; null when unknown
+  listProjects(): Promise<HubProjectInfo[]>;
   authenticate(keyHash: string): Promise<{ keyId: string; userName: string } | null>;   // null when unknown or revoked
 }

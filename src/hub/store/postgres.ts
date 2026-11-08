@@ -1,6 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import { HubDimsConflict, HubDimsMismatch, type HubStoreOptions } from './types.js';
-import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
+import type { HubApiKey, HubObservation, HubProjectInfo, HubStore, HubUserInfo, HubUserRemoval, SyncLogEntry, SyncTable } from './types.js';
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
 import { assertValidDims, hubPgMigrations } from './migrations-pg.js';
 import { newId } from '../../shared/ids.js';
@@ -163,6 +163,35 @@ export class PostgresHubStore implements HubStore {
   }
   async listApiKeys(): Promise<HubApiKey[]> { return (await this.q('SELECT * FROM api_keys ORDER BY created_at')).map(rowToKey); }
   async revokeApiKey(id: string): Promise<boolean> { return (await this.pool.query('UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [id])).rowCount! > 0; }
+  async rotateApiKey(id: string, newHash: string): Promise<HubApiKey | null> {
+    const c = await this.pool.connect(); let dead: Error | undefined;
+    try {
+      await c.query('BEGIN');
+      const { rows: [old] } = await c.query('UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL RETURNING user_name, label', [id]);
+      if (!old) { await c.query('ROLLBACK'); return null; }
+      const { rows: [r] } = await c.query('INSERT INTO api_keys(id, user_name, label, key_hash, created_at) VALUES ($1, $2, $3, $4, now()) RETURNING *', [newId(), old.user_name, old.label, newHash]);
+      await c.query('COMMIT'); return rowToKey(r);
+    } catch (e) { await c.query('ROLLBACK').catch((re) => { dead = re; }); throw e; } finally { c.release(dead); }
+  }
+  async listUsers(): Promise<HubUserInfo[]> {
+    return (await this.q(`SELECT u.name, u.created_at,
+      (SELECT COUNT(*) FROM api_keys k WHERE k.user_name = u.name AND k.revoked_at IS NULL) AS active_keys,
+      (SELECT COUNT(*) FROM observations o WHERE o.user_id = u.name) AS observations,
+      GREATEST((SELECT MAX(COALESCE(s.ended_at, s.started_at)) FROM sessions s WHERE s.user_id = u.name), (SELECT MAX(o.created_at) FROM observations o WHERE o.user_id = u.name)) AS last_seen
+      FROM users u ORDER BY u.name`)).map((r) => ({ name: r.name, createdAt: iso(r.created_at), activeKeys: Number(r.active_keys), observations: Number(r.observations), lastSeen: isoOrNull(r.last_seen) }));
+  }
+  async removeUser(name: string): Promise<HubUserRemoval | null> {
+    const [u] = await this.q('SELECT name FROM users WHERE name = $1', [name]); if (!u) return null;
+    const revoked = (await this.pool.query('UPDATE api_keys SET revoked_at = now() WHERE user_name = $1 AND revoked_at IS NULL', [name])).rowCount ?? 0;
+    const [r] = await this.q(`SELECT (SELECT COUNT(*) FROM observations WHERE user_id = $1) o, (SELECT COUNT(*) FROM sessions WHERE user_id = $1) s, (SELECT COUNT(*) FROM summaries WHERE user_id = $1) m`, [name]);
+    return { revokedKeys: revoked, observations: Number(r.o), sessions: Number(r.s), summaries: Number(r.m) };
+  }
+  async listProjects(): Promise<HubProjectInfo[]> {
+    return (await this.q(`SELECT p.key, p.name, p.created_at,
+      (SELECT COUNT(*) FROM observations o WHERE o.project_id = p.id) AS observations, (SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS sessions,
+      (SELECT COUNT(*) FROM summaries m WHERE m.project_id = p.id) AS summaries, (SELECT MAX(o.created_at) FROM observations o WHERE o.project_id = p.id) AS last_activity
+      FROM projects p ORDER BY p.key`)).map((r) => ({ key: r.key, name: r.name, createdAt: iso(r.created_at), observations: Number(r.observations), sessions: Number(r.sessions), summaries: Number(r.summaries), lastActivity: isoOrNull(r.last_activity) }));
+  }
   async authenticate(keyHash: string): Promise<{ keyId: string; userName: string } | null> {
     const [r] = await this.q('SELECT id, user_name FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL', [keyHash]);
     return r ? { keyId: r.id, userName: r.user_name } : null;

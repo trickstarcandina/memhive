@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { HubDimsConflict, HubDimsMismatch, type HubStoreOptions } from './types.js';
-import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
+import type { HubApiKey, HubObservation, HubProjectInfo, HubStore, HubUserInfo, HubUserRemoval, SyncLogEntry, SyncTable } from './types.js';
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
 import { HUB_SQLITE_MIGRATIONS } from './migrations-sqlite.js';
 import { toFtsQuery } from '../../store/sqlite/fts-query.js';
@@ -109,6 +109,37 @@ export class SqliteHubStore implements HubStore {
   }
   async listApiKeys(): Promise<HubApiKey[]> { return (this.db.prepare('SELECT * FROM api_keys ORDER BY created_at').all() as Row[]).map(rowToKey); }
   async revokeApiKey(id: string): Promise<boolean> { return this.db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(new Date().toISOString(), id).changes > 0; }
+  async rotateApiKey(id: string, newHash: string): Promise<HubApiKey | null> {
+    return this.db.transaction((): HubApiKey | null => {
+      const old = this.db.prepare('SELECT user_name, label FROM api_keys WHERE id = ? AND revoked_at IS NULL').get(id) as Row | undefined;
+      if (!old) return null;
+      const now = new Date().toISOString();
+      this.db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ?').run(now, id);
+      const k: HubApiKey = { id: newId(), userName: old.user_name, label: old.label, createdAt: now, revokedAt: null };
+      this.db.prepare('INSERT INTO api_keys(id, user_name, label, key_hash, created_at) VALUES (?, ?, ?, ?, ?)').run(k.id, k.userName, k.label, newHash, k.createdAt);
+      return k;
+    })();
+  }
+  async listUsers(): Promise<HubUserInfo[]> {
+    // MAX(a, b) is NULL if either is NULL in SQLite, hence the '' stand-ins
+    return (this.db.prepare(`SELECT u.name, u.created_at,
+      (SELECT COUNT(*) FROM api_keys k WHERE k.user_name = u.name AND k.revoked_at IS NULL) AS active_keys,
+      (SELECT COUNT(*) FROM observations o WHERE o.user_id = u.name) AS observations,
+      NULLIF(MAX(COALESCE((SELECT MAX(COALESCE(s.ended_at, s.started_at)) FROM sessions s WHERE s.user_id = u.name), ''), COALESCE((SELECT MAX(o.created_at) FROM observations o WHERE o.user_id = u.name), '')), '') AS last_seen
+      FROM users u ORDER BY u.name`).all() as Row[]).map((r) => ({ name: r.name, createdAt: r.created_at, activeKeys: Number(r.active_keys), observations: Number(r.observations), lastSeen: r.last_seen ?? null }));
+  }
+  async removeUser(name: string): Promise<HubUserRemoval | null> {
+    if (!this.db.prepare('SELECT 1 FROM users WHERE name = ?').get(name)) return null;
+    const revoked = this.db.prepare('UPDATE api_keys SET revoked_at = ? WHERE user_name = ? AND revoked_at IS NULL').run(new Date().toISOString(), name).changes;
+    const r = this.db.prepare(`SELECT (SELECT COUNT(*) FROM observations WHERE user_id = @n) o, (SELECT COUNT(*) FROM sessions WHERE user_id = @n) s, (SELECT COUNT(*) FROM summaries WHERE user_id = @n) m`).get({ n: name }) as Row;
+    return { revokedKeys: revoked, observations: Number(r.o), sessions: Number(r.s), summaries: Number(r.m) };
+  }
+  async listProjects(): Promise<HubProjectInfo[]> {
+    return (this.db.prepare(`SELECT p.key, p.name, p.created_at,
+      (SELECT COUNT(*) FROM observations o WHERE o.project_id = p.id) AS observations, (SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS sessions,
+      (SELECT COUNT(*) FROM summaries m WHERE m.project_id = p.id) AS summaries, (SELECT MAX(o.created_at) FROM observations o WHERE o.project_id = p.id) AS last_activity
+      FROM projects p ORDER BY p.key`).all() as Row[]).map((r) => ({ key: r.key, name: r.name, createdAt: r.created_at, observations: Number(r.observations), sessions: Number(r.sessions), summaries: Number(r.summaries), lastActivity: r.last_activity ?? null }));
+  }
   async authenticate(keyHash: string): Promise<{ keyId: string; userName: string } | null> {
     const r = this.db.prepare('SELECT id, user_name FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL').get(keyHash) as Row | undefined;
     return r ? { keyId: r.id, userName: r.user_name } : null;

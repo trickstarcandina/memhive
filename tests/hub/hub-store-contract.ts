@@ -123,6 +123,29 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>, op
       expect((search.body as { observations: unknown[] }).observations).toHaveLength(1);   // a malformed since is ignored, not passed to the DB
     });
 
+    it('rotate, list and remove users, list projects', async () => {
+      await s.createUser('alice'); await s.createUser('bob');
+      const k = await s.createApiKey('alice', 'laptop', 'h1'); await s.createApiKey('bob', 'desk', 'h2');
+      const n = await s.rotateApiKey(k.id, 'h3');
+      expect(n).toMatchObject({ userName: 'alice', label: 'laptop', revokedAt: null }); expect(n!.id).not.toBe(k.id);
+      expect(await s.authenticate('h1')).toBeNull(); expect(await s.authenticate('h3')).toEqual({ keyId: n!.id, userName: 'alice' });
+      expect(await s.rotateApiKey(k.id, 'h4')).toBeNull(); expect(await s.authenticate('h4')).toBeNull();
+      const p = await s.getOrCreateProject('github.com/a/b', 'b'); await s.getOrCreateProject('github.com/a/empty', 'empty');
+      const a = hsess(p.id, { startedAt: '2026-03-01T00:00:00.000Z', endedAt: '2026-03-02T00:00:00.000Z' }); await s.upsertSessions([a]);
+      await s.insertObservations([hobs({ projectId: p.id, sessionId: a.id, createdAt: '2026-03-01T10:00:00.000Z' }), hobs({ projectId: p.id, sessionId: a.id, createdAt: '2026-03-01T11:00:00.000Z' })]);
+      const users = await s.listUsers();
+      expect(users.map((u) => [u.name, u.activeKeys, u.observations])).toEqual([['alice', 1, 2], ['bob', 1, 0]]);
+      expect(users[0].lastSeen).toBe('2026-03-02T00:00:00.000Z'); expect(users[1].lastSeen).toBeNull();
+      const projects = await s.listProjects();
+      expect(projects.map((x) => [x.key, x.observations, x.sessions, x.summaries])).toEqual([['github.com/a/b', 2, 1, 0], ['github.com/a/empty', 0, 0, 0]]);
+      expect(projects[0].lastActivity).toBe('2026-03-01T11:00:00.000Z'); expect(projects[1].lastActivity).toBeNull();
+      await s.createApiKey('alice', 'second', 'h5');
+      expect(await s.removeUser('alice')).toEqual({ revokedKeys: 2, observations: 2, sessions: 1, summaries: 0 });
+      expect(await s.authenticate('h3')).toBeNull(); expect(await s.authenticate('h5')).toBeNull(); expect(await s.authenticate('h2')).not.toBeNull();
+      expect(await s.getObservations((await s.listSyncLog(p.id, 0, 10)).filter((e) => e.table === 'observations').map((e) => e.rowId))).toHaveLength(2);   // rows stay
+      expect(await s.removeUser('nobody')).toBeNull();
+    });
+
     it('users and keys', async () => {
       expect(await s.countUsers()).toBe(0);
       await s.createUser('alice'); await s.createUser('alice');

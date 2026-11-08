@@ -61,3 +61,47 @@ it('serve writes the initial admin key to a 0600 file, not stdout', async () => 
   expect(fail.code).toBe(1); expect(fail.err).toMatch(/cannot write the admin key/);
   const retry = await withServe([], blocked); expect(retry.out).toContain('First start');   // no key was stored, so the next start makes one
 });
+it('key rotate, key list --json, user list/remove, project list on a sqlite hub', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'mh-admin-')); const env = { DATABASE_URL: `sqlite:${path.join(dir, 'h.db')}` };
+  const run = async (fn: typeof keyCommand, args: string[]) => { const c = cap(); const code = await fn(args, c.io, env); return { code, ...c.o }; };
+  const { userCommand, projectCommand } = await import('../../src/cli/commands/hub-admin.js');
+  const created = JSON.parse((await run(keyCommand, ['create', '--user', 'dave', '--label', 'laptop', '--json'])).out);
+  expect(created).toMatchObject({ userName: 'dave', label: 'laptop', key: expect.stringMatching(/^mh_/) });
+  const rot = await run(keyCommand, ['rotate', 'dave']); expect(rot.code).toBe(0);
+  const newKey = /\n {2}(mh_\S+)/.exec(rot.out)![1]; expect(newKey).not.toBe(created.key); expect(rot.out).toContain(`Rotated ${created.id}`);
+  const keys = JSON.parse((await run(keyCommand, ['list', '--json'])).out);
+  expect(keys.map((k: any) => [k.userName, k.label, !!k.revokedAt])).toEqual([['dave', 'laptop', true], ['dave', 'laptop', false]]);
+  expect(JSON.stringify(keys)).not.toMatch(/mh_/);
+  const byId = JSON.parse((await run(keyCommand, ['rotate', keys[1].id, '--json'])).out); expect(byId).toMatchObject({ revoked: keys[1].id, userName: 'dave' });
+  await run(keyCommand, ['create', '--user', 'dave', '--label', 'desk']);
+  const amb = await run(keyCommand, ['rotate', 'dave']); expect(amb.code).toBe(1); expect(amb.err).toMatch(/2 active keys; rotate one by id/);
+  expect((await run(keyCommand, ['rotate', 'nobody'])).code).toBe(1);
+  expect((await run(keyCommand, ['rotate'])).err).toMatch(/usage/);
+  const users = JSON.parse((await run(userCommand, ['list', '--json'])).out); expect(users).toEqual([expect.objectContaining({ name: 'dave', activeKeys: 2, observations: 0, lastSeen: null })]);
+  expect((await run(userCommand, ['list'])).out).toMatch(/dave\s+2 keys/);
+  const rm = await run(userCommand, ['remove', 'dave']); expect(rm.code).toBe(0); expect(rm.out).toMatch(/revoked 2 key\(s\) of dave\. Kept on the hub: 0 sessions, 0 observations, 0 summaries/);
+  expect(JSON.parse((await run(userCommand, ['list', '--json'])).out)[0].activeKeys).toBe(0);
+  expect((await run(userCommand, ['remove', 'dave', '--json'])).out).toContain('"revokedKeys": 0');
+  expect((await run(userCommand, ['remove', 'ghost'])).code).toBe(1);
+  expect((await run(userCommand, ['nope'])).err).toMatch(/usage: memhive user/);
+  const { SqliteHubStore } = await import('../../src/hub/store/sqlite.js');
+  const st = new SqliteHubStore(path.join(dir, 'h.db'), { dims: null }); await st.migrate(); await st.getOrCreateProject('github.com/a/b', 'b'); await st.close();
+  expect(JSON.parse((await run(projectCommand, ['list', '--json'])).out)).toEqual([expect.objectContaining({ key: 'github.com/a/b', observations: 0, sessions: 0, lastActivity: null })]);
+  expect((await run(projectCommand, ['list'])).out).toMatch(/github\.com\/a\/b {2}\(b\) {2}0 observations/);
+  for (const cmd of ['user', 'project']) { const h = cap(); expect(await main([cmd, '--help'], h.io)).toBe(0); expect(h.o.out).toMatch(new RegExp(`usage: memhive ${cmd}`)); }
+});
+const pgUrl = process.env.TEST_DATABASE_URL;
+it.skipIf(!pgUrl)('key rotate against postgres', async () => {
+  // own database: other suites drop the public schema of TEST_DATABASE_URL in parallel
+  const { Pool } = await import('pg'); const name = 'memhive_test_cli';
+  const admin = new Pool({ connectionString: pgUrl }); if (!(await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [name])).rowCount) await admin.query(`CREATE DATABASE ${name}`); await admin.end();
+  const u = new URL(pgUrl!); u.pathname = '/' + name; const env = { DATABASE_URL: u.toString(), MEMHIVE_EMBED_DIMS: '4' };
+  const p = new Pool({ connectionString: env.DATABASE_URL }); await p.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS vector;'); await p.end();
+  let c = cap(); expect(await keyCommand(['create', '--user', 'erin', '--json'], c.io, env)).toBe(0); const old = JSON.parse(c.o.out);
+  c = cap(); expect(await keyCommand(['rotate', 'erin', '--json'], c.io, env)).toBe(0); const rot = JSON.parse(c.o.out);
+  expect(rot).toMatchObject({ revoked: old.id, userName: 'erin' });
+  const { PostgresHubStore } = await import('../../src/hub/store/postgres.js'); const { hashApiKey } = await import('../../src/hub/auth.js');
+  const st = new PostgresHubStore(env.DATABASE_URL, { dims: 4 });
+  expect(await st.authenticate(hashApiKey(old.key))).toBeNull(); expect(await st.authenticate(hashApiKey(rot.key))).toEqual({ keyId: rot.id, userName: 'erin' });
+  await st.close();
+});

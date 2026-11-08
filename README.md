@@ -182,9 +182,13 @@ Create one key per person or machine. Run these from `docker/`:
 docker compose exec hub node dist/memhive.cjs key create --user alice --label laptop
 docker compose exec hub node dist/memhive.cjs key list
 docker compose exec hub node dist/memhive.cjs key revoke <id>
+docker compose exec hub node dist/memhive.cjs key rotate <id|user>
+docker compose exec hub node dist/memhive.cjs user list
+docker compose exec hub node dist/memhive.cjs user remove <name>
+docker compose exec hub node dist/memhive.cjs project list
 ```
 
-The new key is printed once and starts with `mh_`. Give it to its owner through a private channel. `key revoke` takes the id shown by `key list`.
+The new key is printed once and starts with `mh_`. Give it to its owner through a private channel. `key revoke` takes the id shown by `key list`. `key rotate` revokes a key and creates its replacement (same user and label) in one step; it takes a key id, or a user name when that user has one active key. `user list` shows each user's active keys, observation count and last activity. `user remove` revokes every key of a user; their rows stay on the hub and remain visible to the team. `project list` shows each project's row counts and last activity. Every admin command takes `--json`.
 
 ### Connect a machine
 
