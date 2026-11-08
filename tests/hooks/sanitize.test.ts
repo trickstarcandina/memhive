@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { stripPrivate, sanitizeToolPayload, sanitizePrompt, redactSecrets } from '../../src/hooks/sanitize.js';
 
+// A parallel test run can stall one sample; a second sample filters that out, while a quadratic rule stays far over.
+function timeMs(fn: () => void): number {
+  const once = () => { const t = performance.now(); fn(); return performance.now() - t; };
+  const first = once();
+  return first < 300 ? first : Math.min(first, once());
+}
+
 describe('stripPrivate', () => {
   it('removes closed private blocks, case-insensitive, multiline', () => {
     expect(stripPrivate('a <private>\nsecret\n</PRIVATE> b')).toBe('a  b');
@@ -109,7 +116,7 @@ describe('redactSecrets', () => {
     ['AKIAABCDEFGHIJKLMNOP', R],
     ['xoxb-1234567890-abcdef', R],
     ['mh_abcdefghijklmnopqrstuvwx', R],
-    ['Authorization: Bearer abc.def-123456', 'Authorization: ' + R],
+    ['Authorization: Bearer abc.def-123456', 'Authorization: Bearer ' + R],
     ['-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY----- after', R + ' after'],
     ['DB_PASSWORD=hunter2hunter', 'DB_PASSWORD=' + R],
     ['{"api_key": "abc"}', '{"api_key": "' + R + '"}'],
@@ -349,10 +356,92 @@ describe('redactSecrets coverage (H1)', () => {
       ['NFD Vietnamese', fill('Tiếng Việt có dấu mật khẩu '.normalize('NFD'))],
       ['no whitespace', 'a'.repeat(N)],
     ];
-    for (const [name, s] of inputs) {
-      const t = performance.now();
-      redactSecrets(s);
-      expect(performance.now() - t, name).toBeLessThan(300);
+    for (const [name, s] of inputs) expect(timeMs(() => redactSecrets(s)), name).toBeLessThan(300);
+  });
+});
+
+const P = 'Zx9Yw8Vu7Ts6Rq5P';
+// Review round 1 (M1-M8, m1-m4): each row reproduces a leak the reviewer found.
+const REVIEW_FIXTURES: [string, string, string[]][] = [
+  // M1: the docker/su exemption must not cover the rest of the line.
+  [`# see docker docs; curl -u admin:${P} https://api.x.com`, P, ['# see docker docs; curl -u ', ' https://api.x.com']],
+  [`cd /srv/docker && curl --user admin:${P} https://x`, P, ['cd /srv/docker && curl --user ']],
+  [`su - deploy && curl -u admin:${P} https://x`, P, ['su - deploy && curl -u ']],
+  [`docker exec web curl -u admin:${P} http://x`, P, ['docker exec web curl -u ']],
+  // M2: minified JSON, adjacent fields, long `/` passwords, no host terminator.
+  [`{"db":"postgres://u:${P}@db.internal","note":"${'x'.repeat(300)}"}`, P, ['postgres://u:', '@db.internal","note":"']],
+  [`{"db":"postgres://u:${P}@db.internal","list":[${Array(150).fill(1).join(',')}]}`, P, ['@db.internal","list":[1,1']],
+  [`["postgres://u:${P}@h","a@b"]`, P, ['postgres://u:', '@h","a@b"]']],
+  ['connect to mysql://root:Q1w2/E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7@db.internal:3306/app now', 'E3r4T5y6U7i8O9p0', ['mysql://root:', '@db.internal:3306/app now']],
+  [`postgres://u:${P}@${'h'.repeat(300)}`, P, ['postgres://u:']],
+  ['git clone https://oauth2:Tq9Wx8Ve7Ur6Ys5@gitlab.com/x/y.git', 'Tq9Wx8Ve7Ur6Ys5', ['https://oauth2:', '@gitlab.com/x/y.git']],
+  // M3 + m1: any scheme, any case, wide whitespace; the scheme word stays.
+  [`curl -H "authorization: bearer ${P}"`, P, ['authorization: bearer ', '"']],
+  [`curl -H "Authorization: token ${P}" https://api.github.com`, P, ['Authorization: token ', '" https://api.github.com']],
+  ['Authorization: Digest username="u", response="6629fae49393a05397450978507c4ef1"', '6629fae49393a053', ['Authorization: Digest ']],
+  ['Authorization:        Basic dXNlcjpQcTlXeDhWZTc=', 'dXNlcjpQcTlXeDhWZTc', ['Basic ']],
+  ['Authorization      : Basic dXNlcjpQcTlXeDhWZTc=', 'dXNlcjpQcTlXeDhWZTc', ['Basic ']],
+  ['Authorization:\t\t\t\t\t\tBasic dXNlcjpQcTlXeDhWZTc=', 'dXNlcjpQcTlXeDhWZTc', ['Basic ']],
+  [`Proxy-Authorization: Bearer ${P}`, P, ['Proxy-Authorization: Bearer ']],
+  // M4: bracket-indexed assignments.
+  ['os.environ["OPENAI_API_KEY"] = "Tq9Wx8Ve7Ur6Ys5"', 'Tq9Wx8Ve7Ur6Ys5', ['os.environ["OPENAI_API_KEY"] = "']],
+  ["os.environ['MY_TOKEN']='Tq9Wx8Ve7Ur6Ys5'", 'Tq9Wx8Ve7Ur6Ys5', ["os.environ['MY_TOKEN']='"]],
+  [`ENV['DB_PASSWORD'] = '${P}'`, P, ["ENV['DB_PASSWORD'] = '"]],
+  [`process.env["API_TOKEN"] = "${P}"`, P, ['process.env["API_TOKEN"] = "']],
+  [`settings['password'] = '${P}'`, P, ["settings['password'] = '"]],
+  // M5: CLI password flags.
+  [`mysql -u root -p${P} db`, P, ['mysql -u root -p', ' db']],
+  [`mysqldump -uroot -p${P} db`, P, ['mysqldump -uroot -p']],
+  [`sshpass -p ${P} ssh host`, P, ['sshpass -p ', ' ssh host']],
+  [`docker login -u me -p ${P}`, P, ['docker login -u me -p ']],
+  [`tool --password ${P} --verbose`, P, ['tool --password ', ' --verbose']],
+  // M6: base64 PEM in a Kubernetes Secret.
+  ['data:\n  username: YWRtaW4=\n  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Fo', 'TFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Fo', ['username: YWRtaW4=', 'tls.key: ']],
+  // M7: more vendor shapes.
+  ['use xapp-1-A0123456789-1234567890123-abcdef0123456789abcdef here', 'abcdef0123456789abcdef', ['use ', ' here']],
+  [`client.login("MTE5ODc2NTQzMjEwOTg3NjU0Mw.GaBcDe.${P}oNmLkJiHgFeDcBa12345")`, P, ['client.login("', '")']],
+  ['bot = Bot("123456789:AAEhBP0av18cwWZwCMwnEAAPMs1y_9xyzAB")', 'AAEhBP0av18cwWZwCMwnEAAPMs1y', ['bot = Bot("', '")']],
+  ['https://api.telegram.org/bot123456789:AAEhBP0av18cwWZwCMwnEAAPMs1y_9xyzAB/sendMessage', 'AAEhBP0av18cwWZwCMwnEAAPMs1y', ['https://api.telegram.org/bot', '/sendMessage']],
+  ['https://acct.blob.core.windows.net/c/f?sv=2020-08-04&ss=b&sig=Tq9Wx8Ve7Ur6Ys5Ab%2Bcd%3D&se=2027', 'Tq9Wx8Ve7Ur6Ys5Ab', ['https://acct.blob.core.windows.net/c/f?sv=2020-08-04&ss=b&sig=', '&se=2027']],
+  [`tok ya29.a0AfH6SMB${P}oNmLkJiHgFeDcBa`, P, ['tok ']],
+  [`client_sec=GOCSPX-${P}oNmLk`, P, []],
+  [`STRIPE_WEBHOOK=whsec_${P}oNmLkJ`, P, ['STRIPE_WEBHOOK=']],
+  ['https://maps.x.com/api?key=Tq9Wx8Ve7Ur6Ys5Ab12345&z=1', 'Tq9Wx8Ve7Ur6Ys5Ab', ['https://maps.x.com/api?key=', '&z=1']],
+  ['git clone https://Tq9Wx8Ve7Ur6Ys5Ab12345@github.com/x/y.git', 'Tq9Wx8Ve7Ur6Ys5Ab', ['git clone https://', '@github.com/x/y.git']],
+  // M8: netrc shape only.
+  ['machine github.com login thang password Tq9Wx8Ve7Ur6Ys5', 'Tq9Wx8Ve7Ur6Ys5', ['machine github.com login thang password ']],
+];
+
+describe('redactSecrets review round 1', () => {
+  it.each(REVIEW_FIXTURES)('redacts %s', (input, core, keep) => {
+    const out = redactSecrets(input);
+    expect(out).not.toContain(core);
+    expect(out).toContain('<redacted>');
+    for (const k of keep) expect(out).toContain(k);
+    expect(redactSecrets(out)).toBe(out);
+  });
+  it('keeps the scheme word of an Authorization header', () => {
+    expect(redactSecrets(`Authorization: Bearer ${P}`)).toBe('Authorization: Bearer <redacted>');
+    expect(redactSecrets(`authorization: bearer ${P}`)).toBe('authorization: bearer <redacted>');
+  });
+  it('leaves user:group flags, port and dir flags, prompts and TS injection alone', () => {
+    for (const c of [
+      'docker run -u 1000:1000 img', 'docker run --rm -u www-data:www-data img', 'podman run -u app:app img', 'sudo -u 1000:1000 id',
+      'mysql -u root -p mydb', 'mkdir -p /tmp/x', 'docker run -p 8080:80 img', 'ssh -p 2222 host', 'docker login --password-stdin',
+      '  private auth: AuthService;\n  readonly authGuard: AuthGuard;',
+      'constructor(private auth: AuthService, private readonly tokenService: TokenService) {}',
+      'auth:\n  enabled: true', 'OAuth: on', 'Enter your password below', 'https://example.com/?key=short',
+      'git clone https://github.com/x/y.git', 'ssh://git@github.com/x', 'LS0tLS1CRUdJTi',
+    ]) expect(redactSecrets(c)).toBe(c);
+  });
+  it('stays under 300 ms on 2 MB inputs aimed at the round-1 rules', () => {
+    const N = 2 * 1024 * 1024;
+    for (const unit of ['mysql ', 'mysql -p', 'sshpass ', 'docker login ', 'docker run ', 'login password ', 'login ', 'machine ',
+      'authorization: ', 'authorization: bearer ', 'Authorization:' + ' '.repeat(70), 'a://bbbbbbbbbbbbbbbbbbbbbbbb', 'a://b:c@x',
+      'a://b:', 'a://b:c/', '?key=', '&sig=', '1234567890:', 'M' + 'a'.repeat(30), 'LS0tLS1CRUdJTi', 'x["token"]', 'private auth: A, ',
+      ' -u 1:1', 'docker run -u a:b ', 'su -u a:b; ', '--password ']) {
+      const s = unit.repeat(Math.ceil(N / unit.length)).slice(0, N);
+      expect(timeMs(() => redactSecrets(s)), unit).toBeLessThan(300);
     }
   });
 });

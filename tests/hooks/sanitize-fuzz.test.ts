@@ -45,7 +45,12 @@ const SECRETS: ((r: Rng) => Secret)[] = [
   (r) => { const c = `${chars(r, ALNUM, 8)} ${chars(r, ALNUM, 8)}`; return { text: `${pick(r, ['MNEMONIC', 'DB_PASSWORD', 'SECRET_KEY'])}=${pick(r, ['"', "'"])}${c}${pick(r, ['"', "'"])}`, core: c.slice(0, 8) }; },
   (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: JSON.stringify({ user: 'app', [pick(r, ['password', 'api_key', 'secret', 'token'])]: c }), core: c }; },
   (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Authorization: Basic ${c}`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Cookie: session=${c}; theme=dark`, core: c }; },
+  // Only the Cookie rule catches these: the secret is not in the first cookie, or it is quoted with attributes.
+  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Cookie: theme=dark; session=${c}`, core: c }; },
+  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Set-Cookie: sid="${c}"; Path=/; HttpOnly`, core: c }; },
+  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `authorization: ${pick(r, ['bearer', 'token', 'Basic'])} ${c}`, core: c }; },
+  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `os.environ["${pick(r, ['API_TOKEN', 'DB_PASSWORD', 'SECRET_KEY'])}"] = "${c}"`, core: c }; },
+  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: pick(r, [`mysql -u root -p${c} db`, `sshpass -p ${c} ssh h`, `docker login -u me -p ${c}`]), core: c }; },
   (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `curl -u admin:${c} https://api.example.com`, core: c }; },
 ];
 
