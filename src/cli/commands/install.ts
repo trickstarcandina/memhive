@@ -80,7 +80,7 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
   if (hosts.has('codex')) { const r = installCodex(marketplaceRoot, env.CODEX_HOME ?? path.join(homedir(), '.codex'), run); codexOk = r.ok; for (const l of r.log) io.stdout(`  codex: ${l}\n`); }
 
   io.stdout('\nChecking setup…\n');
-  await doctorCommand([], io, { home, env, ping: !flags['no-ping'] });
+  await doctorCommand([], io, { home, env, ping: !flags['no-ping'], bundle });
   if (!codexOk) { io.stderr('\nmemhive: Codex setup did not complete; follow the manual steps above.\n'); return 1; }
   io.stdout('\nDone. Restart your agent; memory appears from your second session in a project.\n');
   return 0;

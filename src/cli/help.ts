@@ -8,7 +8,10 @@ const spec = (usage: string, value: string[] = [], bool: string[] = []): Command
 export const COMMANDS: Record<string, CommandSpec> = {
   install: spec('usage: memhive install [--yes] [--host claude-code,codex] [--provider anthropic|openai-compat] [--no-ping]\n', ['host', 'provider'], ['yes', 'no-ping']),
   uninstall: spec('usage: memhive uninstall\n'),
-  doctor: spec('usage: memhive doctor\n'),
+  doctor: spec(`usage: memhive doctor [--no-ping] [--json]   (checks setup; exit 1 when any check fails)
+  --no-ping  skip the provider and embedder calls
+  --json     {"version", "home", "problems", "checks": [{"status": "ok|warn|fail|info", "check", "message", "hint"?}]}
+`, [], ['no-ping', 'json']),
   hook: spec('usage: memhive hook <claude-code|codex> <event>\n'),
   daemon: spec('usage: memhive daemon <run|start|stop|status> [--json]   (--json: status only, {"running", "port", "pid", "startedAt", "version"})\n', [], ['json']),
   mcp: spec('usage: memhive mcp\n'),

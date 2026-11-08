@@ -37,6 +37,12 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
       observerAuthFailed: ctx.observer.authFailed, pushBlocked: ctx.sync?.blockedProjects?.() ?? [], hubErrors: ctx.sync?.hubErrors?.() ?? [],
       paused_until: until === null ? null : until === Infinity ? 'indefinite' : new Date(until).toISOString(),
       excluded: cwd ? ctx.excludedCwd(cwd) : null,
+      vectors_degraded: store.vectorsDegraded ?? false,
+      // projects=1 (doctor): per-project counts and sync state; asks each linked hub for its protocol (3 s cap each).
+      ...(q.get('projects') === '1' ? { projects: await Promise.all(store.listProjects().map(async (p) => ({
+        key: p.key, name: p.name, hubUrl: p.hubUrl, stats: store.projectStats(p.id), sync: store.getSyncState(p.id),
+        protocol: p.hubUrl && ctx.sync?.hubProtocol ? await ctx.sync.hubProtocol(p).catch(() => null) : null,
+      }))) } : {}),
     });
   }
 

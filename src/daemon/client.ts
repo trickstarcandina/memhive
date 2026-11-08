@@ -22,6 +22,8 @@ export class DaemonClient {
       return json as T;
     } finally { clearTimeout(t); }
   }
+  /** The version the daemon reported in its last passed health check (undefined before 0.2). */
+  version?: string;
   // Proves the listener knows the token (HMAC over a fresh nonce) so a squatter on the port is treated as dead.
   async health(timeoutMs = 200): Promise<boolean> {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
@@ -29,11 +31,13 @@ export class DaemonClient {
       const nonce = randomBytes(16).toString('hex');
       const r = await this.fetchImpl(`${this.baseUrl}/healthz?nonce=${nonce}`, { signal: ctl.signal, redirect: 'error' });
       if (!r.ok) return false;
-      const j = JSON.parse(await readBodyCapped(r, 64 * 1024)) as { ok?: boolean; proof?: string };
+      const j = JSON.parse(await readBodyCapped(r, 64 * 1024)) as { ok?: boolean; proof?: string; version?: unknown };
       if (j.ok !== true || typeof j.proof !== 'string') return false;
       const want = Buffer.from(healthProof(this.info.token, nonce, this.info.pid));
       const got = Buffer.from(j.proof);
-      return got.length === want.length && timingSafeEqual(got, want);
+      const ok = got.length === want.length && timingSafeEqual(got, want);
+      if (ok && typeof j.version === 'string') this.version = j.version.slice(0, 64);
+      return ok;
     } catch { return false; } finally { clearTimeout(t); }
   }
 }

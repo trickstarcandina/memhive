@@ -24,12 +24,21 @@ export interface Tombstone { id: string; tbl: TombstoneTable; deletedAt: string 
 export interface DeleteOpts { syncedAt?: string | null; projectId?: string }
 export interface ObservationPatch { title?: string; narrative?: string; facts?: string[]; pinned?: boolean }
 export interface QuarantineRow { id: string; tbl: SyncTable; seq: number; reason: string; raw: string; createdAt?: string }
+/** Row counts of one project (doctor, stats). */
+export interface ProjectStats {
+  observations: { local: number; hub: number }; byType: Partial<Record<ObservationType, number>>; sessions: number; summaries: number; pinned: number;
+  unsynced: { sessions: number; observations: number; summaries: number; tombstones: number }; missingEmbedding: number;
+}
 export interface Store {
+  /** True when vectors were configured but sqlite-vec failed to load (FTS-only). */
+  readonly vectorsDegraded?: boolean;
   migrate(): void;
   close(): void;
   getOrCreateProject(key: string, name: string): Project;
   getProject(id: string): Project | null;
   getProjectByKey(key: string): Project | null;
+  listProjects(): Project[];
+  projectStats(projectId: string): ProjectStats;
   setProjectHub(id: string, hubUrl: string | null): void;
   upsertSession(s: Session): void;
   getSession(id: string): Session | null;

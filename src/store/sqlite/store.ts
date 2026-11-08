@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { ContextObservation, DeleteOpts, Observation, ObservationPatch, ObservationType, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable, Tombstone, TombstoneTable } from '../types.js';
+import type { ProjectStats, ContextObservation, DeleteOpts, Observation, ObservationPatch, ObservationType, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable, Tombstone, TombstoneTable } from '../types.js';
 import { SQLITE_MIGRATIONS } from './migrations.js';
 import { ftsTokens, toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
@@ -128,6 +128,20 @@ export class SqliteStore implements Store {
   }
   getProject(id: string): Project | null { const r = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined; return r ? rowToProject(r) : null; }
   getProjectByKey(key: string): Project | null { const r = this.db.prepare('SELECT * FROM projects WHERE key = ?').get(key) as Row | undefined; return r ? rowToProject(r) : null; }
+  listProjects(): Project[] { return (this.db.prepare('SELECT * FROM projects ORDER BY key').all() as Row[]).map(rowToProject); }
+  projectStats(projectId: string): ProjectStats {
+    const one = (sql: string) => Number((this.db.prepare(sql).get(projectId) as Row).c);
+    const unsynced = (t: string, own = " AND origin = 'local'") => one(`SELECT COUNT(*) c FROM ${t} WHERE project_id = ? AND synced_at IS NULL${own}`);
+    const byOrigin = Object.fromEntries((this.db.prepare('SELECT origin, COUNT(*) c FROM observations WHERE project_id = ? GROUP BY origin').all(projectId) as Row[]).map((r) => [r.origin, Number(r.c)]));
+    const byType = Object.fromEntries((this.db.prepare('SELECT type, COUNT(*) c FROM observations WHERE project_id = ? GROUP BY type ORDER BY type').all(projectId) as Row[]).map((r) => [r.type, Number(r.c)]));
+    return {
+      observations: { local: byOrigin.local ?? 0, hub: byOrigin.hub ?? 0 }, byType,
+      sessions: one('SELECT COUNT(*) c FROM sessions WHERE project_id = ?'), summaries: one('SELECT COUNT(*) c FROM summaries WHERE project_id = ?'),
+      pinned: one('SELECT COUNT(*) c FROM observations WHERE project_id = ? AND pinned = 1'),
+      unsynced: { sessions: unsynced('sessions'), observations: unsynced('observations'), summaries: unsynced('summaries'), tombstones: unsynced('tombstones', '') },
+      missingEmbedding: one('SELECT COUNT(*) c FROM observations WHERE project_id = ? AND embedding_model IS NULL'),
+    };
+  }
   setProjectHub(id: string, hubUrl: string | null): void { this.db.prepare('UPDATE projects SET hub_url = ? WHERE id = ?').run(hubUrl, id); }
 
   upsertSession(s: Session): void {
