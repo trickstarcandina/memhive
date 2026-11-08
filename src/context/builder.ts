@@ -40,6 +40,8 @@ const FOOTER = ['Use the memhive MCP tools before re-discovering past work: sear
 const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ');
 const day = (iso: string) => oneLine(iso.slice(0, 10));
 const clip = (s: string, n: number) => { const t = oneLine(s); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+// A list item made only of rule characters ("  - ---") is a CommonMark thematic break, which reads as a section boundary.
+const item = (s: string, n: number) => { const t = clip(s, n); return /^[-*_= \t]+$/.test(t) ? `\\${t}` : t; };
 
 export function buildContext(input: ContextInput): string {
   const now = input.now ?? new Date();
@@ -73,7 +75,7 @@ export function buildContext(input: ContextInput): string {
     const emit = (o: Row): boolean => {
       const line = `#${oneLine(shortId(o.id))} · ${oneLine(o.type)}${o.pinned ? ' · pinned' : ''} · ${clip(o.title, 90)} · ${day(o.createdAt)} · ${oneLine(o.userId)}`;
       // Facts only for local rows: pulled rows stay a one-line title, to keep text others wrote out of the prompt.
-      const facts = shown < FACT_ROWS && o.origin === 'local' ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${clip(f, 160)}`) : [];
+      const facts = shown < FACT_ROWS && o.origin === 'local' ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${item(f, 160)}`) : [];
       const ok = add(line, ...facts) || add(line);
       if (ok) shown++;
       return ok;
