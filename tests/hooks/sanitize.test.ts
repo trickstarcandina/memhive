@@ -133,6 +133,15 @@ describe('redactSecrets', () => {
     expect(redactSecrets('password: Pass<word, more>')).toBe('password: ' + R);
     expect(redactSecrets('password: Pass<word, more>;')).toBe('password: ' + R + ';');
   });
+  it('redacts a secret hidden in the type arguments of a generic', () => {
+    for (const c of ['password: Map<hunter2secret99>', 'token: Promise<sk-ant-xxxxxxxx>', 'token: Promise<sk-ant-' + 'a'.repeat(30) + '>', 'password: Map<hunterpass>', 'f(token: Ref<abc=def>)', 'token: Map<a:b>;']) {
+      const out = redactSecrets(c);
+      expect(out).toContain(R);
+      expect(out).not.toMatch(/hunter|sk-ant|abc=def|a:b/);
+    }
+    expect(redactSecrets('password: Map<string, number>')).toBe('password: Map<string, number>');
+    expect(redactSecrets('token: Promise<NodeJS.Timeout | null>;')).toBe('token: Promise<NodeJS.Timeout | null>;');
+  });
   it('treats a well-known generic as a type whole, also at end of line', () => {
     for (const c of ['password: Map<string, number>', 'token: Promise<Map<string, number>>', 'token: Record<string, string>\nnext']) expect(redactSecrets(c)).toBe(c);
   });

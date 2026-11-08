@@ -60,10 +60,18 @@ const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
 const PARAM_FOLLOW = /^[ \t]*[,=)]/;
 const PARAM_BEFORE = /[(,][ \t]*[\w$]*$/;
 
+// Type arguments must read as type names: digit-free, only `.` `[]` `|` `&` `,` spaces and nested `<>` between
+// names, and each name a primitive or PascalCase. `Map<hunter2secret99>` and `Promise<sk-...>` are values.
+const TYPE_ARGS = /^[A-Za-z_$.[\]|&,<> ]*$/;
+function typeArgsOk(bare: string): boolean {
+  const args = bare.slice(bare.indexOf('<') + 1, bare.lastIndexOf('>'));
+  return TYPE_ARGS.test(args) && args.split(/[^A-Za-z_$.]+/).filter(Boolean).every((n) => TS_PRIMITIVE.test(n) || /^[A-Z]/.test(n));
+}
+
 function looksLikeType(bare: string, follow: string, before: string): boolean {
   if (!TYPE_FOLLOW.test(follow)) return false;
   const inParams = PARAM_BEFORE.test(before) && PARAM_FOLLOW.test(follow);
-  if (bare.includes('<')) return TS_GENERIC.test(bare) && (KNOWN_GENERIC.test(bare) || inParams);
+  if (bare.includes('<')) return TS_GENERIC.test(bare) && typeArgsOk(bare) && (KNOWN_GENERIC.test(bare) || inParams);
   const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_ARRAY.test(p);
   if (bare.includes('|')) return bare.split('|').every(typeLike);
   return typeLike(bare) || (TS_IDENT.test(bare) && (inParams || /^[ \t]*\|/.test(follow)));
