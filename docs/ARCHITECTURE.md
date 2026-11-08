@@ -196,12 +196,19 @@ A hub that sends neither field skips the check.
 **Applying rows.** Pulled rows are stored with `origin = 'hub'`. The client never overwrites its own
 sessions or rows of another project or user; a pulled session is updated only when its `endedAt`
 changed. Pulled text is cleaned again (secrets redacted, `<private>` blocks removed, control characters
-replaced, fields clipped to the caps above). A pulled vector is kept only when its model and size match
+replaced, fields clipped to the caps above). An observation or summary must reference a session of the
+same project; one that points elsewhere is quarantined. A pulled vector is kept only when its model and size match
 the local embedder. Rows are validated one by one: a row that is malformed or fails to store goes to
 the local `sync_quarantine` table (secrets redacted) with its reason, so it cannot stall the cursor;
 `memhive doctor` counts them.
 Tombstones in a page are applied first, scoped to the project being pulled: the row is deleted
 locally and its id remembered (never pushed back), so a teammate's stale copy is not pulled in again.
+A tombstone deletes only rows pulled from the hub (`origin = 'hub'`): a row created on this machine is
+kept, with one warning per project, so a compromised hub cannot wipe local memory. Rows removed by
+retention are remembered the same way (`local_only`, never pushed, not even after a hub reset), so a
+reset does not pull them back in.
+The response cap is 4 x the hub's `body_limit`, and the client believes a `body_limit` of 8 MB at most
+(so 32 MB per response).
 
 ## Hub deployment
 

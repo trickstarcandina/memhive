@@ -1,5 +1,5 @@
 import { it, expect, describe } from 'vitest';
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { main } from '../../src/cli/index.js';
@@ -76,5 +76,16 @@ describe('help matrix', () => {
       flags: { yes: true, force: true },
     });
     expect(parseArgs(['--yes', 'abcd1234'])).toEqual({ positional: [], flags: { yes: 'abcd1234' } }); // no command: old behaviour
+  });
+});
+
+describe('README command table', () => {
+  // Every flag a command accepts is listed in its README row (the table is the reference users read).
+  const readme = readFileSync(path.join(import.meta.dirname, '..', '..', 'README.md'), 'utf8');
+  it.each(Object.entries(COMMANDS))('%s row lists every flag', (name, s) => {
+    const row = readme.split('\n').find((l) => l.startsWith(`| \`memhive ${name}`));
+    if (!row) return; // internal commands (hook, mcp) have no row
+    const missing = [...s.value, ...s.bool].filter((f) => !row.includes(`--${f}`));
+    expect(missing).toEqual([]);
   });
 });
