@@ -2,7 +2,8 @@ import type { Logger } from '../shared/logger.js';
 import type { Observation, Project, Session, Store, Summary } from '../store/types.js';
 import type { SyncHooks } from '../daemon/context.js';
 import { z } from 'zod';
-import { HubObservationSchema, HubSessionSchema, HubSummarySchema, type PushBody, type PushResult } from '../hub/wire.js';
+import { HubObservationSchema, HubSessionSchema, HubSummarySchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
+import { redactSecrets } from '../hooks/sanitize.js';
 import type { HubObservation } from '../hub/store/types.js';
 import { HubClient, HubError, type HubConfigInfo } from './client.js';
 import { loadCredentials, saveCredentials } from './credentials.js';
@@ -17,6 +18,17 @@ const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
 // cwd is no longer relayed (hubs send ''), so it is optional here.
 const PulledSession = HubSessionSchema.extend({ cwd: z.string().optional() });
+// Pulled rows come from other clients (or anyone with a key and curl): redact and clip them again with the hub's caps,
+// clipping rather than rejecting so an older hub's longer rows still arrive.
+const cut = (v: string, n: number) => redactSecrets(v).slice(0, n);
+const cutList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => cut(v, MAX_ITEM));
+// Outgoing rows are clipped to the same caps: the hub refuses an over-cap row, and a refused row would be lost.
+const clipList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => v.slice(0, MAX_ITEM));
+const clipObs = <T extends Observation>(o: T): T => ({ ...o, title: o.title.slice(0, MAX_SHORT), subtitle: o.subtitle.slice(0, MAX_SHORT), narrative: o.narrative.slice(0, MAX_LONG), facts: clipList(o.facts), concepts: clipList(o.concepts), filesRead: clipList(o.filesRead), filesModified: clipList(o.filesModified), embeddingModel: o.embeddingModel?.slice(0, MAX_SHORT) ?? null });
+const clipSum = (m: Summary): Summary => ({ ...m, request: m.request.slice(0, MAX_LONG), learned: m.learned.slice(0, MAX_LONG), completed: m.completed.slice(0, MAX_LONG), nextSteps: m.nextSteps.slice(0, MAX_LONG) });
+const clipSess = (x: Session): Session => ({ ...x, host: x.host.slice(0, MAX_SHORT), hostSessionId: x.hostSessionId.slice(0, MAX_SHORT), cwd: x.cwd.slice(0, MAX_SHORT) });
+// Fields clipped above: a hub that still refuses one has smaller caps, so the row stays queued for a client that matches it.
+const CLIPPED = new Set(['title', 'subtitle', 'narrative', 'facts', 'concepts', 'filesRead', 'filesModified', 'embeddingModel', 'request', 'learned', 'completed', 'nextSteps', 'host', 'hostSessionId', 'cwd']);
 // Hub errors that mean "the hub or the path to it is unwell", not "this batch is bad": rows stay queued and the project backs off.
 // A fetch that rejects (connection refused, DNS, timeout) gets the same backoff ladder as a 5xx, so a hub that is down is not
 // hammered on every trigger.
@@ -90,11 +102,11 @@ export class SyncEngine implements SyncHooks {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const client = this.clientFor(project); if (!client) return round === 0 ? null : total;
       const { store, logger } = this.deps;
-      const sessions = store.listUnsynced('sessions', project.id, cap) as Session[];
+      const sessions = (store.listUnsynced('sessions', project.id, cap) as Session[]).map(clipSess);
       // A full session batch goes alone so no observation can reference a session that is still queued.
       const sessionsFirst = sessions.length === cap;
       const observations = sessionsFirst ? [] : store.listUnsynced('observations', project.id, cap) as Observation[];
-      const summaries = sessionsFirst ? [] : store.listUnsynced('summaries', project.id, cap) as Summary[];
+      const summaries = sessionsFirst ? [] : (store.listUnsynced('summaries', project.id, cap) as Summary[]).map(clipSum);
       if (!sessions.length && !observations.length && !summaries.length) { this.backoff.delete(project.id); return total; }
       const cfg = await this.hubConfig(client, project.hubUrl!);
       const vecs = store.getObservationEmbeddings(observations.map((o) => o.id));
@@ -111,7 +123,7 @@ export class SyncEngine implements SyncHooks {
         for (const r of rows) { const n = Buffer.byteLength(JSON.stringify(r)) + 1; if (taken >= cap || (taken > 0 && used + n > budget)) break; out.push(r); used += n; taken++; }
         return out;
       };
-      const hubObs = fit(observations.map(toHub)); const sums = fit(summaries);
+      const hubObs = fit(observations.map((o) => toHub(clipObs(o)))); const sums = fit(summaries);
       const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: hubObs, summaries: sums };
       let result: PushResult;
       try { result = await this.send(client, project, body); }
@@ -145,14 +157,19 @@ export class SyncEngine implements SyncHooks {
       }
       // While isolating, a passing row keeps the strike count so the refused row is given up when it comes up.
       if (!isolating) this.backoff.delete(project.id);
-      // Rejected rows are marked synced too: retrying the same invalid row would loop forever.
+      // Rejected rows are marked synced too (retrying the same invalid row would loop forever), except size refusals on clipped fields.
       const now = new Date().toISOString();
-      store.markSynced('sessions', sessions.map((s) => s.id), now);
-      store.markSynced('observations', hubObs.map((o) => o.id), now);
-      store.markSynced('summaries', sums.map((s) => s.id), now);
-      if (result.rejected.length) logger.warn('hub rejected rows; they will not be retried', { hub: project.hubUrl, count: result.rejected.length, sample: result.rejected.slice(0, 5) });
+      const kept = new Set(result.rejected.filter((r) => r.reason === 'invalid_row' && r.field && CLIPPED.has(r.field)).map((r) => r.id));
+      if (kept.size) logger.warn('hub refused rows over its size caps; they stay queued', { hub: project.hubUrl, fields: [...new Set(result.rejected.filter((r) => kept.has(r.id)).map((r) => r.field))] });
+      const done = (ids: string[]) => ids.filter((id) => !kept.has(id));
+      store.markSynced('sessions', done(sessions.map((s) => s.id)), now);
+      store.markSynced('observations', done(hubObs.map((o) => o.id)), now);
+      store.markSynced('summaries', done(sums.map((s) => s.id)), now);
+      const lost = result.rejected.filter((r) => !kept.has(r.id));
+      if (lost.length) logger.warn('hub rejected rows; they will not be retried', { hub: project.hubUrl, count: lost.length, sample: lost.slice(0, 5) });
       total.accepted.sessions += result.accepted.sessions; total.accepted.observations += result.accepted.observations; total.accepted.summaries += result.accepted.summaries;
       total.rejected.push(...result.rejected);
+      if (kept.size >= sessions.length + hubObs.length + sums.length) break;   // only queued-again rows left: the next round would resend them
     }
     return total;
   }
@@ -217,8 +234,9 @@ export class SyncEngine implements SyncHooks {
         apply(String((raw as { id?: unknown } | null)?.id ?? '?'), () => { throw new Error(`malformed row: ${r.error.issues[0]?.path.join('.')}`); });
         return [];
       });
-      const sessions = rows(page.sessions, PulledSession).map((s) => ({ ...s, cwd: s.cwd ?? '' }));
-      const observations = rows(page.observations, HubObservationSchema); const summaries = rows(page.summaries, HubSummarySchema);
+      const sessions = rows(page.sessions, PulledSession).map((s) => ({ ...s, host: cut(s.host, MAX_SHORT), hostSessionId: cut(s.hostSessionId, MAX_SHORT), cwd: '' }));
+      const observations = rows(page.observations, HubObservationSchema).map((o) => ({ ...o, title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) }));
+      const summaries = rows(page.summaries, HubSummarySchema).map((m) => ({ ...m, request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) }));
       for (const s of sessions) {
         // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes). Our own sessions, and a
         // session of another project or user that happens to share the id, are never overwritten.

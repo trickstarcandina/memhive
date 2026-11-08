@@ -84,6 +84,30 @@ describe('push batch sizing', () => {
   });
 });
 
+describe('push clipping', () => {
+  it('a 25k-char narrative is pushed truncated and accepted', async () => {
+    const t = await setup({ dims: null });
+    const [big] = addObs(t, 1, null, { narrative: 'n'.repeat(25_000), title: 't'.repeat(1500), facts: Array.from({ length: 150 }, () => 'f'.repeat(5000)) });
+    const r = await t.engine.push(t.project);
+    expect(r!.rejected).toEqual([]); expect(r!.accepted.observations).toBe(1);
+    const [got] = await t.hs.getObservations([big.id]);
+    expect(got.narrative).toHaveLength(20_000); expect(got.title).toHaveLength(1000);
+    expect(got.facts).toHaveLength(100); expect(got.facts[0]).toHaveLength(4000);
+    expect(t.store.getObservations([big.id])[0].narrative).toHaveLength(25_000);   // the local row keeps its full text
+  });
+  it('an invalid_row rejection on a clippable field keeps the row queued; other rejections are marked synced', async () => {
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => {
+      if (!String(url).endsWith('/v1/sync/push')) return inner(url, init);
+      const b = JSON.parse(String(init!.body));
+      return new Response(JSON.stringify({ accepted: { sessions: b.sessions.length, observations: 0, summaries: 0 }, rejected: [{ id: b.observations[0].id, reason: 'invalid_row', field: 'narrative' }, { id: b.observations[1].id, reason: 'invalid_row', field: 'createdAt' }] }), { status: 200 });
+    } });
+    const [a, b] = addObs(t, 2, null);
+    await t.engine.push(t.project);
+    expect(t.store.listUnsynced('observations', t.project.id, 10).map((o) => o.id)).toEqual([a.id]);
+    expect(t.store.getObservations([b.id])[0].syncedAt).not.toBeNull();
+  });
+});
+
 describe('hub config cache', () => {
   it('is refreshed after a while: a hub that gains an embedder gets vectors without a daemon restart', async () => {
     let hubHasEmbedder = false;

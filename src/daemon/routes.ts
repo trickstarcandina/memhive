@@ -42,9 +42,11 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     if (!ev?.hostSessionId || !ev.cwd) return err(400, 'bad_event', 'hostSessionId and cwd required');
     const { project } = ctx.resolveSession(ev);
     if (ctx.sync && project.hubUrl) { try { await ctx.sync.pull(project, 3000); } catch (e) { ctx.logger.warn('pull failed', { error: String(e) }); } ctx.sync.schedulePush(project.id); }   // push also retries rows left over from an earlier daemon
+    // Rows pulled from teammates can be left out of auto-injected context (they stay searchable through MCP).
+    const me = ctx.userFor(project); const mine = <T extends { userId: string }>(rows: T[]) => ctx.settings.context?.includeOtherUsers === false ? rows.filter((r) => r.userId === me) : rows;
     const context = buildContext({
       projectName: project.name, observationCount: store.countObservations(project.id), sessionCount: store.countSessions(project.id), lastActivity: store.lastActivity(project.id),
-      summaries: store.listRecentSummaries(project.id, 3), observations: store.listRecentObservations(project.id, 200), budgetTokens: ctx.settings.contextTokens,
+      summaries: mine(store.listRecentSummaries(project.id, 50)).slice(0, 3), observations: mine(store.listRecentObservations(project.id, 200)), budgetTokens: ctx.settings.contextTokens,
     });
     return ok({ context });
   }

@@ -118,6 +118,30 @@ describe('sync round trip', () => {
       a.engine.close();
     } finally { await h2.close(); }
   });
+  it('pulled observations are re-redacted and length-capped', async () => {
+    const a = client('alice', keys.alice, 2); const b = client('bob', keys.bob, 2);
+    const s = sess(a.project.id, { userId: 'alice' }); a.store.upsertSession(s);
+    const secret = 'ghp_' + 'Z'.repeat(36);
+    // stored raw on A (a client that skips redaction, or curl): B must not keep the secret
+    const o = obs({ projectId: a.project.id, sessionId: s.id, userId: 'alice', title: `leak ${secret}`, facts: [`token ${secret}`], narrative: secret });
+    a.store.insertObservations([o]);
+    a.store.insertSummaries([{ id: o.id.replace(/.$/, '1'), projectId: a.project.id, sessionId: s.id, userId: 'alice', request: secret, learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null }]);
+    await a.engine.push(a.project); await b.engine.pull(b.project, 3000);
+    const got = b.store.getObservations([o.id])[0];
+    expect(JSON.stringify(got)).not.toContain(secret);
+    expect(got.title).toBe('leak <redacted>');
+    expect(JSON.stringify(b.store.listRecentSummaries(b.project.id, 50))).not.toContain(secret);
+    // an older or hostile hub sending rows past the caps: clipped, not dropped
+    const big = { ...obs({ projectId: 'x', sessionId: s.id, userId: 'mallory' }), title: 't'.repeat(5000), narrative: 'n'.repeat(50_000), facts: Array.from({ length: 300 }, () => 'f'.repeat(9000)), embedding: null };
+    const page = { sessions: [], observations: [big], summaries: [], next_seq: 1_000_000, has_more: false, max_seq: 1_000_000 };
+    const fake = (async (url: string, init?: RequestInit) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify(page), { status: 200 }) : fetch(url, init)) as typeof fetch;
+    const e2 = new SyncEngine({ store: b.store, home: b.home, logger: silent, embedDims: 2, embedModel: 'm', fetchImpl: fake });
+    expect(await e2.pull(b.project, 3000)).toBe(1);
+    const clipped = b.store.getObservations([big.id])[0];
+    expect(clipped.title).toHaveLength(1000); expect(clipped.narrative).toHaveLength(20_000);
+    expect(clipped.facts).toHaveLength(100); expect(clipped.facts[0]).toHaveLength(4000);
+    a.engine.close(); b.engine.close(); e2.close();
+  });
   it('401 marks authFailed and stops pushing; unlinked project is ignored', async () => {
     const bad = client('eve', 'mh_' + 'A'.repeat(43), 2);
     const s = sess(bad.project.id); bad.store.upsertSession(s);

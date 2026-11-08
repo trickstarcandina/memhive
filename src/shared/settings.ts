@@ -4,7 +4,8 @@ import { safeJsonParse } from './json.js';
 
 export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: string; baseUrl?: string; apiKey?: string }
 export interface EmbedSettings { baseUrl: string; apiKey?: string; model: string; dims: number }
-export interface Settings { llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number }
+export interface ContextSettings { includeOtherUsers: boolean }   // false: only the local user's rows go into the session-start context
+export interface Settings { llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number; context: ContextSettings }
 
 export const DEFAULT_MODELS: Record<LlmSettings['provider'], string> = { anthropic: 'claude-haiku-5-5', 'openai-compat': 'qwen2.5:7b' };
 
@@ -12,6 +13,7 @@ export const DEFAULT_SETTINGS: Settings = {
   llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
   embed: null,
   contextTokens: 2000,
+  context: { includeOtherUsers: true },
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -46,7 +48,10 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const embed: EmbedSettings | null = dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model ? null
     : { baseUrl, apiKey: env.MEMHIVE_EMBED_API_KEY ?? fe.apiKey, model, dims };
   const contextTokens = Number(env.MEMHIVE_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
-  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens };
+  const fc: Partial<ContextSettings> = isObj(file.context) ? (file.context as Partial<ContextSettings>) : {};
+  const envOthers = env.MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS;
+  const includeOtherUsers = envOthers !== undefined && envOthers !== '' ? !['0', 'false', 'no', 'off'].includes(envOthers.toLowerCase()) : fc.includeOtherUsers !== false;
+  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { includeOtherUsers } };
 }
 
 export function saveSettings(home: string, settings: Settings): void {

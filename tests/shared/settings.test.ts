@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, statSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../../src/shared/settings.js';
@@ -72,5 +72,14 @@ describe('settings', () => {
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'bge-m3', dims: 768 } }));
     const s = loadSettings(home, { MEMHIVE_EMBED_DIMS: 'abc' });
     expect(s.embed).toEqual({ baseUrl: 'http://e/v1', apiKey: undefined, model: 'bge-m3', dims: 768 });
+  });
+  it('context.includeOtherUsers: default true, file key, env 0 disables', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    expect(loadSettings(home, {}).context.includeOtherUsers).toBe(true);
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ context: { includeOtherUsers: false } }));
+    expect(loadSettings(home, {}).context.includeOtherUsers).toBe(false);
+    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '1' }).context.includeOtherUsers).toBe(true);
+    rmSync(path.join(home, 'settings.json'));
+    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' }).context.includeOtherUsers).toBe(false);
   });
 });

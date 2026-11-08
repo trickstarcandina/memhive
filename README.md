@@ -131,7 +131,8 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
 {
   "llm": { "provider": "openai-compat", "model": "qwen2.5:7b", "baseUrl": "http://localhost:11434/v1", "apiKey": "optional" },
   "embed": { "baseUrl": "http://localhost:11434/v1", "model": "bge-m3", "dims": 1024, "apiKey": "optional" },
-  "contextTokens": 2000
+  "contextTokens": 2000,
+  "context": { "includeOtherUsers": true }
 }
 ```
 
@@ -151,6 +152,7 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
 | `MEMHIVE_EMBED_MODEL` | none | Embedding model name (`embed.model`). |
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size (`embed.dims`). Setting it enables vector search; unset means FTS-only search. |
 | `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block, about 4 characters per token (`contextTokens`). |
+| `MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS` | `1` | Set to `0` to keep teammates' pulled rows out of the session-start context; MCP search still finds them (`context.includeOtherUsers`). |
 | `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
 
 ### Project identity
@@ -164,6 +166,7 @@ Memory is grouped by project. The key is the repo's `origin` remote, normalized:
 
 - **`<private>...</private>` is stripped first.** Anything inside these tags is removed from prompts and tool payloads before it is buffered. Nested blocks are handled, and an unclosed tag drops the rest of the text.
 - **Secrets are redacted before anything is stored.** Keys and tokens in the usual formats (for example `sk-`, `ghp_`, `AKIA`, `Bearer`, and `password=`/`token=` assignments) are replaced with `<redacted>` in tool payloads, in generated observations and in `save_memory` notes.
+- **Pulled rows are sanitized again.** Rows pulled from a hub go through the same secret redaction and are clipped to the hub's field caps before they are stored, since another client (or anyone with a key) may have skipped both.
 - **Images are never stored.** Base64 image data and image content blocks are replaced with a placeholder.
 - **Tool events are not written to disk.** Tool inputs and outputs live only in the daemon's memory buffer, capped at 128 events per session and 16 000 characters per field. Only the observations derived from them are saved.
 - **Tool calls are sent to your LLM provider.** To write observations, the daemon sends the prompt (up to 2 000 characters) and each tool call's input and output (up to 4 000 characters each, after the stripping and redaction above) to the observer you configured. With a hosted provider, that is your code and command output leaving the machine. Use a local model through `openai-compat` to keep it on the machine.
