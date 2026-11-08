@@ -13,8 +13,9 @@ export async function syncCommand(_args: string[], io: CliIo, opts: { home?: str
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
   try {
-    const r = await new DaemonClient(info).request<{ pushed: { accepted: { observations: number; summaries: number; sessions: number }; rejected: unknown[] } | null; pulled: number }>('POST', '/v1/sync', { cwd }, opts.waitMs ?? SYNC_WAIT_MS);
+    const r = await new DaemonClient(info).request<{ pushed: { accepted: { observations: number; summaries: number; sessions: number }; rejected: unknown[] } | null; pulled: number; error?: string }>('POST', '/v1/sync', { cwd }, opts.waitMs ?? SYNC_WAIT_MS);
     io.stdout(r.pushed ? `pushed ${r.pushed.accepted.observations} observations, ${r.pushed.accepted.summaries} summaries (${r.pushed.rejected.length} rejected); pulled ${r.pulled} rows\n` : `push skipped (not logged in or key rejected); pulled ${r.pulled} rows\n`);
+    if (r.error) { io.stderr(`memhive sync: ${r.error}\n`); return 1; }
     return 0;
   } catch (e) {
     if (isTimeout(e)) { io.stdout(SYNC_IN_BACKGROUND); return 0; }

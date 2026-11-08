@@ -1,7 +1,8 @@
 import type { Logger } from '../shared/logger.js';
 import type { Observation, Project, Session, Store, Summary } from '../store/types.js';
 import type { SyncHooks } from '../daemon/context.js';
-import type { PushBody, PushResult } from '../hub/routes.js';
+import { z } from 'zod';
+import { HubObservationSchema, HubSessionSchema, HubSummarySchema, type PushBody, type PushResult } from '../hub/wire.js';
 import type { HubObservation } from '../hub/store/types.js';
 import { HubClient, HubError, type HubConfigInfo } from './client.js';
 import { loadCredentials, saveCredentials } from './credentials.js';
@@ -14,6 +15,12 @@ const BACKOFF_MAX_MS = 10 * 60_000;
 const MAX_STRIKES = 5;   // 404 / bare-4xx failures in a row before the bounded policy in pushOnce kicks in
 const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes its embedder is noticed without a daemon restart
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
+// cwd is no longer relayed (hubs send ''), so it is optional here.
+const PulledSession = HubSessionSchema.extend({ cwd: z.string().optional() });
+// Hub errors that mean "the hub or the path to it is unwell", not "this batch is bad": rows stay queued and the project backs off.
+// A fetch that rejects (connection refused, DNS, timeout) gets the same backoff ladder as a 5xx, so a hub that is down is not
+// hammered on every trigger.
+const transient = (e: unknown): boolean => !(e instanceof HubError) || e.code === 'bad_response' || e.status === 408 || e.status === 429 || e.status >= 500;
 
 export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
@@ -34,7 +41,9 @@ export class SyncEngine implements SyncHooks {
     if (project.hubUrl && c.hubs[project.hubUrl]) { c.hubs[project.hubUrl].authFailed = true; saveCredentials(this.deps.home, c); }
     this.deps.logger.error('hub rejected API key; run `memhive login` again', { hub: project.hubUrl });
   }
+  private lastError = new Map<string, string>();   // project id -> last failure, shown by `memhive sync`
   private failed(project: Project, what: string, e: unknown): void {
+    this.lastError.set(project.id, `${what}: ${e instanceof Error ? e.message : String(e)}`);
     if (e instanceof HubError && e.status === 401) this.markAuthFailed(project);
     else this.deps.logger.warn(`${what} failed, will retry on next trigger`, { hub: project.hubUrl, error: e instanceof Error ? e.message : String(e) });
   }
@@ -107,30 +116,32 @@ export class SyncEngine implements SyncHooks {
       let result: PushResult;
       try { result = await this.send(client, project, body); }
       catch (e) {
-        if (!(e instanceof HubError) || e.status === 401) { this.failed(project, 'push', e); return round === 0 ? null : total; }
-        if (e.status === 413 && taken > 1) { cap = Math.max(1, Math.floor(taken / 2)); continue; }
-        if (e.status === 413 && hubObs[0]?.embedding) {
+        if (e instanceof HubError && e.status === 401) { this.failed(project, 'push', e); return round === 0 ? null : total; }
+        if (e instanceof HubError && e.status === 413 && taken > 1) { cap = Math.max(1, Math.floor(taken / 2)); continue; }
+        if (e instanceof HubError && e.status === 413 && hubObs[0]?.embedding) {
           try { result = await this.send(client, project, { ...body, observations: [noVec(hubObs[0])] }); }
           catch (e2) { if (!(e2 instanceof HubError) || e2.status !== 413) { this.failed(project, 'push', e2); return round === 0 ? null : total; } result = this.giveUp(project, body, e2); }
-        } else if (e.status === 404 || e.code === 'http_error' || e.status === 408 || e.status === 429 || e.status >= 500) {
+        } else if (transient(e) || (e as HubError).status === 404 || (e as HubError).code === 'http_error') {
           // Policy: 408/429/5xx back off with rows kept, forever. 404 and a bare 4xx (no hub error body: proxy, WAF, wrong path, old hub)
           // also back off, but after MAX_STRIKES in a row a bare 4xx goes row by row and gives up the one row still refused (warn log),
           // while a 404 keeps its rows unsynced, logs an error and waits at the longest backoff.
           // shortcut: backoff is per daemon process and resets on restart, persist it if hubs stay down for hours
           const prev = this.backoff.get(project.id);
-          const bounded = e.status === 404 || (e.status < 500 && e.status !== 408 && e.status !== 429);
+          const status = e instanceof HubError ? e.status : 0;
+          const bounded = !transient(e);
           const strikes = (prev?.strikes ?? 0) + (bounded ? 1 : 0);
-          if (bounded && e.status !== 404 && strikes >= MAX_STRIKES) {
+          if (bounded && status !== 404 && strikes >= MAX_STRIKES) {
             if (taken > 1) { cap = 1; isolating = true; this.backoff.set(project.id, { until: 0, delayMs: prev?.delayMs ?? BACKOFF_START_MS, strikes }); continue; }
-            this.backoff.delete(project.id); result = this.giveUp(project, body, e);
+            this.backoff.delete(project.id); result = this.giveUp(project, body, e as HubError);
           } else {
-            const delayMs = e.status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
+            const delayMs = status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
             this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes });
-            if (e.status === 404 && strikes === MAX_STRIKES) logger.error('push blocked: hub keeps answering 404 (wrong hub URL or old hub?); rows stay queued', { hub: project.hubUrl });
-            else logger.warn('push failed, backing off', { hub: project.hubUrl, status: e.status, retryInMs: delayMs, error: e.message });
+            this.lastError.set(project.id, `push: ${e instanceof Error ? e.message : String(e)}`);
+            if (status === 404 && strikes === MAX_STRIKES) logger.error('push blocked: hub keeps answering 404 (wrong hub URL or old hub?); rows stay queued', { hub: project.hubUrl });
+            else logger.warn('push failed, backing off', { hub: project.hubUrl, status, retryInMs: delayMs, error: e instanceof Error ? e.message : String(e) });
             return round === 0 ? null : total;
           }
-        } else result = this.giveUp(project, body, e);
+        } else result = this.giveUp(project, body, e as HubError);
       }
       // While isolating, a passing row keeps the strike count so the refused row is given up when it comes up.
       if (!isolating) this.backoff.delete(project.id);
@@ -179,14 +190,18 @@ export class SyncEngine implements SyncHooks {
     for (;;) {
       let page;
       try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now())); }
-      catch (e) { this.failed(project, 'pull', e); break; }
+      catch (e) {
+        this.failed(project, 'pull', e);
+        if (transient(e)) { const prev = this.backoff.get(project.id); const delayMs = Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS); this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes: prev?.strikes ?? 0 }); }
+        break;
+      }
       // A cursor past the hub's last seq, or a new hub epoch (project id), means the hub lost its data (restored or recreated):
       // pull from 0 and push local rows again. An older hub without max_seq / epoch skips that check.
       // At most one reset per call, and the deadline still applies, so a buggy hub cannot loop us.
       const epoch = typeof page.epoch === 'string' && page.epoch ? page.epoch : null;
       const knownEpoch = epoch ? store.getHubEpoch(project.id) : null;
       const newEpoch = epoch !== null && knownEpoch !== null && knownEpoch !== epoch;
-      const pastEnd = Number.isSafeInteger(page.max_seq) && page.max_seq >= 0 && since > page.max_seq;
+      const pastEnd = page.max_seq !== undefined && Number.isSafeInteger(page.max_seq) && page.max_seq >= 0 && since > page.max_seq;
       if (!wasReset && (newEpoch || pastEnd)) {
         logger.warn(newEpoch ? 'hub epoch changed (hub recreated?); resyncing project' : 'pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
         store.resetProjectSync(project.id); since = 0; wasReset = true; this.schedulePush(project.id);
@@ -196,7 +211,15 @@ export class SyncEngine implements SyncHooks {
       }
       if (epoch && knownEpoch !== epoch) store.setHubEpoch(project.id, epoch);   // first seen, or changed again after this call's reset
       const now = new Date().toISOString();
-      for (const s of page.sessions) {
+      // Rows are checked one by one: a malformed row is logged once and skipped like a row the store refuses.
+      const rows = <T>(list: unknown[], schema: z.ZodType<T>): T[] => list.flatMap((raw) => {
+        const r = schema.safeParse(raw); if (r.success) return [r.data];
+        apply(String((raw as { id?: unknown } | null)?.id ?? '?'), () => { throw new Error(`malformed row: ${r.error.issues[0]?.path.join('.')}`); });
+        return [];
+      });
+      const sessions = rows(page.sessions, PulledSession).map((s) => ({ ...s, cwd: s.cwd ?? '' }));
+      const observations = rows(page.observations, HubObservationSchema); const summaries = rows(page.summaries, HubSummarySchema);
+      for (const s of sessions) {
         // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes). Our own sessions, and a
         // session of another project or user that happens to share the id, are never overwritten.
         const cur = store.getSession(s.id);
@@ -204,7 +227,7 @@ export class SyncEngine implements SyncHooks {
         if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
       }
       // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.
-      const fresh = page.observations.filter((o) => store.getObservations([o.id]).length === 0 && store.getSession(o.sessionId));
+      const fresh = observations.filter((o) => store.getObservations([o.id]).length === 0 && store.getSession(o.sessionId));
       for (const o of fresh) {
         const row: Observation = { id: o.id, projectId: project.id, sessionId: o.sessionId, userId: o.userId, type: o.type, title: o.title, subtitle: o.subtitle, facts: o.facts, narrative: o.narrative, concepts: o.concepts, filesRead: o.filesRead, filesModified: o.filesModified, createdAt: o.createdAt, embeddingModel: null, origin: 'hub', syncedAt: now };
         if (!apply(o.id, () => store.insertObservations([row]))) continue;
@@ -215,13 +238,18 @@ export class SyncEngine implements SyncHooks {
       }
       // shortcut: O(n) summary dedupe per pull page, add Store.hasSummary when projects exceed ~10k summaries
       const known = new Set(store.listRecentSummaries(project.id, 10_000).map((x) => x.id));
-      for (const s of page.summaries) if (!known.has(s.id) && store.getSession(s.sessionId) && apply(s.id, () => store.insertSummaries([{ ...s, projectId: project.id, origin: 'hub', syncedAt: now }]))) applied++;
+      for (const s of summaries) if (!known.has(s.id) && store.getSession(s.sessionId) && apply(s.id, () => store.insertSummaries([{ ...s, projectId: project.id, origin: 'hub', syncedAt: now }]))) applied++;
       if (page.next_seq > since) { since = page.next_seq; store.setPullCursor(project.id, since); }
       if (!page.has_more || Date.now() > deadline) break;
     }
     return applied;
   }
 
-  async syncNow(project: Project): Promise<{ pushed: PushResult | null; pulled: number }> { return { pushed: await this.push(project, { force: true }), pulled: await this.pull(project, 10000) }; }
+  async syncNow(project: Project): Promise<{ pushed: PushResult | null; pulled: number; error?: string }> {
+    this.lastError.delete(project.id);
+    const pushed = await this.push(project, { force: true }); const pulled = await this.pull(project, 10000);
+    const error = this.lastError.get(project.id);
+    return error ? { pushed, pulled, error } : { pushed, pulled };
+  }
   close(): void { for (const t of this.timers.values()) clearTimeout(t); this.timers.clear(); }
 }

@@ -20,8 +20,9 @@ export async function linkCommand(args: string[], io: CliIo, opts: { home?: stri
     const r = await daemon.request<{ project: { key: string; hubUrl: string | null } }>('POST', '/v1/projects/link', { cwd, hubUrl });
     io.stdout(hubUrl ? `linked ${r.project.key} -> ${hubUrl}\n` : `unlinked ${r.project.key}\n`);
     if (hubUrl) {
-      const s = await daemon.request<{ pushed: { accepted: { observations: number } } | null; pulled: number }>('POST', '/v1/sync', { cwd }, SYNC_WAIT_MS);
+      const s = await daemon.request<{ pushed: { accepted: { observations: number } } | null; pulled: number; error?: string }>('POST', '/v1/sync', { cwd }, SYNC_WAIT_MS);
       io.stdout(`initial sync: pushed ${s.pushed?.accepted.observations ?? 0} observations, pulled ${s.pulled} rows\n`);
+      if (s.error) io.stderr(`warning: ${s.error}\n`);
     }
     return 0;
   } catch (e) {
