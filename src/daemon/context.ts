@@ -7,11 +7,13 @@ import type { HookEvent } from '../hooks/types.js';
 
 export interface SyncHooks {
   pull(project: Project, timeoutMs: number): Promise<number>;
+  /** Session start: pulls in the background; waits briefly only for a project that was never pulled. Never throws. */
+  startPull(project: Project): Promise<void>;
   schedulePush(projectId: string): void;
   /** Project ids whose push keeps failing with a 404 or a bare 4xx. */
   blockedProjects?(): string[];
   syncNow(project: Project): Promise<{ pushed: { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> } | null; pulled: number; error?: string }>;
-  close(): void;
+  close(): void | Promise<void>;
 }
 export interface DaemonContext {
   home: string; store: Store; observer: Observer; embedder: Embedder | null; settings: Settings; logger: Logger; userId: string;

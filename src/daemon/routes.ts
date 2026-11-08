@@ -41,7 +41,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const ev = body as HookEvent;
     if (!ev?.hostSessionId || !ev.cwd) return err(400, 'bad_event', 'hostSessionId and cwd required');
     const { project } = ctx.resolveSession(ev);
-    if (ctx.sync && project.hubUrl) { try { await ctx.sync.pull(project, 3000); } catch (e) { ctx.logger.warn('pull failed', { error: String(e) }); } ctx.sync.schedulePush(project.id); }   // push also retries rows left over from an earlier daemon
+    if (ctx.sync && project.hubUrl) { await ctx.sync.startPull(project); ctx.sync.schedulePush(project.id); }   // push also retries rows left over from an earlier daemon
     // Rows pulled from teammates can be left out of auto-injected context (they stay searchable through MCP).
     const me = ctx.userFor(project); const mine = <T extends { userId: string }>(rows: T[]) => ctx.settings.context?.includeOtherUsers === false ? rows.filter((r) => r.userId === me) : rows;
     const context = buildContext({

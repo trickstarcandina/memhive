@@ -14,6 +14,7 @@ const MAX_BODY_BYTES = 1.5 * 1024 * 1024;   // hub default limit is 2 MB; used w
 const BACKOFF_START_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60_000;
 const MAX_STRIKES = 5;   // 404 / bare-4xx failures in a row before the bounded policy in pushOnce kicks in
+const FIRST_PULL_WAIT_MS = 1000;
 const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes its embedder is noticed without a daemon restart
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
 // cwd is no longer relayed (hubs send ''), so it is optional here.
@@ -263,11 +264,23 @@ export class SyncEngine implements SyncHooks {
     return applied;
   }
 
+  // Session start must not wait on the hub: the pull runs in the background (close() awaits it). A project never pulled
+  // waits up to FIRST_PULL_WAIT_MS so a fresh link starts with some team context. Skipped while backing off or logged out.
+  private background = new Set<Promise<void>>();
+  async startPull(project: Project): Promise<void> {
+    const { store, logger } = this.deps;
+    if ((this.backoff.get(project.id)?.until ?? 0) > Date.now() || !this.clientFor(project)) return;
+    const first = store.getPullCursor(project.id) === 0 && store.getHubEpoch(project.id) === null;
+    const run = this.pull(project, 10_000).then(() => {}, (e) => logger.warn('background pull failed', { error: String(e) }));
+    this.background.add(run); void run.finally(() => this.background.delete(run));
+    if (first) { let t: NodeJS.Timeout | undefined; await Promise.race([run, new Promise<void>((r) => { t = setTimeout(r, FIRST_PULL_WAIT_MS); })]); clearTimeout(t); }
+  }
+
   async syncNow(project: Project): Promise<{ pushed: PushResult | null; pulled: number; error?: string }> {
     this.lastError.delete(project.id);
     const pushed = await this.push(project, { force: true }); const pulled = await this.pull(project, 10000);
     const error = this.lastError.get(project.id);
     return error ? { pushed, pulled, error } : { pushed, pulled };
   }
-  close(): void { for (const t of this.timers.values()) clearTimeout(t); this.timers.clear(); }
+  async close(): Promise<void> { for (const t of this.timers.values()) clearTimeout(t); this.timers.clear(); await Promise.allSettled([...this.background]); }
 }
