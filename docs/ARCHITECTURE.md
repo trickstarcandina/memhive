@@ -34,7 +34,7 @@ flowchart LR
 | Store | `src/store/sqlite/` | SQLite with FTS5 and sqlite-vec; schema in `migrations.ts`. |
 | Search | `src/search/` | Full-text and vector results merged by reciprocal rank fusion. |
 | Context | `src/context/` | Builds the session-start block within the token budget. |
-| MCP | `src/mcp/` | stdio MCP server; `search`, `timeline`, `get_observations`, `save_memory` call the daemon. |
+| MCP | `src/mcp/` | stdio MCP server; `search`, `timeline`, `get_observations`, `save_memory`, `pin`, `unpin` and `forget` call the daemon, scoped to the current project. |
 | Sync | `src/sync/` | Push/pull engine and hub HTTP client; hub keys in `credentials.json`. |
 | Hub | `src/hub/` | `memhive serve`: HTTP API over a Postgres (or SQLite) hub store. |
 
@@ -56,7 +56,11 @@ flowchart LR
    configured, vectors are computed and stored next to them (`memhive embed --missing` backfills).
 6. **Push.** Each stored batch schedules a debounced push for a linked project.
 7. **MCP.** The agent searches memory in three steps: `search` (compact rows), `timeline` (rows around
-   one id), `get_observations` (full records). `save_memory` stores an explicit note.
+   one id), `get_observations` (full records). `save_memory` stores an explicit note, `pin`/`unpin`
+   keep a row at the top of the context, `forget` deletes rows.
+8. **Forget.** `memhive forget` and the MCP `forget` tool delete a row recorded on this machine and
+   queue a tombstone. For a linked project the tombstone is pushed like a row (see
+   [Tombstones](#push)); the id is remembered so the row is never pulled or pushed again.
 
 ## Project key
 
@@ -84,36 +88,44 @@ Limits: 60 requests per minute per key (`429 rate_limited`), request body up to
 ### Push
 
 ```jsonc
-// POST /v1/sync/push
+// POST /v1/sync/push (PushBodySchema in src/hub/wire.ts)
 {
-  "projectKey": "github.com/acme/app",
-  "projectName": "app",
-  "sessions":     [{ "id": "<uuid>", "host": "claude-code", "hostSessionId": "...", "cwd": "...", "startedAt": "<iso>", "endedAt": null }],
+  "projectKey": "github.com/acme/app",          // 1..1000 chars
+  "projectName": "app",                          // optional
+  "sessions":     [{ "id": "<uuid>", "host": "claude-code", "hostSessionId": "...",
+                     "startedAt": "<iso>", "endedAt": "<iso>" | null }],   // endedAt optional
   "observations": [{ "id": "<uuid>", "sessionId": "<uuid>", "type": "bugfix", "title": "...", "subtitle": "...",
                      "facts": [], "narrative": "...", "concepts": [], "filesRead": [], "filesModified": [],
-                     "createdAt": "<iso>", "embedding": [0.1, ...] | null, "embeddingModel": "bge-m3" | null }],
+                     "createdAt": "<iso>", "embeddingModel": "bge-m3" | null, "embedding": [0.1, ...] | null }],
   "summaries":    [{ "id": "<uuid>", "sessionId": "<uuid>", "request": "...", "learned": "...", "completed": "...",
                      "nextSteps": "...", "createdAt": "<iso>" }],
   "tombstones":   [{ "id": "<uuid>", "tbl": "observation" | "summary" | "session", "deleted_at": "<iso>" }]   // protocol 2
 }
-// 200
-{ "accepted": { "sessions": 1, "observations": 3, "summaries": 1, "tombstones": 1 },   // tombstones: only when sent
-  "rejected": [{ "id": "<uuid>", "reason": "embedding_model_mismatch" }] }
+// 200 (PushResultSchema)
+{ "accepted": { "sessions": 1, "observations": 3, "summaries": 1, "tombstones": 1 },   // tombstones: protocol 2
+  "rejected": [{ "id": "<uuid>", "reason": "invalid_row", "field": "title" }] }       // field: optional
 ```
 
+- Every list defaults to `[]`; `embeddingModel` and `embedding` default to `null`. Caps: short strings
+  (`title`, `subtitle`, `host`, `hostSessionId`, `embeddingModel`, `projectKey`) 1 000 characters, long
+  strings (`narrative`, summary fields) 20 000, lists 100 items of 4 000 characters, vectors 16 000 numbers.
+  Ids must be UUIDs and are lowercased; dates must be ISO 8601 with a time zone.
+- `projectId`, `userId`, `syncedAt` and `origin` in a row are accepted with any value and overwritten.
+  `cwd` in a session (sent by 0.1 clients) is accepted and dropped; the hub never stores it.
+
 - The hub creates the project on first push. The user comes from the key and the project from
-  `projectKey`: any `userId`/`projectId` in a row is overwritten.
+  `projectKey`.
 - Sessions are processed first, because observations and summaries reference them.
-- Per-row rejection reasons: `invalid_id`, `invalid_row`, `invalid_observation`, `invalid_summary`,
-  `invalid_vector`, `embedding_model_mismatch`, `not_owner`, `unknown_session`, `forgotten`. A rejected row does
-  not fail the request.
+- Per-row rejection reasons: `invalid_id`, `invalid_row` (with the offending `field`), `invalid_observation`,
+  `invalid_summary`, `invalid_vector`, `embedding_model_mismatch`, `not_owner`, `unknown_session`, `forgotten`.
+  A rejected row does not fail the request; an over-cap row is rejected on its own, so the rest of the body lands.
 - Ids are lowercased on the wire, so string comparisons (ownership, tombstones) are exact.
 - A vector is accepted only when `embeddingModel` equals the hub's `MEMHIVE_EMBED_MODEL` and its length
   equals `MEMHIVE_EMBED_DIMS`. The client resends a mismatched row once without its vector.
 
 **Ownership.** A session belongs to the user and project that first pushed it. A later push of the
 same session id by another user or into another project is rejected as `not_owner`; the owner can
-update `endedAt` (it only moves forward) and `cwd`. An observation or summary is accepted only under a session the pushing
+update `endedAt` (it only moves forward). An observation or summary is accepted only under a session the pushing
 user owns in that project (`unknown_session` otherwise). Observations and summaries are insert-only:
 a known id is skipped, never overwritten.
 
@@ -134,20 +146,35 @@ for an older hub (or one whose config is unknown) they stay queued, with one war
 
 **Client batching** (`src/sync/engine.ts`). Up to 200 rows per table per request and 20 rounds per
 push call, filled up to 75 % of the hub's `body_limit`. On 413 the batch is halved, and a single row
-too large with its vector is resent without it. 408, 429 and 5xx back off (30 s doubling to 10 min)
-and keep the rows. Rows the hub rejects are marked synced and never retried. 401 marks the hub key
-failed until the next `memhive login`.
+too large with its vector is resent without it. A row still too large is skipped by this process
+after 5 refusals and given up after 20 across restarts. 408, 429 and 5xx back off (30 s doubling to 10 min)
+and keep the rows. 404 and a bare 4xx (no hub error body: a proxy, a WAF, a wrong path, an old hub)
+back off on the same ladder; after 5 such failures in a row a bare 4xx is retried row by row and only
+the row still refused is given up, while a 404 keeps every row
+queued at the longest backoff and logs an error. The backoff step survives a restart (`sync_state`).
+Rows the hub rejects are marked synced and never retried. 401 marks the hub key failed until the next
+`memhive login`.
 
 ### Pull
 
 ```
-GET /v1/sync/pull?project_key=github.com/acme/app&since=<seq>&limit=<1..1000, default 500>
+GET /v1/sync/pull?project_key=github.com/acme/app&since=<seq>&limit=<1..1000, default 500>[&vectors=0]
 ```
 
 ```jsonc
-{ "sessions": [...], "observations": [...], "summaries": [...], "tombstones": [{ "id", "tbl", "deleted_at" }],
+// PullResultSchema in src/hub/wire.ts
+{ "sessions":     [{ "id", "projectId", "userId", "host", "hostSessionId", "cwd": "", "startedAt", "endedAt" }],
+  "observations": [{ "id", "projectId", "sessionId", "userId", "type", "title", "subtitle", "facts", "narrative",
+                     "concepts", "filesRead", "filesModified", "createdAt", "embeddingModel", "origin": "hub",
+                     "embedding" }],   // embedding left out with vectors=0
+  "summaries":    [{ "id", "projectId", "sessionId", "userId", "request", "learned", "completed", "nextSteps",
+                     "createdAt", "origin": "hub" }],
+  "tombstones":   [{ "id", "tbl", "deleted_at" }],
   "next_seq": 1234, "has_more": false, "max_seq": 1234, "epoch": "<hub project id>" }
 ```
+
+`cwd` is always `""` (0.1 clients require the field). A page also stops at the hub's body limit, so
+`has_more` can be true with fewer rows than `limit`; the first row always goes, so the cursor moves.
 
 Every accepted row appends an entry to the hub's `sync_log` with a per-hub sequence number (`seq`).
 A pull returns the rows logged after `since`, in seq order. The client stores `next_seq` as its cursor
@@ -167,9 +194,12 @@ from 0 and pushes its rows again. At most one reset happens per pull call, withi
 A hub that sends neither field skips the check.
 
 **Applying rows.** Pulled rows are stored with `origin = 'hub'`. The client never overwrites its own
-sessions or rows of another project or user; a pulled session is updated only when its `endedAt` or
-`cwd` changed. A pulled vector is kept only when its model and size match the local embedder. A row
-that fails to store is logged and skipped, so it cannot stall the cursor.
+sessions or rows of another project or user; a pulled session is updated only when its `endedAt`
+changed. Pulled text is cleaned again (secrets redacted, `<private>` blocks removed, control characters
+replaced, fields clipped to the caps above). A pulled vector is kept only when its model and size match
+the local embedder. Rows are validated one by one: a row that is malformed or fails to store goes to
+the local `sync_quarantine` table (secrets redacted) with its reason, so it cannot stall the cursor;
+`memhive doctor` counts them.
 Tombstones in a page are applied first, scoped to the project being pulled: the row is deleted
 locally and its id remembered (never pushed back), so a teammate's stale copy is not pulled in again.
 
@@ -177,5 +207,8 @@ locally and its id remembered (never pushed back), so a teammate's stale copy is
 
 `docker/compose.yml` runs the hub image (built from `docker/Dockerfile`) and pgvector. The hub
 speaks plain HTTP and is published on `127.0.0.1:7777`; TLS is the job of a reverse proxy. Clients
-refuse a plain `http://` hub except on loopback. On first start the hub creates user `admin` and
-prints its key once.
+refuse a plain `http://` hub except on loopback. A bare `memhive serve` listens on `127.0.0.1`
+(`MEMHIVE_HOST`/`HOST` change it; the image sets `0.0.0.0`). On first start the hub creates user
+`admin` and writes its key to `$MEMHIVE_HOME/hub-admin-key` (mode 0600); the log shows only the path.
+At start the hub also checks `MEMHIVE_EMBED_DIMS` against the database and refuses to start on a
+mismatch unless `--reset-vectors` is given.

@@ -91,15 +91,28 @@ flowchart LR
   D -- batched events --> L[LLM observer]
   L -- observations --> S[(SQLite + FTS + vectors)]
   S -- context at session start --> A
-  S <-- MCP search / timeline --> A
-  S <-. push / pull .-> H[(Team hub<br>Postgres + pgvector)]
+  S <-- MCP search / timeline / pin --> A
+  A -- forget --> S
+  S <-. push rows and tombstones / pull .-> H[(Team hub<br>Postgres + pgvector)]
 ```
 
 - **Hooks.** Claude Code and Codex call `memhive hook <host> <event>` on session start, each prompt, each tool use, stop and session end. Hook commands always exit 0, so they never block the agent.
 - **Daemon.** The first hook starts a local daemon (`memhive daemon status|start|stop|run`). It owns the SQLite database (`~/.memhive/memhive.db`) and a per-session event buffer.
 - **Observer.** Buffered events are flushed to the LLM after 8 events, after 5 s of idle, or on stop. The LLM turns them into typed observations. A failed LLM call drops its batch; nothing is retried or replayed.
 - **Context.** At session start the daemon builds a context block, capped by `MEMHIVE_CONTEXT_TOKENS`, and injects it into the agent. Rows are ranked by age (weight halves about every 10 days) and type (decisions and bugfixes first), with boosts for your own rows (x1.5), rows touching files under the working directory (x1.3), rows from the same git branch (x1.2) and rows recorded again by later sessions (up to x1.5). Pinned rows come before all others, newest first, within the budget. The top 5 of your own rows also show up to 3 facts each; rows pulled from a hub show only their title, and their file lists give no boost.
-- **MCP.** `memhive mcp` exposes the memory to the agent in three steps: `search` finds matching observations, `timeline` shows what happened around one, and `get_observations` fetches full records. `save_memory` stores an explicit note.
+- **MCP.** `memhive mcp` exposes the memory to the agent through the tools below, scoped to the current project.
+- **Forget.** `memhive forget` or the MCP `forget` tool deletes a row and leaves a tombstone. In a linked project the tombstone is pushed, the hub deletes its copy and every teammate drops theirs on the next pull. See [Forgetting a memory](#forgetting-a-memory).
+
+### MCP tools
+
+| Tool | Purpose |
+| --- | --- |
+| `search` | Step 1 of 3: a compact index (ids, types, titles) of matching observations and session summaries. An empty query lists the newest rows (narrow with `since` or `type`). |
+| `timeline` | Step 2 of 3: the observations recorded before and after an anchor observation in the same session. |
+| `get_observations` | Step 3 of 3: full records for up to 50 ids (full ids, unique prefixes or 8-char short ids). |
+| `save_memory` | Store an explicit note (a decision, a gotcha, a convention) for future sessions. |
+| `pin` / `unpin` | Pin an observation so it is always listed first in the session-start context and never expires, or undo that. |
+| `forget` | Delete observations or session summaries recorded on this machine; on a linked hub the deletion reaches teammates. |
 
 Observation types: `decision`, `bugfix`, `feature`, `refactor`, `discovery`, `config`, `problem`, `workaround`.
 
@@ -204,7 +217,7 @@ An excluded or paused session gets an empty context, and its prompts and tool ca
 
 Memory is grouped by project. The key is the repo's `origin` remote, normalized: scheme, user and `.git` are dropped and the result is lowercased, so `git@github.com:Acme/App.git` and `https://github.com/acme/app` are the same project. Every clone of a repo, on any machine, shares one memory, which is what lets a team hub merge it.
 
-- A directory with no git `origin` gets a local key, `path:` plus a hash of its absolute path. It cannot be shared, and moving the directory starts a new memory.
+- A directory with no git `origin` gets a local key, `path:` plus a hash of the repo's top-level directory (or the directory itself outside a repo). It cannot be shared, and moving the directory starts a new memory.
 - Every package of a monorepo shares the repo's memory, and a fork with its own `origin` gets its own.
 - A package can have its own memory: commit `.memhive.json` with `{ "project": "github.com/acme/mono/packages/web" }` in the package directory. The nearest `.memhive.json` between the working directory and the repo root applies. The override must start with the repo's own key and a `/`. Any other value is ignored, because a committed file could otherwise point a cloned repo at another project's memory.
 
@@ -317,6 +330,10 @@ The vector size is fixed when the hub database is created. If `MEMHIVE_EMBED_DIM
 
 Hub-side search is full-text only, because the hub runs no embedder. Client search stays hybrid over local rows, including rows pulled from the hub.
 
+### Protocol version
+
+`GET /v1/config` reports the hub's protocol version: `2` since memhive 0.2 (push and pull carry tombstones). A client refuses to sync with a hub whose protocol is newer than its own, so upgrade clients after the hub. A 0.2 client keeps syncing rows with a protocol 1 hub (0.1.x), but holds its tombstones until the hub is upgraded. `memhive doctor` shows each linked hub's protocol. [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) documents the wire format.
+
 ## Upgrading
 
 ```sh
@@ -344,6 +361,11 @@ Your data stays in `~/.memhive`: the memory database (`memhive.db`), logs, `sett
 - Run `memhive doctor` first. It checks settings, credentials, plugin paths, the daemon and sync; see [Doctor](#doctor).
 - Logs are in `~/.memhive/logs/` (`hook.log`, `daemon.log`, and others). Set `MEMHIVE_DEBUG=1` for more detail.
 - If session context is missing, check that `memhive daemon status` reports the daemon running. Hooks start it automatically on the next session.
+- Plugin warnings (the files name a missing or different Node binary or bundle, or were rendered by another memhive version) mean the hooks run an old build. Re-run `memhive install`.
+- A daemon whose version differs from the CLI's: the next hook replaces an older daemon on its own; `memhive daemon stop` does it now.
+- A database schema newer than this memhive: a newer memhive opened the database. Upgrade (`npm install -g memhive@latest`) instead of running the older one.
+- sqlite-vec degraded, or observations missing an embedding: search falls back to full text for those rows. The daemon backfills on its own; `memhive embed --missing` does it now.
+- Sync checks run per linked project: not logged in or a rejected key (`memhive login <hub-url>`), a hub protocol newer than this client (upgrade memhive), an unsynced backlog with its backoff and last error, and quarantined rows (pulled rows that could not be stored).
 
 ## Contributing
 
@@ -351,6 +373,7 @@ Your data stays in `~/.memhive`: the memory database (`memhive.db`), logs, `sett
 git clone https://github.com/trickstarcandina/memhive.git
 cd memhive
 npm ci
+npm run lint      # Biome
 npm run typecheck
 npm test          # unit and integration tests
 npm run build     # bundles dist/memhive.cjs

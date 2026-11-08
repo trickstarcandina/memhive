@@ -11,10 +11,13 @@ Node.js 22 or newer.
 git clone https://github.com/trickstarcandina/memhive.git
 cd memhive
 npm ci
+npm run lint       # Biome: formatting and lint rules
 npm run typecheck
 npm run build      # bundles dist/memhive.cjs
 npm test
 ```
+
+`npm run format` rewrites files to the Biome format.
 
 `npm run pack:check` lists what `npm pack` would publish and fails on a missing or unexpected file.
 
@@ -39,7 +42,7 @@ To try the full hub stack instead, see `docker/compose.yml` and the README's Tea
 ## Pull requests
 
 - Every behavior change comes with a test. Write the failing test first.
-- `npm run typecheck`, `npm run build` and `npm test` must pass. CI runs them on Linux, macOS and
+- `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` must pass. CI runs them on Linux, macOS and
   Windows with Node 22 and 24, plus the Postgres suites.
 - Comments explain why, not what.
 - No new runtime dependency without a reason in the PR description; every client installs them.
