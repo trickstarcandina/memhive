@@ -53,6 +53,8 @@ describe('hub http', () => {
     expect(again.json.observations).toEqual([]); expect(again.json.next_seq).toBe(pull.json.next_seq);
     const beyond = await call(bobKey, 'GET', `/v1/sync/pull?project_key=github.com%2Ft%2Fr&since=999999`);
     expect(beyond.json.next_seq).toBe(999999); expect(beyond.json.has_more).toBe(false);
+    expect(beyond.json.max_seq).toBe(pull.json.next_seq);   // lets a client with a cursor past the end detect a hub reset
+    expect((await call(bobKey, 'GET', '/v1/sync/pull?project_key=nope&since=5')).json.max_seq).toBe(0);
   });
   it('re-pushing the same session from another machine is idempotent', async () => {
     const sid = newId(); const s = hsess('x', { id: sid });
@@ -74,6 +76,16 @@ describe('hub http', () => {
     const k = generateApiKey(); await store.createUser('spam'); await store.createApiKey('spam', 'l', k.hash);
     let last = 200; for (let i = 0; i < 61; i++) last = (await call(k.raw, 'GET', '/v1/me')).status;
     expect(last).toBe(429);
+  });
+});
+
+describe('ensureAdminKey', () => {
+  it('recovers from a crash between creating the admin user and its key', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null }); await st.migrate();
+    await st.createUser('admin');
+    expect(await ensureAdminKey(st)).toMatch(/^mh_/);
+    expect(await ensureAdminKey(st)).toBeNull();
+    await st.close();
   });
 });
 
@@ -109,7 +121,7 @@ describe('hub push hardening', () => {
     const mine = hobs({ projectId: 'x', sessionId: sid, title: 'bob-on-alice-session' });
     const r = await push(bobKey, { sessions: [{ ...s, cwd: '/bob', endedAt: '2030-01-01T00:00:00.000Z' }], observations: [{ ...o, title: 'hijacked' }, mine] });
     expect(r.json.accepted).toEqual({ sessions: 0, observations: 0, summaries: 0 });
-    expect(r.json.rejected.map((x: any) => x.reason)).toEqual(['unknown_session', 'unknown_session']);
+    expect(r.json.rejected).toEqual([{ id: sid, reason: 'not_owner' }, { id: o.id, reason: 'unknown_session' }, { id: mine.id, reason: 'unknown_session' }]);
     expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', cwd: '/alice', endedAt: null });
     expect((await store.getObservations([o.id]))[0]).toMatchObject({ userId: 'alice', title: 'alice-obs' });
   });
@@ -152,6 +164,7 @@ describe('hub isolated servers', () => {
     const url = `http://127.0.0.1:${h.port}/v1/sync/push`; const big = JSON.stringify({ pad: 'x'.repeat(500) });
     expect((await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: big })).status).toBe(413);
     expect((await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: big })).status).toBe(401);
+    expect((await fetch(url, { method: 'POST', headers: { authorization: `Bearer mh_${'B'.repeat(43)}`, 'content-type': 'application/json' }, body: big })).status).toBe(401);   // well-formed but unknown: refused before the body is read
     await fetch(url, { method: 'POST', headers: { authorization: 'Bearer mh_secretwrongkey', 'content-type': 'application/json' }, body: '{}' });
     expect(JSON.stringify(logs)).not.toContain(key); expect(JSON.stringify(logs)).not.toContain('mh_secretwrongkey');
     await h.close();

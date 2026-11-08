@@ -39,7 +39,7 @@ export class PostgresHubStore implements HubStore {
   private async q(sql: string, params: unknown[] = []): Promise<Row[]> { return (await this.pool.query(sql, params)).rows; }
 
   async migrate(): Promise<void> {
-    const c = await this.pool.connect();
+    const c = await this.pool.connect(); let dead: Error | undefined;
     try {
       await c.query('SELECT pg_advisory_lock(7346001)'); // two hubs booting together must not race on DDL
       await c.query('CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL)');
@@ -50,7 +50,7 @@ export class PostgresHubStore implements HubStore {
         try { await c.query('BEGIN'); await c.query(migrations[i]); await c.query('INSERT INTO schema_migrations VALUES ($1, now())', [i + 1]); await c.query('COMMIT'); }
         catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
       }
-    } finally { await c.query('SELECT pg_advisory_unlock(7346001)').catch(() => {}); c.release(); }
+    } finally { await c.query('SELECT pg_advisory_unlock(7346001)').catch((e) => { dead = e; }); c.release(dead); }   // a broken client is destroyed, not pooled
   }
   async close(): Promise<void> { await this.pool.end(); }
 
@@ -61,14 +61,16 @@ export class PostgresHubStore implements HubStore {
   }
   // Writes to one project are serialized (lock held to commit). sync_log.seq is assigned at insert, so without this a later
   // transaction could commit a higher seq before an earlier one commits a lower seq, and a puller advancing its cursor
-  // past the higher seq would skip the lower one forever. Locks are taken in sorted order to avoid deadlocks.
+  // past the higher seq would skip the lower one forever. Locks are taken in hash order (the lock key), not id order, so
+  // two ids whose hashes collide cannot make two transactions take the same locks in opposite order.
   private async tx<T>(projectIds: string[], fn: (c: PoolClient) => Promise<T>): Promise<T> {
-    const c = await this.pool.connect();
+    const c = await this.pool.connect(); let dead: Error | undefined;
     try {
       await c.query('BEGIN');
-      for (const id of [...new Set(projectIds)].sort()) await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [id]);
+      const { rows } = await c.query('SELECT DISTINCT hashtext(id) AS h FROM unnest($1::text[]) AS id ORDER BY h', [projectIds]);
+      for (const r of rows) await c.query('SELECT pg_advisory_xact_lock($1::int)', [r.h]);
       const out = await fn(c); await c.query('COMMIT'); return out;
-    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+    } catch (e) { await c.query('ROLLBACK').catch((re) => { dead = re; }); throw e; } finally { c.release(dead); }
   }
   private log(c: PoolClient, projectId: string, table: SyncTable, rowId: string) { return c.query('INSERT INTO sync_log(project_id, tbl, row_id) VALUES ($1, $2, $3)', [projectId, table, rowId]); }
 

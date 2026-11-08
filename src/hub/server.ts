@@ -24,7 +24,8 @@ export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
 }
 
 export async function ensureAdminKey(store: HubStore): Promise<string | null> {
-  if ((await store.countUsers()) > 0) return null;
+  // Keyed on keys, not users: a crash between createUser and createApiKey must not leave a hub nobody can log in to.
+  if ((await store.listApiKeys()).length > 0) return null;
   await store.createUser('admin');
   const k = generateApiKey(); await store.createApiKey('admin', 'initial', k.hash);
   return k.raw;
@@ -32,16 +33,22 @@ export async function ensureAdminKey(store: HubStore): Promise<string | null> {
 
 export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Promise<{ port: number; close(): Promise<void> }> {
   const limiter = new RateLimiter(60, 60_000);
-  const server = createJsonServer(async (method, url, body, headers) => {
-    if (url.pathname === '/healthz') return { status: 200, body: { ok: true, version: VERSION } };
+  // The key is checked before the body is read, so an unknown or revoked key never makes the hub buffer a body.
+  const authed = new WeakMap<object, { keyId: string; userName: string }>();
+  const authorize = async (url: URL, headers: Record<string, unknown>): Promise<boolean> => {
+    if (url.pathname === '/healthz') return true;
     const m = /^Bearer\s+(mh_[A-Za-z0-9_-]+)$/.exec(String(headers.authorization ?? ''));
     const auth = m ? await store.authenticate(hashApiKey(m[1])) : null;
-    if (!auth) return { status: 401, body: { error: { code: 'unauthorized', message: 'missing or invalid API key' } } };
+    if (auth) authed.set(headers, auth);
+    return !!auth;
+  };
+  const server = createJsonServer(async (method, url, body, headers) => {
+    if (url.pathname === '/healthz') return { status: 200, body: { ok: true, version: VERSION } };
+    const auth = authed.get(headers)!;
     if (!limiter.allow(auth.keyId)) return { status: 429, body: { error: { code: 'rate_limited', message: '60 requests per minute per key' } } };
     try { return await handleHubRoute(store, cfg, auth, method, url, body); }
     catch (e) { log.error('hub route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
-  }, // shortcut: sync pre-check only rejects missing/malformed credentials before buffering the body; a well-formed wrong key is still rejected after, by the DB lookup.
-  (url, headers) => url.pathname === '/healthz' || /^Bearer\s+mh_[A-Za-z0-9_-]+$/.test(String(headers.authorization ?? '')), cfg.bodyLimit, 'missing or invalid API key');
+  }, authorize, cfg.bodyLimit, 'missing or invalid API key');
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(cfg.port, '0.0.0.0', resolve); });
   const port = (server.address() as AddressInfo).port;
   log.info('hub listening', { port });

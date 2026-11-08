@@ -11,12 +11,13 @@ const MAX_ROUNDS = 20;   // bounds one push() call (hub allows 60 requests/min/k
 const MAX_BODY_BYTES = 1.5 * 1024 * 1024;   // hub default limit is 2 MB; used when the hub does not report body_limit
 const BACKOFF_START_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60_000;
+const CONFIG_TTL_MS = 10 * 60_000;   // re-read /v1/config so a hub that changes its embedder is noticed without a daemon restart
 const noVec = (o: HubObservation): HubObservation => ({ ...o, embedding: null, embeddingModel: null });
 
 export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
-  private hubCfg = new Map<string, HubConfigInfo>();
+  private hubCfg = new Map<string, { cfg: HubConfigInfo; at: number }>();
   private backoff = new Map<string, { until: number; delayMs: number }>();   // project id -> next push allowed after 5xx/429
   private badPulled = new Set<string>();
   constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null; embedModel?: string | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
@@ -38,8 +39,9 @@ export class SyncEngine implements SyncHooks {
   }
 
   private async hubConfig(client: HubClient, hubUrl: string, refresh = false): Promise<HubConfigInfo | null> {
-    if (!refresh && this.hubCfg.has(hubUrl)) return this.hubCfg.get(hubUrl)!;
-    try { const c = await client.config(); this.hubCfg.set(hubUrl, c); return c; } catch { return null; }   // unknown: send vectors, the reject path resends without
+    const hit = this.hubCfg.get(hubUrl);
+    if (!refresh && hit && Date.now() - hit.at < CONFIG_TTL_MS) return hit.cfg;
+    try { const c = await client.config(); this.hubCfg.set(hubUrl, { cfg: c, at: Date.now() }); return c; } catch { return null; }   // unknown: send vectors, the reject path resends without
   }
 
   schedulePush(projectId: string): void {
@@ -61,7 +63,15 @@ export class SyncEngine implements SyncHooks {
     return result;
   }
 
+  // One push per project at a time: a debounced push and syncNow would otherwise list and send the same rows twice.
+  private running = new Map<string, Promise<PushResult | null>>();
   async push(project: Project, opts: { force?: boolean } = {}): Promise<PushResult | null> {
+    const run = (this.running.get(project.id) ?? Promise.resolve(null)).catch(() => null).then(() => this.pushOnce(project, opts));
+    this.running.set(project.id, run);
+    try { return await run; } finally { if (this.running.get(project.id) === run) this.running.delete(project.id); }
+  }
+
+  private async pushOnce(project: Project, opts: { force?: boolean }): Promise<PushResult | null> {
     const total: PushResult = { accepted: { sessions: 0, observations: 0, summaries: 0 }, rejected: [] };
     const off = this.backoff.get(project.id);
     if (off && !opts.force && Date.now() < off.until) return null;
@@ -100,7 +110,8 @@ export class SyncEngine implements SyncHooks {
         if (e.status === 413 && hubObs[0]?.embedding) {
           try { result = await this.send(client, project, { ...body, observations: [noVec(hubObs[0])] }); }
           catch (e2) { if (!(e2 instanceof HubError) || e2.status !== 413) { this.failed(project, 'push', e2); return round === 0 ? null : total; } result = this.giveUp(project, body, e2); }
-        } else if (e.status === 408 || e.status === 429 || e.status >= 500) {
+        } else if (e.status === 404 || e.code === 'http_error' || e.status === 408 || e.status === 429 || e.status >= 500) {
+          // 404 and a 4xx without a hub error body come from a proxy, a wrong path prefix or an old hub: dropping the batch would lose rows.
           // shortcut: backoff is per daemon process and resets on restart, persist it if hubs stay down for hours
           const delayMs = Math.min((off?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
           this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs });
@@ -121,7 +132,7 @@ export class SyncEngine implements SyncHooks {
     return total;
   }
 
-  /** The hub refused the body itself (4xx other than 401, or one row over the size limit): every row in it is reported rejected so it is marked synced, not resent forever. */
+  /** The hub itself refused the body (a 4xx with a hub error body, other than 401/404, or one row over the size limit): every row in it is reported rejected so it is marked synced, not resent forever. */
   private giveUp(project: Project, body: PushBody, e: HubError): PushResult {
     const reason = e.status === 413 ? 'too_large' : e.code;
     this.deps.logger.warn('hub refused a push batch; its rows will not be retried', { hub: project.hubUrl, status: e.status, code: e.code, rows: body.sessions.length + body.observations.length + body.summaries.length });
@@ -132,7 +143,7 @@ export class SyncEngine implements SyncHooks {
     const client = this.clientFor(project); if (!client) return 0;
     const { store, embedDims, embedModel, logger } = this.deps;
     let applied = 0; let since = store.getPullCursor(project.id);
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Date.now() + timeoutMs; let wasReset = false;
     // One bad row must not stall the cursor: it is logged (once per id) and skipped.
     const apply = (id: string, fn: () => void): boolean => {
       try { fn(); return true; }
@@ -142,8 +153,23 @@ export class SyncEngine implements SyncHooks {
       let page;
       try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now())); }
       catch (e) { this.failed(project, 'pull', e); break; }
+      // A cursor past the hub's last seq means the hub lost its data (restored or recreated): pull from 0 and push local rows again.
+      // An older hub without max_seq skips this check.
+      // At most one reset per call, and the deadline still applies, so a buggy hub cannot loop us.
+      if (!wasReset && Number.isSafeInteger(page.max_seq) && page.max_seq >= 0 && since > page.max_seq) {
+        logger.warn('pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
+        store.resetProjectSync(project.id); since = 0; wasReset = true; this.schedulePush(project.id);
+        if (Date.now() > deadline) break;
+        continue;
+      }
       const now = new Date().toISOString();
-      for (const s of page.sessions) if (!store.getSession(s.id) && apply(s.id, () => store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }))) applied++;
+      for (const s of page.sessions) {
+        // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes). Our own sessions, and a
+        // session of another project or user that happens to share the id, are never overwritten.
+        const cur = store.getSession(s.id);
+        if (cur && (cur.origin !== 'hub' || cur.projectId !== project.id || cur.userId !== s.userId || (cur.endedAt === s.endedAt && cur.cwd === s.cwd))) continue;
+        if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
+      }
       // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.
       const fresh = page.observations.filter((o) => store.getObservations([o.id]).length === 0 && store.getSession(o.sessionId));
       for (const o of fresh) {

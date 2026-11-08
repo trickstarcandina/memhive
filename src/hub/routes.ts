@@ -1,12 +1,11 @@
 import { HubDimsMismatch, type HubStore, type HubObservation } from './store/types.js';
 import type { HubConfig } from './server.js';
 import { OBSERVATION_TYPES, type ObservationType, type SearchFilters, type Session, type Summary } from '../store/types.js';
-import { HubInvalidVector } from './store/postgres.js';
 import { VERSION } from '../shared/version.js';
 
 export interface PushBody { projectKey: string; projectName: string; sessions: Session[]; observations: HubObservation[]; summaries: Summary[] }
 export interface PushResult { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> }
-export interface PullResult { sessions: Session[]; observations: HubObservation[]; summaries: Summary[]; next_seq: number; has_more: boolean }
+export interface PullResult { sessions: Session[]; observations: HubObservation[]; summaries: Summary[]; next_seq: number; has_more: boolean; max_seq: number }   // max_seq: highest seq of the project, so a client whose cursor is past it knows the hub was reset
 
 const ok = (body: unknown, status = 200) => ({ status, body });
 const err = (status: number, code: string, message: string) => ({ status, body: { error: { code, message } } });
@@ -37,6 +36,9 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
       sessions.push({ ...s, projectId: project.id, userId: auth.userName, syncedAt: null });
     }
     const sIds = await store.upsertSessions(sessions);
+    // An unchanged session is either identical (fine) or owned by another user/project (the upsert skipped it): report the latter.
+    const changed = new Set(sIds);
+    for (const x of await store.getSessions(sessions.filter((s) => !changed.has(s.id)).map((s) => s.id))) if (x.userId !== auth.userName || x.projectId !== project.id) rejected.push({ id: x.id, reason: 'not_owner' });
     const obsIn: HubObservation[] = []; const sumIn: Summary[] = [];
     for (const o of Array.isArray(b.observations) ? b.observations : []) {
       if (!isUuid(o?.id) || !isUuid(o.sessionId)) { rejected.push({ id: String(o?.id), reason: 'invalid_id' }); continue; }
@@ -56,15 +58,13 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     // A row must hang off a session this user owns in this project (avoids FK 500s and attaching rows to someone else's session).
     const owned = new Set((await store.getSessions([...new Set([...obsIn, ...sumIn].map((r) => r.sessionId))])).filter((x) => x.userId === auth.userName && x.projectId === project.id).map((x) => x.id));
     const keep = <T extends { id: string; sessionId: string }>(rows: T[]) => rows.filter((r) => { if (owned.has(r.sessionId)) return true; rejected.push({ id: r.id, reason: 'unknown_session' }); return false; });
-    let obs = keep(obsIn); const sums = keep(sumIn);
-    let oIds: string[] = [];
-    for (;;) {
-      try { oIds.push(...await store.insertObservations(obs)); break; }
-      catch (e) {
-        if (e instanceof HubDimsMismatch) { oIds.push(...e.inserted); for (const id of e.rejected) rejected.push({ id, reason: 'embedding_model_mismatch' }); break; }
-        if (e instanceof HubInvalidVector) { rejected.push({ id: e.rowId, reason: 'invalid_vector' }); obs = obs.filter((o) => o.id !== e.rowId); continue; }
-        throw e;
-      }
+    const obs = keep(obsIn); const sums = keep(sumIn);
+    // Non-finite vectors were rejected above, so the store's own invalid-vector guard cannot fire here.
+    let oIds: string[];
+    try { oIds = await store.insertObservations(obs); }
+    catch (e) {
+      if (!(e instanceof HubDimsMismatch)) throw e;
+      oIds = e.inserted; for (const id of e.rejected) rejected.push({ id, reason: 'embedding_model_mismatch' });
     }
     const mIds = await store.insertSummaries(sums);
     const result: PushResult = { accepted: { sessions: sIds.length, observations: oIds.length, summaries: mIds.length }, rejected };
@@ -76,12 +76,12 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const since = intParam(q.get('since'), 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = intParam(q.get('limit'), 500, 1, 1000);
     const project = await store.getProjectByKey(key);
-    const empty: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false };
+    const empty: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false, max_seq: 0 };
     if (!project) return ok(empty);
     const entries = await store.listSyncLog(project.id, since, limit + 1);
     const page = entries.slice(0, limit);
     const ids = (t: string) => page.filter((e) => e.table === t).map((e) => e.rowId);
-    const result: PullResult = { sessions: await store.getSessions(ids('sessions')), observations: await store.getObservations(ids('observations')), summaries: await store.getSummaries(ids('summaries')), next_seq: page.length ? page[page.length - 1].seq : since, has_more: entries.length > limit };
+    const result: PullResult = { sessions: await store.getSessions(ids('sessions')), observations: await store.getObservations(ids('observations')), summaries: await store.getSummaries(ids('summaries')), next_seq: page.length ? page[page.length - 1].seq : since, has_more: entries.length > limit, max_seq: await store.maxSeq(project.id) };
     return ok(result);
   }
 

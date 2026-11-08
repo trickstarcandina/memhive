@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +14,7 @@ import { newId } from '../../src/shared/ids.js';
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 const DEFAULT_LIMIT = 2 * 1024 * 1024;
 const closers: Array<() => Promise<void> | void> = [];
-afterEach(async () => { for (const c of closers.splice(0)) await c(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const c of closers.splice(0)) await c(); });
 
 async function setup(opts: { dims: number | null; bodyLimit?: number; fetchImpl?: (real: typeof fetch) => typeof fetch }) {
   const hs = new SqliteHubStore(':memory:', { dims: opts.dims }); await hs.migrate();
@@ -84,6 +84,34 @@ describe('push batch sizing', () => {
   });
 });
 
+describe('hub config cache', () => {
+  it('is refreshed after a while: a hub that gains an embedder gets vectors without a daemon restart', async () => {
+    let hubHasEmbedder = false;
+    const t = await setup({ dims: 2, fetchImpl: (inner) => async (url, init) => {
+      if (!String(url).endsWith('/v1/config') || hubHasEmbedder) return inner(url, init);
+      return new Response(JSON.stringify({ embedding_model: null, embedding_dims: null }), { status: 200 });
+    } });
+    const [first] = addObs(t, 1, 2);
+    await t.engine.push(t.project);
+    expect((await t.hs.getObservations([first.id]))[0].embedding).toBeNull();
+    hubHasEmbedder = true;
+    const later = Date.now() + 11 * 60_000; vi.spyOn(Date, 'now').mockReturnValue(later);
+    const [second] = addObs(t, 1, 2);
+    await t.engine.push(t.project);
+    expect((await t.hs.getObservations([second.id]))[0].embedding).toHaveLength(2);
+  });
+});
+
+describe('push concurrency', () => {
+  it('a debounced push and a manual sync running together send the rows once', async () => {
+    const t = await setup({ dims: null });
+    addObs(t, 3, null);
+    const [a, b] = await Promise.all([t.engine.push(t.project), t.engine.push(t.project, { force: true })]);
+    expect(a!.accepted.observations + b!.accepted.observations).toBe(3);
+    expect(t.pushes()).toBe(1);
+  });
+});
+
 describe('push failure handling', () => {
   const failPush = (status: number) => (inner: typeof fetch): typeof fetch => async (url, init) =>
     String(url).endsWith('/v1/sync/push') ? new Response(JSON.stringify({ error: { code: 'x', message: 'x' } }), { status }) : inner(url, init);
@@ -95,6 +123,22 @@ describe('push failure handling', () => {
     expect(r!.accepted.observations).toBe(0); expect(r!.rejected).toHaveLength(4);   // session + 3 observations
     expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
     expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(0);
+  });
+  it('a 404 (proxy, wrong path, old hub) keeps rows and backs off', async () => {
+    const t = await setup({ dims: null, fetchImpl: failPush(404) });
+    addObs(t, 2, null);
+    expect(await t.engine.push(t.project)).toBeNull();
+    expect(await t.engine.push(t.project)).toBeNull();
+    expect(t.pushes()).toBe(1);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(2);
+  });
+  it('a bare proxy 400/403 without a hub error body keeps rows', async () => {
+    for (const status of [400, 403]) {
+      const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).endsWith('/v1/sync/push') ? new Response('<html>Forbidden</html>', { status }) : inner(url, init) });
+      addObs(t, 1, null);
+      expect(await t.engine.push(t.project)).toBeNull();
+      expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
+    }
   });
   it('a 5xx keeps rows and backs off; a manual sync (force) still tries', async () => {
     const t = await setup({ dims: null, fetchImpl: failPush(500) });
@@ -110,6 +154,51 @@ describe('push failure handling', () => {
 });
 
 describe('pull robustness', () => {
+  it('a cursor past the hub max_seq (hub reset) restarts the pull and re-queues local rows for push', async () => {
+    const t = await setup({ dims: null });
+    addObs(t, 1, null);
+    await t.engine.push(t.project);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
+    t.store.setPullCursor(t.project.id, 999);
+    await t.engine.pull(t.project, 2000);
+    expect(t.store.getPullCursor(t.project.id)).toBe(await t.hs.maxSeq((await t.hs.getProjectByKey(t.project.key))!.id));
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
+    expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(1);
+  });
+  it('a hub that always reports max_seq below the cursor triggers one reset, and pull() terminates', async () => {
+    let pulls = 0;
+    const page = (since: number) => ({ sessions: [], observations: [], summaries: [], next_seq: since + 1, has_more: true, max_seq: since - 1 });
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => {
+      if (!String(url).includes('/v1/sync/pull')) return inner(url, init);
+      pulls++; return new Response(JSON.stringify(page(Number(new URL(String(url)).searchParams.get('since')))), { status: 200 });
+    } });
+    const reset = vi.spyOn(t.store, 'resetProjectSync');
+    t.store.setPullCursor(t.project.id, 50);
+    await t.engine.pull(t.project, 300);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(pulls).toBeGreaterThan(1);
+  });
+  it('a max_seq that is not a safe non-negative integer is ignored', async () => {
+    for (const max_seq of [-1, 1.5, 'x', 1e300]) {
+      const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify({ sessions: [], observations: [], summaries: [], next_seq: 50, has_more: false, max_seq }), { status: 200 }) : inner(url, init) });
+      const reset = vi.spyOn(t.store, 'resetProjectSync');
+      t.store.setPullCursor(t.project.id, 50);
+      await t.engine.pull(t.project, 1000);
+      expect(reset).not.toHaveBeenCalled();
+    }
+  });
+  it('a pulled session never rewrites a local session of another project or user', async () => {
+    let page: unknown = null;
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify(page), { status: 200 }) : inner(url, init) });
+    const other = t.store.getOrCreateProject('github.com/t/other', 'other');
+    const mine = sess(t.project.id, { userId: 'bob', origin: 'hub', cwd: '/b' });
+    const foreign = sess(other.id, { userId: 'bob', origin: 'hub', cwd: '/o' });
+    t.store.upsertSession(mine); t.store.upsertSession(foreign);
+    page = { sessions: [{ ...foreign, projectId: 'x', cwd: '/evil', endedAt: '2030-01-01T00:00:00.000Z' }, { ...mine, userId: 'mallory', cwd: '/evil', endedAt: '2030-01-01T00:00:00.000Z' }], observations: [], summaries: [], next_seq: 3, has_more: false };
+    await t.engine.pull(t.project, 2000);
+    expect(t.store.getSession(foreign.id)).toMatchObject({ projectId: other.id, cwd: '/o', endedAt: null });
+    expect(t.store.getSession(mine.id)).toMatchObject({ userId: 'bob', cwd: '/b', endedAt: null });
+  });
   it('a pulled row that cannot be stored is skipped; the rest apply and the cursor advances', async () => {
     const good = { id: newId(), projectId: 'x', userId: 'bob', host: 'codex', hostSessionId: 'h', cwd: '/b', startedAt: new Date().toISOString(), endedAt: null, syncedAt: null };
     const bad = { ...good, id: newId(), hostSessionId: 'h2', host: null };   // NOT NULL violation locally
