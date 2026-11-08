@@ -31,5 +31,7 @@ export function hubPgMigrations(dims: number | null): string[] {
     CREATE INDEX sessions_project ON sessions(project_id);`,
     // Session paths (/home/alice/clients/...) leak usernames and client names to the team; the hub no longer keeps them.
     `ALTER TABLE sessions DROP COLUMN cwd;`,
+    // Protocol 2: deleted rows leave a tombstone that pull relays.
+    `CREATE TABLE tombstones (id uuid NOT NULL, tbl text NOT NULL, project_id uuid NOT NULL, user_id text NOT NULL, deleted_at timestamptz NOT NULL, PRIMARY KEY (project_id, tbl, id));`,
   ];
 }

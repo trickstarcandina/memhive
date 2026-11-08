@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { ContextObservation, Observation, ObservationType, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable } from '../types.js';
+import type { ContextObservation, DeleteOpts, Observation, ObservationPatch, ObservationType, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable, Tombstone, TombstoneTable } from '../types.js';
 import { SQLITE_MIGRATIONS } from './migrations.js';
 import { ftsTokens, toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
@@ -18,6 +18,7 @@ const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, 
 const rowToObservation = (r: Row): Observation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: r.origin, syncedAt: r.synced_at ?? null, seenCount: Number(r.seen_count ?? 1), lastSeenAt: r.last_seen_at ?? null, pinned: !!r.pinned });
 const rowToSyncState = (r: Row): SyncState => ({ projectId: r.project_id, pullCursor: Number(r.pull_cursor), hubEpoch: r.hub_epoch ?? null, backoffUntil: r.backoff_until ?? null, backoffMs: r.backoff_ms ?? null, strikes: Number(r.strikes ?? 0), lastError: r.last_error ?? null, lastErrorAt: r.last_error_at ?? null, lastPushAt: r.last_push_at ?? null, lastPullAt: r.last_pull_at ?? null, quarantined: Number(r.quarantined ?? 0) });
 const SYNC_COLS: Record<keyof SyncStatePatch, string> = { backoffUntil: 'backoff_until', backoffMs: 'backoff_ms', strikes: 'strikes', lastError: 'last_error', lastErrorAt: 'last_error_at', lastPushAt: 'last_push_at', lastPullAt: 'last_pull_at' };
+const TOMB_TABLE: Record<TombstoneTable, SyncTable> = { observation: 'observations', summary: 'summaries', session: 'sessions' };
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: r.origin, syncedAt: r.synced_at ?? null });
 
 function filterSql(f: SearchFilters, alias: string): { sql: string; params: unknown[] } {
@@ -220,6 +221,77 @@ export class SqliteStore implements Store {
     return rows.map((r) => ({ ...rowToObservation(r), branch: r.branch ?? null, sessionCwd: r.session_cwd || null }));
   }
   setPinned(id: string, pinned: boolean): boolean { return this.db.prepare('UPDATE observations SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id).changes > 0; }
+  updateObservation(id: string, patch: ObservationPatch): boolean {
+    const set: string[] = []; const params: unknown[] = [];
+    if (patch.title !== undefined) { set.push('title = ?'); params.push(patch.title); }
+    if (patch.narrative !== undefined) { set.push('narrative = ?'); params.push(patch.narrative); }
+    if (patch.facts !== undefined) { set.push('facts = ?'); params.push(j(patch.facts)); }
+    const text = set.length > 0;   // the FTS refresh is the observations_au trigger; the vector is stale and goes
+    if (text) set.push('embedding_model = NULL');
+    if (patch.pinned !== undefined) { set.push('pinned = ?'); params.push(patch.pinned ? 1 : 0); }
+    if (!set.length) return !!this.db.prepare('SELECT 1 FROM observations WHERE id = ?').get(id);
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(`UPDATE observations SET ${set.join(', ')} WHERE id = ?`).run(...params, id).changes > 0;
+      if (changed && text && this.dims) this.db.prepare('DELETE FROM vec_observations WHERE id = ?').run(id);
+      return changed;
+    })();
+  }
+  deleteObservations(ids: string[], opts?: DeleteOpts): number { return this.forget('observation', ids, opts); }
+  deleteSummaries(ids: string[], opts?: DeleteOpts): number { return this.forget('summary', ids, opts); }
+  deleteSession(id: string, opts?: DeleteOpts): number { return this.forget('session', [id], opts); }
+  private forget(tbl: TombstoneTable, ids: string[], opts: DeleteOpts = {}): number {
+    const at = new Date().toISOString();
+    const pick = this.db.prepare(`SELECT project_id FROM ${TOMB_TABLE[tbl]} WHERE id = ?`);
+    const tomb = this.db.prepare('INSERT INTO tombstones(id, tbl, project_id, deleted_at, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING');
+    const delVec = this.dims ? this.db.prepare('DELETE FROM vec_observations WHERE id = ?') : null;
+    const unquarantine = this.db.prepare('DELETE FROM sync_quarantine WHERE project_id = ? AND lower(id) = ?');
+    const drop = (t: TombstoneTable, id: string) => { if (t === 'observation') delVec?.run(id); this.db.prepare(`DELETE FROM ${TOMB_TABLE[t]} WHERE id = ?`).run(id); };
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const id of ids) {
+        const r = pick.get(id) as Row | undefined;
+        if (r ? opts.projectId !== undefined && r.project_id !== opts.projectId : opts.projectId === undefined) continue;
+        if (r) {
+          if (tbl === 'session') {
+            // Children are remembered, not pushed: the session tombstone makes the hub (and every puller) drop them too.
+            for (const [t, table] of [['observation', 'observations'], ['summary', 'summaries']] as const) {
+              for (const c of this.db.prepare(`SELECT id FROM ${table} WHERE session_id = ?`).all(id) as Row[]) { drop(t, c.id); tomb.run(String(c.id).toLowerCase(), t, r.project_id, at, at); }
+            }
+            this.db.prepare('DELETE FROM prompts WHERE session_id = ?').run(id);
+          }
+          drop(tbl, id); n++;
+        }
+        const pid = r?.project_id ?? opts.projectId;
+        tomb.run(id.toLowerCase(), tbl, pid, at, opts.syncedAt ?? null);   // lowercased, like forgottenIds looks them up
+        unquarantine.run(pid, id.toLowerCase());   // a forgotten row must not survive as a quarantined raw copy
+      }
+      return n;
+    })();
+  }
+  forgottenIds(projectId: string, tbl: TombstoneTable, ids: string[]): Set<string> {
+    // Case-insensitive (pulled ids may be upper case); returns the ids as given.
+    const dead = new Set<string>();
+    for (let i = 0; i < ids.length; i += 500) {   // stays far below SQLite's bound-parameter limit
+      const part = ids.slice(i, i + 500).map((x) => x.toLowerCase());
+      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND tbl = ? AND id IN (${part.map(() => '?').join(',')})`).all(projectId, tbl, ...part) as Row[]) dead.add(r.id);
+    }
+    return new Set(ids.filter((x) => dead.has(x.toLowerCase())));
+  }
+  matchIdPrefix(projectId: string, prefix: string): Array<{ id: string; kind: 'observation' | 'summary' }> {
+    if (prefix.length < 4) return [];
+    const p = prefix.toLowerCase();
+    const head = '(id >= @p AND id < @p || char(1114111))';
+    const obsTail = p.length === 8 ? 'short_id = @p' : 'substr(id, -length(@p)) = @p';
+    const q = (table: string, tail: string) => (this.db.prepare(`SELECT id FROM ${table} WHERE project_id = @pid AND (${head} OR ${tail}) LIMIT 2`).all({ p, pid: projectId }) as Row[]).map((r) => r.id as string);
+    return [...q('observations', obsTail).map((id) => ({ id, kind: 'observation' as const })), ...q('summaries', 'substr(id, -length(@p)) = @p').map((id) => ({ id, kind: 'summary' as const }))];
+  }
+  listPendingTombstones(projectId: string, limit: number): Tombstone[] {
+    return (this.db.prepare('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = ? AND synced_at IS NULL ORDER BY rowid LIMIT ?').all(projectId, limit) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at }));
+  }
+  markTombstonesSynced(projectId: string, ids: string[], at: string): void {
+    if (!ids.length) return;
+    this.db.prepare(`UPDATE tombstones SET synced_at = ? WHERE project_id = ? AND synced_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(at, projectId, ...ids);
+  }
   deleteExpired(cutoffs: Partial<Record<ObservationType, string>>, maxChunks = 10): number {
     const pick = this.db.prepare(`SELECT o.id FROM observations o JOIN projects p ON p.id = o.project_id
       WHERE o.type = ? AND o.pinned = 0 AND COALESCE(o.last_seen_at, o.created_at) < ? AND (o.synced_at IS NOT NULL OR p.hub_url IS NULL) LIMIT 500`);
@@ -357,6 +429,8 @@ export class SqliteStore implements Store {
     this.db.transaction(() => {
       for (const t of ['sessions', 'observations', 'summaries']) this.db.prepare(`UPDATE ${t} SET synced_at = NULL WHERE project_id = ? AND origin = 'local'`).run(projectId);
       this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor, hub_epoch) VALUES (?, 0, NULL) ON CONFLICT(project_id) DO UPDATE SET pull_cursor = 0, hub_epoch = NULL, backoff_until = NULL, backoff_ms = NULL, strikes = 0').run(projectId);
+      // A restored hub may hold rows forgotten since its backup: send every tombstone again (a foreign one comes back not_owner).
+      this.db.prepare('UPDATE tombstones SET synced_at = NULL WHERE project_id = ?').run(projectId);
     })();
   }
   getSyncState(projectId: string): SyncState {

@@ -72,7 +72,7 @@ the body is read. Responses are JSON; errors are `{ "error": { "code": "...", "m
 | Route | Purpose |
 | --- | --- |
 | `GET /healthz` | `{ ok: true, version }`, no auth. |
-| `GET /v1/config` | `{ version, embedding_model, embedding_dims, body_limit }`. Clients cache it for 10 min. |
+| `GET /v1/config` | `{ version, protocol, embedding_model, embedding_dims, body_limit }`. Clients cache it for 10 min. |
 | `GET /v1/me` | `{ user }` for the key. `memhive login` uses it to check a key. |
 | `POST /v1/sync/push` | Upload rows of one project. |
 | `GET /v1/sync/pull` | Download rows of one project after a cursor. |
@@ -93,10 +93,11 @@ Limits: 60 requests per minute per key (`429 rate_limited`), request body up to
                      "facts": [], "narrative": "...", "concepts": [], "filesRead": [], "filesModified": [],
                      "createdAt": "<iso>", "embedding": [0.1, ...] | null, "embeddingModel": "bge-m3" | null }],
   "summaries":    [{ "id": "<uuid>", "sessionId": "<uuid>", "request": "...", "learned": "...", "completed": "...",
-                     "nextSteps": "...", "createdAt": "<iso>" }]
+                     "nextSteps": "...", "createdAt": "<iso>" }],
+  "tombstones":   [{ "id": "<uuid>", "tbl": "observation" | "summary" | "session", "deleted_at": "<iso>" }]   // protocol 2
 }
 // 200
-{ "accepted": { "sessions": 1, "observations": 3, "summaries": 1 },
+{ "accepted": { "sessions": 1, "observations": 3, "summaries": 1, "tombstones": 1 },   // tombstones: only when sent
   "rejected": [{ "id": "<uuid>", "reason": "embedding_model_mismatch" }] }
 ```
 
@@ -104,8 +105,9 @@ Limits: 60 requests per minute per key (`429 rate_limited`), request body up to
   `projectKey`: any `userId`/`projectId` in a row is overwritten.
 - Sessions are processed first, because observations and summaries reference them.
 - Per-row rejection reasons: `invalid_id`, `invalid_row`, `invalid_observation`, `invalid_summary`,
-  `invalid_vector`, `embedding_model_mismatch`, `not_owner`, `unknown_session`. A rejected row does
+  `invalid_vector`, `embedding_model_mismatch`, `not_owner`, `unknown_session`, `forgotten`. A rejected row does
   not fail the request.
+- Ids are lowercased on the wire, so string comparisons (ownership, tombstones) are exact.
 - A vector is accepted only when `embeddingModel` equals the hub's `MEMHIVE_EMBED_MODEL` and its length
   equals `MEMHIVE_EMBED_DIMS`. The client resends a mismatched row once without its vector.
 
@@ -114,6 +116,21 @@ same session id by another user or into another project is rejected as `not_owne
 update `endedAt` (it only moves forward) and `cwd`. An observation or summary is accepted only under a session the pushing
 user owns in that project (`unknown_session` otherwise). Observations and summaries are insert-only:
 a known id is skipped, never overwritten.
+
+**Tombstones (protocol 2).** A tombstone deletes a row the pushing user owns in the pushed project
+(a session takes its observations and summaries with it). A row of another user or project is
+rejected `not_owner`; a row the hub does not have is accepted and ignored. Tombstones are applied
+after the rows of the same body. The hub records each tombstone, keyed by (project, table, id), and
+logs it in `sync_log`; a later push of a forgotten id into the same table of that project is rejected
+`forgotten` (matching is per table: a session tombstone never hides an observation with the same id).
+A session tombstone deletes only the pusher's own rows under it. At most 200 tombstones per push
+(`400 bad_push` above). A client re-sends every tombstone after a hub reset, and keeps a body's
+tombstones queued when the hub refuses the whole body.
+Rows are otherwise immutable on the hub: local edits are not synced.
+
+**Protocol.** `/v1/config` reports `protocol` (2 since tombstones). A client refuses to sync with a
+hub whose protocol is newer than its own. It sends tombstones only to a hub at protocol 2 or later;
+for an older hub (or one whose config is unknown) they stay queued, with one warning per hub.
 
 **Client batching** (`src/sync/engine.ts`). Up to 200 rows per table per request and 20 rounds per
 push call, filled up to 75 % of the hub's `body_limit`. On 413 the batch is halved, and a single row
@@ -128,7 +145,7 @@ GET /v1/sync/pull?project_key=github.com/acme/app&since=<seq>&limit=<1..1000, de
 ```
 
 ```jsonc
-{ "sessions": [...], "observations": [...], "summaries": [...],
+{ "sessions": [...], "observations": [...], "summaries": [...], "tombstones": [{ "id", "tbl", "deleted_at" }],
   "next_seq": 1234, "has_more": false, "max_seq": 1234, "epoch": "<hub project id>" }
 ```
 
@@ -153,6 +170,8 @@ A hub that sends neither field skips the check.
 sessions or rows of another project or user; a pulled session is updated only when its `endedAt` or
 `cwd` changed. A pulled vector is kept only when its model and size match the local embedder. A row
 that fails to store is logged and skipped, so it cannot stall the cursor.
+Tombstones in a page are applied first, scoped to the project being pulled: the row is deleted
+locally and its id remembered (never pushed back), so a teammate's stale copy is not pulled in again.
 
 ## Hub deployment
 

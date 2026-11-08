@@ -1,7 +1,7 @@
 import { Pool, type PoolClient } from 'pg';
 import { HubDimsConflict, HubDimsMismatch, type HubStoreOptions } from './types.js';
 import type { HubApiKey, HubObservation, HubProjectInfo, HubStore, HubUserInfo, HubUserRemoval, SyncLogEntry, SyncTable } from './types.js';
-import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
+import type { Observation, Project, SearchFilters, Session, Summary, Tombstone } from '../../store/types.js';
 import { assertValidDims, hubPgMigrations } from './migrations-pg.js';
 import { newId } from '../../shared/ids.js';
 
@@ -19,6 +19,7 @@ const rowToObs = (r: Row): HubObservation => ({ id: r.id, projectId: r.project_i
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: iso(r.created_at), origin: 'hub', syncedAt: null });
 const rowToKey = (r: Row): HubApiKey => ({ id: r.id, userName: r.user_name, label: r.label, createdAt: iso(r.created_at), revokedAt: isoOrNull(r.revoked_at) });
 
+const TOMB_TABLES = { observation: 'observations', summary: 'summaries', session: 'sessions' } as const;
 /** to_tsquery-safe: tokens joined with & */
 export function toTsQuery(text: string): string {
   const tokens = [...new Set(text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])].slice(0, 16);
@@ -91,7 +92,7 @@ export class PostgresHubStore implements HubStore {
   }
   // One statement per batch: the project lock is held for a few round trips, not one per row. Rows are logged in input order
   // (WITH ORDINALITY), so seq order matches what the caller passed whatever order RETURNING uses.
-  private async log(c: PoolClient, table: SyncTable, rows: Array<{ id: string; projectId: string }>): Promise<void> {
+  private async log(c: PoolClient, table: SyncTable | 'tombstone', rows: Array<{ id: string; projectId: string }>): Promise<void> {
     if (!rows.length) return;
     await c.query('INSERT INTO sync_log(project_id, tbl, row_id) SELECT p, $2, r FROM unnest($1::uuid[], $3::uuid[]) WITH ORDINALITY AS t(p, r, n) ORDER BY n', [rows.map((r) => r.projectId), table, rows.map((r) => r.id)]);
   }
@@ -151,6 +152,26 @@ export class PostgresHubStore implements HubStore {
   async listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]> {
     return (await this.q('SELECT seq, tbl, row_id FROM sync_log WHERE project_id = $1 AND seq > $2 ORDER BY seq LIMIT $3', [projectId, sinceSeq, limit])).map((r) => ({ seq: Number(r.seq), table: r.tbl, rowId: r.row_id }));
   }
+  async applyTombstones(projectId: string, userName: string, rows: Tombstone[]): Promise<{ applied: number; rejected: Array<{ id: string; reason: string }> }> {
+    if (!rows.length) return { applied: 0, rejected: [] };
+    return this.tx([projectId], async (c) => {
+      const rejected: Array<{ id: string; reason: string }> = []; let applied = 0; const done: Array<{ id: string; projectId: string }> = [];
+      for (const t of rows) {
+        const { rows: [r] } = await c.query(`SELECT project_id, user_id FROM ${TOMB_TABLES[t.tbl]} WHERE id = $1`, [t.id]);
+        if (r && (r.project_id !== projectId || r.user_id !== userName)) { rejected.push({ id: t.id, reason: 'not_owner' }); continue; }
+        applied++;
+        if (!r) continue;
+        if (t.tbl === 'session') for (const table of ['observations', 'summaries']) await c.query(`DELETE FROM ${table} WHERE session_id = $1 AND project_id = $2 AND user_id = $3`, [t.id, projectId, userName]);   // only the pusher's own rows, whatever references them
+        await c.query(`DELETE FROM ${TOMB_TABLES[t.tbl]} WHERE id = $1`, [t.id]);
+        await c.query('INSERT INTO tombstones(id, tbl, project_id, user_id, deleted_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING', [t.id, t.tbl, projectId, userName, t.deletedAt]);
+        done.push({ id: t.id, projectId });
+      }
+      await this.log(c, 'tombstone', done);
+      return { applied, rejected };
+    });
+  }
+  async tombstoned(projectId: string, tbl: Tombstone['tbl'], ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (await this.q('SELECT id FROM tombstones WHERE project_id = $1 AND tbl = $2 AND id = ANY($3::uuid[])', [projectId, tbl, ids])).map((r) => r.id) : []); }
+  async getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]> { return ids.length ? (await this.q('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = $1 AND id = ANY($2::uuid[])', [projectId, ids])).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: iso(r.deleted_at) })) : []; }
   async maxSeq(projectId: string): Promise<number> { const [r] = await this.q('SELECT COALESCE(MAX(seq), 0) m FROM sync_log WHERE project_id = $1', [projectId]); return Number(r.m); }
   async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (await this.q('SELECT * FROM sessions WHERE id = ANY($1::uuid[])', [ids])).map(rowToSession) : []; }
   async getObservations(ids: string[]): Promise<HubObservation[]> {

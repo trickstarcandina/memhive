@@ -86,4 +86,16 @@ export const SQLITE_MIGRATIONS: string[] = [
   ALTER TABLE observations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
   CREATE INDEX IF NOT EXISTS observations_pinned ON observations(project_id) WHERE pinned = 1;
   `,
+  // 11: forget. Summaries had no FTS delete trigger; observations get an update trigger for local edits; tombstones queue
+  // deletions for push and remember every forgotten id so a teammate's later copy of the row is not pulled back in. Scoped
+  // by project: a tombstone from one project's hub must never suppress a row with the same id in another project.
+  `
+  CREATE TRIGGER IF NOT EXISTS summaries_ad AFTER DELETE ON summaries BEGIN
+    INSERT INTO summaries_fts(summaries_fts, rowid, request, learned, completed, next_steps) VALUES ('delete', old.rowid, old.request, old.learned, old.completed, old.next_steps); END;
+  CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE OF title, subtitle, narrative, facts, concepts ON observations BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, title, subtitle, narrative, facts, concepts) VALUES ('delete', old.rowid, old.title, old.subtitle, old.narrative, old.facts, old.concepts);
+    INSERT INTO observations_fts(rowid, title, subtitle, narrative, facts, concepts) VALUES (new.rowid, new.title, new.subtitle, new.narrative, new.facts, new.concepts); END;
+  CREATE TABLE IF NOT EXISTS tombstones (id TEXT NOT NULL, tbl TEXT NOT NULL, project_id TEXT NOT NULL, deleted_at TEXT NOT NULL, synced_at TEXT, PRIMARY KEY (project_id, tbl, id));
+  CREATE INDEX IF NOT EXISTS tombstones_unsynced ON tombstones(project_id, synced_at);
+  `,
 ];

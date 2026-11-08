@@ -15,6 +15,8 @@ export interface SyncHooks {
   blockedProjects?(): string[];
   /** Hubs this client refuses to sync with (protocol newer than ours). */
   hubErrors?(): Array<{ hub: string; error: string }>;
+  /** The linked hub's sync protocol, or null when unknown (decides whether a forget reaches the team). */
+  hubProtocol?(project: Project): Promise<number | null>;
   syncNow(project: Project): Promise<{ pushed: { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> } | null; pulled: number; error?: string }>;
   close(): void | Promise<void>;
 }

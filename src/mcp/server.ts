@@ -12,6 +12,7 @@ import { loadSettings } from '../shared/settings.js';
 import { VERSION } from '../shared/version.js';
 import { OBSERVATION_TYPES, type Observation, type SearchResult, type Summary } from '../store/types.js';
 import { formatFull, formatIndex } from './format.js';
+import { formatForget, type ForgetResult } from './format-forget.js';
 
 // Accepts the `#abcd1234` form the context footer and index print.
 const id = z.preprocess((v) => (typeof v === 'string' ? v.replace(/^#/, '') : v), z.string().max(64).regex(/^[0-9a-f-]+$/i));
@@ -103,6 +104,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
   };
   idTool('pin', 'Pin an observation (full id or 8-char short id): it is listed first in the session-start context (within the token budget) and never expired by retention.', pin(true));
   idTool('unpin', 'Unpin an observation so it is ranked and expired like any other.', pin(false));
+
+  tool('forget', {
+    description: 'Permanently delete observations or session summaries of this project (full ids, unique prefixes or 8-char short ids), e.g. a secret recorded by mistake. Only rows recorded on this machine can be forgotten; on a linked hub the deletion reaches teammates too.',
+    inputSchema: { ids: z.array(id).min(1).max(50) },
+  }, async (a) => {
+    // Never force: an agent steered by text in a repo must not be able to wipe teammates' memory.
+    const r = await rpc.request<ForgetResult>('POST', '/v1/forget', { projectKey: await projectKey(), ids: a.ids });
+    return textResult(formatForget(r));
+  });
 
   return server;
 }

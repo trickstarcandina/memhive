@@ -27,7 +27,7 @@ const text = (r: any) => r.content[0].text as string;
 describe('mcp', () => {
   it('lists the tools', async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_observations', 'pin', 'save_memory', 'search', 'timeline', 'unpin']);
+    expect(names).toEqual(['forget', 'get_observations', 'pin', 'save_memory', 'search', 'timeline', 'unpin']);
   });
   it('pin and unpin by short id; a pinned row is marked in the session-start context', async () => {
     const saved = text(await client.callTool({ name: 'save_memory', arguments: { text: 'Deploys go through the staging gate', title: 'Staging gate' } }));
@@ -38,6 +38,28 @@ describe('mcp', () => {
     expect(ctxText).toMatch(new RegExp(`#${id8} · discovery · pinned · Staging gate`));
     expect(text(await client.callTool({ name: 'unpin', arguments: { id: id8 } }))).toContain(`Unpinned #${id8}`);
     expect(await client.callTool({ name: 'pin', arguments: { id: 'deadbeef' } })).toMatchObject({ isError: true });
+  });
+  it('forget deletes own rows of this project only; teammate rows are not_owner, other projects not found', async () => {
+    const saved = text(await client.callTool({ name: 'save_memory', arguments: { text: 'Leaked token was here', title: 'Oops secret' } }));
+    const id8 = saved.match(/#([0-9a-f]{8})/)![1];
+    const dc = new DaemonClient(h.info);
+    const key = (await dc.request<any>('GET', '/v1/project?cwd=' + encodeURIComponent(home))).project.key;
+    const store = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' }).store;
+    const p = store.getProjectByKey(key)!; const sid = store.getSessionByHost('manual', p.id)!.id;
+    const theirs = '0190aaaa-bbbb-7ccc-8ddd-eeee88888888'; const elsewhere = '0190aaaa-bbbb-7ccc-8ddd-eeee99999999';
+    const base = { sessionId: sid, type: 'decision' as const, subtitle: '', facts: [], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: new Date().toISOString(), embeddingModel: null, syncedAt: new Date().toISOString() };
+    const other = store.getOrCreateProject('github.com/else/where', 'where');
+    store.insertObservations([{ ...base, id: theirs, projectId: p.id, userId: 'bob', title: 'Bob decision', origin: 'hub' }, { ...base, id: elsewhere, projectId: other.id, userId: 'local', title: 'Other project', origin: 'local' }]);
+    store.close();
+    const r = text(await client.callTool({ name: 'forget', arguments: { ids: [`#${id8}`, '88888888', '99999999'] } }));
+    expect(r).toContain(`Forgot 1:\n#${id8} · discovery · Oops secret`);
+    expect(r).toMatch(/recorded by someone else[^\n]*\n#88888888 · decision · Bob decision/);
+    expect(r).toContain('Not found in this project: 99999999');
+    expect(r).toContain('this machine only');
+    expect(text(await client.callTool({ name: 'get_observations', arguments: { ids: [id8, '88888888', '99999999'] } }))).not.toContain('Oops secret');
+    const check = createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' }).store;
+    expect(check.getObservations([theirs, elsewhere])).toHaveLength(2);
+    check.close();
   });
   it('save_memory then search, timeline and get_observations round trip', async () => {
     const saved = text(await client.callTool({ name: 'save_memory', arguments: { text: 'Use pnpm, not npm, in this repo', title: 'Package manager' } }));
