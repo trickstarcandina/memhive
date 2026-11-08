@@ -54,6 +54,17 @@ describe('sync round trip', () => {
     expect(b.store.listUnsynced('sessions', b.project.id, 10)).toHaveLength(0);
     a.engine.close(); b.engine.close();
   });
+  it('a pulled session that changes on the hub (ended, cwd) is updated locally', async () => {
+    const a = client('alice', keys.alice, 2); const b = client('bob', keys.bob, 2);
+    const s = sess(a.project.id, { userId: 'alice', cwd: '/a' }); a.store.upsertSession(s);
+    await a.engine.push(a.project); await b.engine.pull(b.project, 3000);
+    expect(b.store.getSession(s.id)).toMatchObject({ endedAt: null, cwd: '/a' });
+    a.store.upsertSession({ ...s, cwd: '/a2', endedAt: '2026-02-02T00:00:00.000Z' });
+    await a.engine.push(a.project); await b.engine.pull(b.project, 3000);
+    expect(b.store.getSession(s.id)).toMatchObject({ endedAt: '2026-02-02T00:00:00.000Z', cwd: '/a2', origin: 'hub' });
+    expect(b.store.getSession(s.id)!.syncedAt).not.toBeNull();
+    a.engine.close(); b.engine.close();
+  });
   it('getObservationEmbeddings returns only ids with a vector', () => {
     const a = client('alice', keys.alice, 2);
     const s = sess(a.project.id); a.store.upsertSession(s);

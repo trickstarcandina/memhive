@@ -150,7 +150,12 @@ export class SyncEngine implements SyncHooks {
         store.resetProjectSync(project.id); since = 0; this.schedulePush(project.id); continue;
       }
       const now = new Date().toISOString();
-      for (const s of page.sessions) if (!store.getSession(s.id) && apply(s.id, () => store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }))) applied++;
+      for (const s of page.sessions) {
+        // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes); our own sessions are never overwritten.
+        const cur = store.getSession(s.id);
+        if (cur && (cur.origin !== 'hub' || (cur.endedAt === s.endedAt && cur.cwd === s.cwd))) continue;
+        if (apply(s.id, () => { store.upsertSession({ ...s, projectId: project.id, origin: 'hub', syncedAt: now }); if (cur) store.markSynced('sessions', [s.id], now); })) applied++;
+      }
       // Rows are stored as pushed (the pushing client already sanitized them); a row for an unknown session is skipped, not fatal.
       const fresh = page.observations.filter((o) => store.getObservations([o.id]).length === 0 && store.getSession(o.sessionId));
       for (const o of fresh) {
