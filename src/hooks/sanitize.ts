@@ -168,12 +168,12 @@ function sanitizeString(s: string, max: number, state: PrivateState): string {
 }
 
 /** Pass one `state` to every part of one host payload (input and output) so a private block can span them. */
-export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: PrivateState = { depth: 0 }, depth = 0): unknown {
+export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: PrivateState = { depth: 0 }, depth = 0, hide = false): unknown {
   // Fail closed: a too-deep value is replaced, never passed through raw.
   if (depth > MAX_DEPTH) return '<elided: max depth>';
-  if (typeof value === 'string') return sanitizeString(value, maxChars, state);
-  if (value === null || typeof value !== 'object') return state.depth > 0 && value !== undefined ? null : value;
-  if (Array.isArray(value)) return value.map((v) => sanitizeToolPayload(v, maxChars, state, depth + 1));
+  if (typeof value === 'string') { const s = sanitizeString(value, maxChars, state); return hide ? '<redacted>' : s; }   // array items under a secret key
+  if (value === null || typeof value !== 'object') return state.depth > 0 && value !== undefined ? null : hide && typeof value === 'number' ? '<redacted>' : value;
+  if (Array.isArray(value)) return value.map((v) => sanitizeToolPayload(v, maxChars, state, depth + 1, hide));
   const rec = value as Record<string, unknown>;
   if (rec.type === 'image' || rec.type === 'image_url') return { type: 'image', elided: true };
   const out: Record<string, unknown> = {};
@@ -181,8 +181,9 @@ export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: Pri
     const k = stripPrivate(rawKey, state);
     // Judge both forms: stripping a tag out of a key must never make it less sensitive.
     const secretKey = (x: string) => SECRET_KEY.test(x) && !COUNT_KEY.test(x);
-    const hidden = (secretKey(rawKey) || secretKey(k)) && (typeof v === 'string' || typeof v === 'number');
-    out[k] = hidden ? '<redacted>' : sanitizeToolPayload(v, maxChars, state, depth + 1);
+    // Under a secret-named key every string or number leaf is hidden, also inside arrays and objects (`{"password": ["x"]}`).
+    const hideV = hide || secretKey(rawKey) || secretKey(k);
+    out[k] = hideV && (typeof v === 'string' || typeof v === 'number') ? '<redacted>' : sanitizeToolPayload(v, maxChars, state, depth + 1, hideV);
   }
   return out;
 }

@@ -121,6 +121,10 @@ describe('redactSecrets', () => {
     redactSecrets('token='.repeat(175000));
     expect(Date.now() - t).toBeLessThan(200);
   });
+  it('redacts every leaf under a secret-named key with an array or object value', () => {
+    expect(sanitizeToolPayload({ password: ['hunter2xyz', 7], authorization: { v: 'abcd', n: [{ x: 'y' }], ok: true } })).toEqual({ password: [R, R], authorization: { v: R, n: [{ x: R }], ok: true } });
+    expect(sanitizeToolPayload({ items: ['plain'] })).toEqual({ items: ['plain'] });
+  });
   it('redacts secret-named keys in payloads but keeps counts', () => {
     expect(sanitizeToolPayload({ password: 'x', n: { apiKey: 5 } })).toEqual({ password: R, n: { apiKey: R } });
     expect(sanitizeToolPayload({ max_tokens: 2048, maxTokens: 2048 })).toEqual({ max_tokens: 2048, maxTokens: 2048 });
