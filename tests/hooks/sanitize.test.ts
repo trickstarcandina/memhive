@@ -210,3 +210,113 @@ describe('redactSecrets', () => {
     expect(out).toContain('<redacted');
   });
 });
+
+// [input, secret core that must disappear, text that must survive]
+const LEAK_FIXTURES: [string, string, string[]][] = [
+  ['postgres://admin:S3cr3tPw@db.internal:5432/prod', 'S3cr3tPw', ['postgres://admin:', '@db.internal:5432/prod']],
+  ['uri mongodb+srv://user:pw0rdXyz@cluster/db end', 'pw0rdXyz', ['mongodb+srv://user:', '@cluster/db end']],
+  ['redis://:redisPw99@host:6379', 'redisPw99', ['redis://:', '@host:6379']],
+  ['amqp://u:amqpPass1@h', 'amqpPass1', ['amqp://u:', '@h']],
+  ['git clone https://user:tok12345678@github.com/x/y.git', 'tok12345678', ['git clone https://user:', '@github.com/x/y.git']],
+  ['DB_PASS=hunter2hunter2', 'hunter2hunter2', ['DB_PASS=']],
+  ['MYSQL_PWD=abc12345', 'abc12345', ['MYSQL_PWD=']],
+  ['CREDENTIALS=credVal1234', 'credVal1234', ['CREDENTIALS=']],
+  ['AUTH=authVal1234', 'authVal1234', ['AUTH=']],
+  ['ACCESS_KEY=accessVal99', 'accessVal99', ['ACCESS_KEY=']],
+  ['AWS_SESSION_TOKEN=FwoGZXIvYXdzEJr', 'FwoGZXIvYXdzEJr', ['AWS_SESSION_TOKEN=']],
+  ['MNEMONIC="abandon ability able about above absent"', 'abandon ability', ['MNEMONIC=']],
+  ['DATABASE_URL=postgres://u:pwSecret1@h/db', 'pwSecret1', ['DATABASE_URL=']],
+  ['jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop ok', 'abcdefghijklmnop', ['jwt ', ' ok']],
+  ['-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF0pgpbody\n-----END PGP PRIVATE KEY BLOCK----- after', 'lQOYBF0pgpbody', [' after']],
+  ['-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXk', []],
+  ['-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHzBJBgkqhk\n-----END ENCRYPTED PRIVATE KEY-----', 'MIIFHzBJBgkqhk', []],
+  ['stripe sk_live_' + '4eC39HqLyjWDarjt', '4eC39HqLyjWDarjt', ['stripe ']],
+  ['sk_test_' + 'abcdefghijklmnop12', 'abcdefghijklmnop12', []],
+  ['rk_live_' + 'abcdefghijklmnop34', 'abcdefghijklmnop34', []],
+  ['key AIza' + 'SyA1234567890abcdefghijklmnopqrstuv', 'SyA1234567890abcdefghij', ['key ']],
+  ['glpat-' + 'abcdefghij1234567890', 'abcdefghij1234567890', []],
+  ['npm_' + 'abcdefghijklmnopqrstuvwxyz1234', 'abcdefghijklmnopqrstuvwxyz1234', []],
+  ['hf_' + 'abcdefghijklmnopqrstuvwxyz1234', 'abcdefghijklmnopqrstuvwxyz1234', []],
+  ['ghu_' + 'abcdefghijklmnopqrstuvwx', 'abcdefghijklmnopqrstuvwx', []],
+  ['ghr_' + 'abcdefghijklmnopqrstuvwx', 'abcdefghijklmnopqrstuvwx', []],
+  ['ASIA' + 'ABCDEFGHIJKLMNOP', 'ABCDEFGHIJKLMNOP', []],
+  ['hook https://hooks.slack.com/services/T0000/B0000/XXXXXXXXXXXXXXXX', 'XXXXXXXXXXXXXXXX', ['hook ']],
+  ['SG.' + 'abcdefghijklmnopqrst' + '.' + 'uvwxyzABCDEFGHIJKLMN', 'abcdefghijklmnopqrst', []],
+  ['SK' + '0123456789abcdef0123456789abcdef', '0123456789abcdef', []],
+  ['sk-proj-' + 'abcdefghijklmnopqrstuvwx', 'abcdefghijklmnopqrstuvwx', []],
+  ['Authorization: Basic dXNlcjpwYXNz', 'dXNlcjpwYXNz', ['Authorization: ']],
+  ['Cookie: session=abc123def456; other=1', 'abc123def456', ['Cookie: ']],
+  ['Set-Cookie: sid=sidValue1234; Path=/', 'sidValue1234', ['Set-Cookie: ']],
+  ['X-Api-Key: xapikey12345', 'xapikey12345', ['X-Api-Key: ']],
+  ['curl -u admin:curlPw99 https://api.example.com/x', 'curlPw99', ['curl -u ', ' https://api.example.com/x']],
+  ['curl -H "Authorization: Basic dXNlcjpwYXNz" https://x', 'dXNlcjpwYXNz', ['curl -H "Authorization: ', '" https://x']],
+  ['passphrase: correcthorse1', 'correcthorse1', ['passphrase: ']],
+  ['client_secret=clientSec123', 'clientSec123', ['client_secret=']],
+  ['session_id: sess1234abcd', 'sess1234abcd', ['session_id: ']],
+  ['dsn = "https://k@sentry.io/1"', 'k@sentry', ['dsn = "']],
+  ['connection_string: Server=x;Pwd=y1234', 'Server=x', ['connection_string: ']],
+  ['signing_key=signKey1234', 'signKey1234', ['signing_key=']],
+  ['encryption-key: encKey12345', 'encKey12345', ['encryption-key: ']],
+  ['authToken: authTok123456', 'authTok123456', ['authToken: ']],
+];
+
+describe('redactSecrets coverage (H1)', () => {
+  it.each(LEAK_FIXTURES)('redacts %s', (input, core, keep) => {
+    const out = redactSecrets(input);
+    expect(out).not.toContain(core);
+    expect(out).toContain('<redacted>');
+    for (const k of keep) expect(out).toContain(k);
+    expect(redactSecrets(out)).toBe(out);
+  });
+  it('keeps scheme, user and host of a connection string', () => {
+    expect(redactSecrets('postgres://admin:S3cr3tPw@db.internal:5432/prod')).toBe('postgres://admin:<redacted>@db.internal:5432/prod');
+  });
+  it('redacts a .env file read through a tool payload', () => {
+    const out = JSON.stringify(sanitizeToolPayload({ content: 'DB_PASS=hunter2hunter2\nDATABASE_URL=postgres://u:pw@h/db' }));
+    expect(out).not.toMatch(/hunter2|:pw@/);
+  });
+  it('leaves prose and non-secret look-alikes alone', () => {
+    for (const c of [
+      'the password field is required', 'password hunter2', 'Basic authentication is supported', 'author: Jane Doe',
+      'authority: high', 'authentication: required', 'passed: 3, passing tests', 'https://example.com:8080/path',
+      'ssh://git@github.com:22/x', 'docker run -u 1000:1000 img', 'cookie: string;', 'sessionId: string', 'API_URL=https://api.example.com',
+      'eyJ is the start of a JWT', 'Ask the SK team', 'the AIza prefix',
+    ]) expect(redactSecrets(c)).toBe(c);
+  });
+  it('is idempotent on every fixture', () => {
+    for (const [i] of LEAK_FIXTURES) expect(redactSecrets(redactSecrets(i))).toBe(redactSecrets(i));
+  });
+  it('stays linear on 256 KB inputs aimed at the new rules', () => {
+    for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', ' -u a', 'a.', 'pass', 'auth: ']) {
+      const s = unit.repeat(Math.ceil(256 * 1024 / unit.length));
+      const t = performance.now();
+      redactSecrets(s);
+      expect(performance.now() - t, unit).toBeLessThan(200);
+    }
+  });
+  it('runs under 300 ms on 2 MB adversarial inputs', () => {
+    const N = 2 * 1024 * 1024;
+    const fill = (u: string) => u.repeat(Math.ceil(N / u.length)).slice(0, N);
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    const words = ['alpha', 'beta', 'token', 'password', 'gamma', 'secret', 'map', 'key', 'url', 'auth'];
+    let random = '';
+    while (random.length < N) random += words[Math.floor(rnd() * words.length)] + ' ';
+    const inputs: [string, string][] = [
+      ['random words', random],
+      ['secret: Map<', fill('secret: Map<')],
+      ['password: <<<', 'password: ' + '<'.repeat(N)],
+      ['token=', fill('token=')],
+      ['eyJ', fill('eyJ')],
+      ['://a:b@', fill('://a:b@')],
+      ['Basic ', fill('Basic ')],
+      ['NFD Vietnamese', fill('Tiếng Việt có dấu mật khẩu '.normalize('NFD'))],
+      ['no whitespace', 'a'.repeat(N)],
+    ];
+    for (const [name, s] of inputs) {
+      const t = performance.now();
+      redactSecrets(s);
+      expect(performance.now() - t, name).toBeLessThan(300);
+    }
+  });
+});

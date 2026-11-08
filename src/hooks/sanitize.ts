@@ -33,20 +33,47 @@ export function sanitizePrompt(text: string): string {
   return truncate(redactSecrets(stripPrivate(text)).trim(), 16000);
 }
 
+// Covered: PEM private keys (any label, PGP `KEY BLOCK` too), vendor tokens (Anthropic/OpenAI `sk-`, Stripe,
+// Google `AIza`, GitHub, GitLab, npm, HuggingFace, AWS `AKIA`/`ASIA`, Slack tokens and webhooks, SendGrid, Twilio,
+// memhive `mh_`), JWTs, Bearer and `Authorization: Basic` credentials, URL userinfo passwords, Cookie headers,
+// `curl -u user:pw`, and `name = value` / `name: value` / `.env` assignments whose name holds a secret keyword.
+// Every rule starts at a literal prefix, `\b` or a lookbehind, and no quantifier nests: scanning stays linear (ReDoS).
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
   /\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}/g,
-  /\b(?:ghp|gho|ghs)_[A-Za-z0-9]{20,}/g,
+  /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g,
+  /\bAIza[\w-]{35}/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bglpat-[\w-]{20,}/g,
+  /\bnpm_[A-Za-z0-9]{30,}/g,
+  /\bhf_[A-Za-z0-9]{30,}/g,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /\bSK[0-9a-f]{32}\b/g,
   /\bmh_[A-Za-z0-9_-]{20,}/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
+  // `Basic` alone is prose; only the header value form is a credential.
+  /(?<=\bAuthorization["']?[ \t]*[:=][ \t]*["']?)Basic[ \t]+[A-Za-z0-9+/]{4,}={0,2}/gi,
+  // The lookbehind lets a run of segment characters start at most one match, so a failed scan is never repeated.
+  /(?<![\w-])eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g,
+  /(?<![\w.-])SG\.[\w-]{20,}\.[\w-]{20,}/g,
+];
+// Group 1 is kept, so the reader still sees what was there: scheme, user and host stay, only the password goes.
+const PREFIXED_PATTERNS: RegExp[] = [
+  /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]*:)[^\s@/]+(?=@)/gi,
+  /(https:\/\/hooks\.slack\.com\/services\/)[\w/-]+/g,
+  // Needs a `name=value` pair, so `cookie: string` (a TS type) is left alone.
+  /\b((?:set-)?cookie[ \t]*:[ \t]*)[^\s=;,"']+=[^\r\n"']*/gi,
+  // `uid:gid` (`docker run -u 1000:1000`) is not a credential.
+  /(\s(?:-u|--user)(?:[ \t]+|=)["']?)(?![0-9]+:[0-9]+(?![^\s"']))[^\s"':]+:[^\s"']+/g,
 ];
 // Keyword-anchored, no nested quantifiers: scanning stays linear (ReDoS). Quoted values are
 // escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token,
 // and a bounded `<...>` group (`Map<string, number>`) stays inside the token so it is judged and redacted whole.
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
+// `pass` needs a word end so `passed`/`passing` are not keys; `auth` skips `author*`/`authority`/`authent*`
+// but keeps `authorization`. Ambiguous names like `auth: foo` are redacted: a false positive is cheaper than a leak.
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
 // After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env/log secret
@@ -124,6 +151,7 @@ function looksLikeType(bare: string, follow: string, before: string): boolean {
 export function redactSecrets(text: string): string {
   let out = text;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '<redacted>');
+  for (const re of PREFIXED_PATTERNS) out = out.replace(re, '$1<redacted>');
   return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
     const q = dq ? '"' : sq ? "'" : '';
     if (q) return `${name}${pre}${q}<redacted>${q}`;
