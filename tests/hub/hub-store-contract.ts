@@ -144,6 +144,8 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>, op
       expect(pull.tombstones).toEqual([{ id: o.id, tbl: 'observation', deleted_at: expect.any(String) }, { id: m.id, tbl: 'summary', deleted_at: expect.any(String) }]);
       const again = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', observations: [o] });
       expect((again.body as any).rejected).toEqual([{ id: o.id, reason: 'forgotten' }]);
+      const upper = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', observations: [{ ...o, id: o.id.toUpperCase() }] });
+      expect((upper.body as any).rejected).toEqual([{ id: o.id, reason: 'forgotten' }]);   // ids are lowercased on the wire
       // Scoped by project: the same id in another project is not blocked by k/t's tombstone.
       const b = hsess('x');
       const other = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/other', sessions: [b], observations: [{ ...o, sessionId: b.id }] });

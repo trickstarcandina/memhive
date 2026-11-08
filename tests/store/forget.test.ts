@@ -23,6 +23,7 @@ describe('forget in the local store', () => {
     expect(s.searchObservationsVector([1, 0], f(pid))).toEqual([]);
     expect(s.listPendingTombstones(pid, 10)).toEqual([{ id: o.id, tbl: 'observation', deletedAt: expect.any(String) }]);
     expect(s.forgottenIds(pid, [o.id, 'not-there'])).toEqual(new Set([o.id]));
+    expect(s.forgottenIds(pid, [o.id.toUpperCase()])).toEqual(new Set([o.id.toUpperCase()]));
     s.markTombstonesSynced(pid, [o.id], new Date().toISOString());
     expect(s.listPendingTombstones(pid, 10)).toEqual([]);
     expect(s.forgottenIds(pid, [o.id]).size).toBe(1);   // still remembered after it was pushed

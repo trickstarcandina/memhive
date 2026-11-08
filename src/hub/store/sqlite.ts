@@ -101,7 +101,7 @@ export class SqliteHubStore implements HubStore {
     return { applied, rejected };
   }
   async tombstoned(projectId: string, ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND id IN (${inList(ids)})`).all(projectId, ...ids) as Row[]).map((r) => r.id) : []); }
-  async getTombstones(ids: string[]): Promise<Tombstone[]> { return ids.length ? (this.db.prepare(`SELECT id, tbl, deleted_at FROM tombstones WHERE id IN (${inList(ids)})`).all(...ids) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at })) : []; }
+  async getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]> { return ids.length ? (this.db.prepare(`SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = ? AND id IN (${inList(ids)})`).all(projectId, ...ids) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at })) : []; }
   async maxSeq(projectId: string): Promise<number> { return Number((this.db.prepare('SELECT COALESCE(MAX(seq), 0) m FROM sync_log WHERE project_id = ?').get(projectId) as Row).m); }
   async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (this.db.prepare(`SELECT * FROM sessions WHERE id IN (${inList(ids)})`).all(...ids) as Row[]).map(rowToSession) : []; }
   async getObservations(ids: string[]): Promise<HubObservation[]> {

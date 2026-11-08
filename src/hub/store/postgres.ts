@@ -171,7 +171,7 @@ export class PostgresHubStore implements HubStore {
     });
   }
   async tombstoned(projectId: string, ids: string[]): Promise<Set<string>> { return new Set(ids.length ? (await this.q('SELECT id FROM tombstones WHERE project_id = $1 AND id = ANY($2::uuid[])', [projectId, ids])).map((r) => r.id) : []); }
-  async getTombstones(ids: string[]): Promise<Tombstone[]> { return ids.length ? (await this.q('SELECT id, tbl, deleted_at FROM tombstones WHERE id = ANY($1::uuid[])', [ids])).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: iso(r.deleted_at) })) : []; }
+  async getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]> { return ids.length ? (await this.q('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = $1 AND id = ANY($2::uuid[])', [projectId, ids])).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: iso(r.deleted_at) })) : []; }
   async maxSeq(projectId: string): Promise<number> { const [r] = await this.q('SELECT COALESCE(MAX(seq), 0) m FROM sync_log WHERE project_id = $1', [projectId]); return Number(r.m); }
   async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (await this.q('SELECT * FROM sessions WHERE id = ANY($1::uuid[])', [ids])).map(rowToSession) : []; }
   async getObservations(ids: string[]): Promise<HubObservation[]> {

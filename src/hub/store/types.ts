@@ -41,7 +41,7 @@ export interface HubStore {
    */
   applyTombstones(projectId: string, userName: string, rows: Tombstone[]): Promise<{ applied: number; rejected: Array<{ id: string; reason: string }> }>;
   tombstoned(projectId: string, ids: string[]): Promise<Set<string>>;   // ids the hub deleted in this project: never accepted again
-  getTombstones(ids: string[]): Promise<Tombstone[]>;
+  getTombstones(projectId: string, ids: string[]): Promise<Tombstone[]>;
   getSessions(ids: string[]): Promise<Session[]>;
   getObservations(ids: string[]): Promise<HubObservation[]>;
   getSummaries(ids: string[]): Promise<Summary[]>;

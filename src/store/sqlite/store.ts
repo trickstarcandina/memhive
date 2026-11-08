@@ -251,24 +251,25 @@ export class SqliteStore implements Store {
           if (tbl === 'session') {
             // Children are remembered, not pushed: the session tombstone makes the hub (and every puller) drop them too.
             for (const [t, table] of [['observation', 'observations'], ['summary', 'summaries']] as const) {
-              for (const c of this.db.prepare(`SELECT id FROM ${table} WHERE session_id = ?`).all(id) as Row[]) { drop(t, c.id); tomb.run(c.id, t, r.project_id, at, at); }
+              for (const c of this.db.prepare(`SELECT id FROM ${table} WHERE session_id = ?`).all(id) as Row[]) { drop(t, c.id); tomb.run(String(c.id).toLowerCase(), t, r.project_id, at, at); }
             }
             this.db.prepare('DELETE FROM prompts WHERE session_id = ?').run(id);
           }
           drop(tbl, id); n++;
         }
-        tomb.run(id, tbl, r?.project_id ?? opts.projectId, at, opts.syncedAt ?? null);
+        tomb.run(id.toLowerCase(), tbl, r?.project_id ?? opts.projectId, at, opts.syncedAt ?? null);   // lowercased, like forgottenIds looks them up
       }
       return n;
     })();
   }
   forgottenIds(projectId: string, ids: string[]): Set<string> {
-    const out = new Set<string>();
+    // Case-insensitive (pulled ids may be upper case); returns the ids as given.
+    const dead = new Set<string>();
     for (let i = 0; i < ids.length; i += 500) {   // stays far below SQLite's bound-parameter limit
-      const part = ids.slice(i, i + 500);
-      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND id IN (${part.map(() => '?').join(',')})`).all(projectId, ...part) as Row[]) out.add(r.id);
+      const part = ids.slice(i, i + 500).map((x) => x.toLowerCase());
+      for (const r of this.db.prepare(`SELECT id FROM tombstones WHERE project_id = ? AND id IN (${part.map(() => '?').join(',')})`).all(projectId, ...part) as Row[]) dead.add(r.id);
     }
-    return out;
+    return new Set(ids.filter((x) => dead.has(x.toLowerCase())));
   }
   listPendingTombstones(projectId: string, limit: number): Tombstone[] {
     return (this.db.prepare('SELECT id, tbl, deleted_at FROM tombstones WHERE project_id = ? AND synced_at IS NULL ORDER BY rowid LIMIT ?').all(projectId, limit) as Row[]).map((r) => ({ id: r.id, tbl: r.tbl, deletedAt: r.deleted_at }));

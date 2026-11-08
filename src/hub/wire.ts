@@ -15,7 +15,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 export const isIso = (v: unknown): v is string => typeof v === 'string' && ISO_RE.test(v) && !Number.isNaN(Date.parse(v));
 
-const uuid = z.string().regex(UUID_RE);
+// Lowercased: ids are compared as strings (tombstones, ownership), so `ABCD…` must not slip past a tombstone for `abcd…`.
+const uuid = z.string().regex(UUID_RE).transform((s) => s.toLowerCase());
 const iso = z.string().refine(isIso);
 const short = z.string().max(MAX_SHORT);
 const long = z.string().max(MAX_LONG);

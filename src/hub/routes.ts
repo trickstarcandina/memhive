@@ -43,7 +43,7 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const project = await store.getOrCreateProject(projectKey, projectName || (projectKey.split('/').pop() ?? projectKey));
     const rejected: PushResult['rejected'] = [];
     // A row the hub deleted (forgotten by its owner) is never taken back, e.g. from the owner's other machine.
-    const ids = (k: string) => rows(k).map((r) => (r as { id?: unknown } | null)?.id).filter((v): v is string => PushTombstoneSchema.shape.id.safeParse(v).success);   // uuids only: Postgres casts them
+    const ids = (k: string) => rows(k).flatMap((r) => { const v = PushTombstoneSchema.shape.id.safeParse((r as { id?: unknown } | null)?.id); return v.success ? [v.data] : []; });   // uuids only (Postgres casts them), lowercased like the parsed rows
     const dead = await store.tombstoned(project.id, [...ids('sessions'), ...ids('observations'), ...ids('summaries')]);
     const forgotten = (id: string) => { if (!dead.has(id)) return false; rejected.push({ id, reason: 'forgotten' }); return true; };
     // Order matters: observations and summaries reference sessions (foreign keys).
@@ -110,18 +110,19 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     for (let i = 0; i < Math.min(entries.length, limit) && !full; i += PULL_CHUNK) {
       const chunk = entries.slice(i, Math.min(i + PULL_CHUNK, limit));
       const ids = (t: string) => chunk.filter((e) => e.table === t).map((e) => e.rowId);
-      const rows = new Map<string, object>();
-      for (const x of await store.getSessions(ids('sessions'))) rows.set('sessions:' + x.id, x);
-      for (const x of await store.getObservations(ids('observations'))) { if (!vectors) delete (x as { embedding?: unknown }).embedding; rows.set('observations:' + x.id, x); }
-      for (const x of await store.getSummaries(ids('summaries'))) rows.set('summaries:' + x.id, x);
-      for (const x of await store.getTombstones(ids('tombstone'))) rows.set('tombstone:' + x.id, { id: x.id, tbl: x.tbl, deleted_at: x.deletedAt });
+      // A key can hold several rows: tombstones are keyed by (tbl, id) and the log names only the id, so one entry relays
+      // each table's tombstone for that id (a repeat is harmless, applying a tombstone is idempotent).
+      const rows = new Map<string, object[]>();
+      const put = (k: string, x: object) => rows.set(k, [...(rows.get(k) ?? []), x]);
+      for (const x of await store.getSessions(ids('sessions'))) put('sessions:' + x.id, x);
+      for (const x of await store.getObservations(ids('observations'))) { if (!vectors) delete (x as { embedding?: unknown }).embedding; put('observations:' + x.id, x); }
+      for (const x of await store.getSummaries(ids('summaries'))) put('summaries:' + x.id, x);
+      for (const x of await store.getTombstones(project.id, ids('tombstone'))) put('tombstone:' + x.id, { id: x.id, tbl: x.tbl, deleted_at: x.deletedAt });
       for (const e of chunk) {
-        const row = rows.get(`${e.table}:${e.rowId}`);
-        if (row) {
-          const n = Buffer.byteLength(JSON.stringify(row)) + 1;
-          if (taken > 0 && used + n > cfg.bodyLimit) { full = true; break; }
-          (result[e.table === 'tombstone' ? 'tombstones' : e.table] as object[]).push(row); used += n;
-        }
+        const list = rows.get(`${e.table}:${e.rowId}`) ?? [];
+        const n = list.reduce((a, row) => a + Buffer.byteLength(JSON.stringify(row)) + 1, 0);
+        if (list.length && taken > 0 && used + n > cfg.bodyLimit) { full = true; break; }
+        (result[e.table === 'tombstone' ? 'tombstones' : e.table] as object[]).push(...list); used += n;
         taken++; result.next_seq = e.seq;
       }
     }
