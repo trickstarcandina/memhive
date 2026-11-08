@@ -24,17 +24,20 @@ function seeded(extra: Record<string, string> = {}) {
 }
 
 describe('session start context', () => {
-  it("other users' rows excluded from context when includeOtherUsers=false", async () => {
+  it("other users' rows excluded from context with scope mine (and the deprecated includeOtherUsers=0)", async () => {
     const on = seeded();
     const r1 = (await handleRoute(on.ctx, 'POST', new URL('http://x/v1/sessions/start'), start(on.home))).body as { context: string };
     expect(r1.context).toContain('Mallory note'); expect(r1.context).toContain('Alice note');
     const off = seeded({ MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' });
-    expect(off.ctx.settings.context.includeOtherUsers).toBe(false);
+    expect(off.ctx.settings.context.scope).toBe('mine');
+    const mineScope = seeded({ MEMHIVE_CONTEXT_SCOPE: 'mine' });
+    const r3 = (await handleRoute(mineScope.ctx, 'POST', new URL('http://x/v1/sessions/start'), start(mineScope.home))).body as { context: string };
+    expect(r3.context).not.toContain('Mallory note'); expect(r3.context).toContain('Alice note'); mineScope.ctx.store.close();
     const r2 = (await handleRoute(off.ctx, 'POST', new URL('http://x/v1/sessions/start'), start(off.home))).body as { context: string };
     expect(r2.context).not.toContain('Mallory note'); expect(r2.context).toContain('Alice note');
     on.ctx.store.close(); off.ctx.store.close();
   });
-  it('includeOtherUsers=false keeps own rows captured under another name (before login, or renamed)', async () => {
+  it('scope mine keeps own rows captured under another name (before login, or renamed)', async () => {
     const off = seeded({ MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' });
     const old = sess(off.project.id, { userId: 'local' }); off.ctx.store.upsertSession(old);
     off.ctx.store.insertObservations([obs({ projectId: off.project.id, sessionId: old.id, userId: 'local', title: 'Before login note' })]);

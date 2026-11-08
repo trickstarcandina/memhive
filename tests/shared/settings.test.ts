@@ -73,14 +73,18 @@ describe('settings', () => {
     const s = loadSettings(home, { MEMHIVE_EMBED_DIMS: 'abc' });
     expect(s.embed).toEqual({ baseUrl: 'http://e/v1', apiKey: undefined, model: 'bge-m3', dims: 768 });
   });
-  it('context.includeOtherUsers: default true, file key, env 0 disables', () => {
+  it('context.scope: default team, file key, env; includeOtherUsers stays a deprecated alias', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    expect(loadSettings(home, {}).context.includeOtherUsers).toBe(true);
+    expect(loadSettings(home, {}).context.scope).toBe('team');
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ context: { scope: 'mine' } }));
+    expect(loadSettings(home, {}).context.scope).toBe('mine');
+    expect(loadSettings(home, { MEMHIVE_CONTEXT_SCOPE: 'team' }).context.scope).toBe('team');
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ context: { includeOtherUsers: false } }));
-    expect(loadSettings(home, {}).context.includeOtherUsers).toBe(false);
-    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '1' }).context.includeOtherUsers).toBe(true);
-    rmSync(path.join(home, 'settings.json'));
-    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' }).context.includeOtherUsers).toBe(false);
+    expect(loadSettings(home, {}).context.scope).toBe('mine');
+    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '1' }).context.scope).toBe('team');
+    writeFileSync(path.join(home, 'settings.json'), '{}');
+    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' }).context.scope).toBe('mine');
+    expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0', MEMHIVE_CONTEXT_SCOPE: 'team' }).context.scope).toBe('team');
   });
   it('excludeProjects: file list, env comma list wins, junk entries dropped', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));

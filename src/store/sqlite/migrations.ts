@@ -77,4 +77,8 @@ export const SQLITE_MIGRATIONS: string[] = [
   ALTER TABLE observations ADD COLUMN seen_count INTEGER NOT NULL DEFAULT 1;
   ALTER TABLE observations ADD COLUMN last_seen_at TEXT;
   `,
+  // 9: the git branch a session ran on (local only), so context can favour rows from the current branch.
+  `
+  ALTER TABLE sessions ADD COLUMN branch TEXT;
+  `,
 ];

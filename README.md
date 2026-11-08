@@ -98,7 +98,7 @@ flowchart LR
 - **Hooks.** Claude Code and Codex call `memhive hook <host> <event>` on session start, each prompt, each tool use, stop and session end. Hook commands always exit 0, so they never block the agent.
 - **Daemon.** The first hook starts a local daemon (`memhive daemon status|start|stop|run`). It owns the SQLite database (`~/.memhive/memhive.db`) and a per-session event buffer.
 - **Observer.** Buffered events are flushed to the LLM after 8 events, after 5 s of idle, or on stop. The LLM turns them into typed observations. A failed LLM call drops its batch; nothing is retried or replayed.
-- **Context.** At session start the daemon builds a context block from recent and relevant observations, capped by `MEMHIVE_CONTEXT_TOKENS`, and injects it into the agent.
+- **Context.** At session start the daemon builds a context block, capped by `MEMHIVE_CONTEXT_TOKENS`, and injects it into the agent. Rows are ranked by age (weight halves about every 10 days) and type (decisions and bugfixes first), with boosts for your own rows (x1.5), rows touching files under the working directory (x1.3), rows from the same git branch (x1.2), pinned rows (x3) and rows recorded again by later sessions (up to x1.5). The top 5 also show up to 3 facts each.
 - **MCP.** `memhive mcp` exposes the memory to the agent in three steps: `search` finds matching observations, `timeline` shows what happened around one, and `get_observations` fetches full records. `save_memory` stores an explicit note.
 
 Observation types: `decision`, `bugfix`, `feature`, `refactor`, `discovery`, `config`, `problem`, `workaround`.
@@ -132,7 +132,7 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
   "llm": { "provider": "openai-compat", "model": "qwen2.5:7b", "baseUrl": "http://localhost:11434/v1", "apiKey": "optional" },
   "embed": { "baseUrl": "http://localhost:11434/v1", "model": "bge-m3", "dims": 1024, "apiKey": "optional" },
   "contextTokens": 2000,
-  "context": { "includeOtherUsers": true },
+  "context": { "scope": "team" },
   "excludeProjects": ["github.com/acme/secret-*", "/home/me/clients/**"]
 }
 ```
@@ -152,8 +152,8 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
 | `MEMHIVE_EMBED_API_KEY` | none | Key for the embeddings endpoint, if needed (`embed.apiKey`). |
 | `MEMHIVE_EMBED_MODEL` | none | Embedding model name (`embed.model`). |
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size (`embed.dims`). Setting it enables vector search; unset means FTS-only search. |
-| `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block, about 4 characters per token (`contextTokens`). |
-| `MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS` | `1` | Set to `0` to keep teammates' pulled rows out of the session-start context; MCP search still finds them (`context.includeOtherUsers`). |
+| `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block (`contextTokens`). A token counts as 4 characters, or 3 for text that is more than 20 % non-ASCII (CJK, Vietnamese). |
+| `MEMHIVE_CONTEXT_SCOPE` | `team` | `mine` keeps teammates' pulled rows out of the session-start context; MCP search still finds them (`context.scope`). The older `context.includeOtherUsers: false` / `MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS=0` still work as a deprecated alias for `mine`. |
 | `MEMHIVE_EXCLUDE_PROJECTS` | none | Comma-separated project keys or globs that are never recorded (`excludeProjects`). See [Opting out](#opting-out). |
 | `MEMHIVE_DISABLED` | unset | Set to `1` to turn memhive off: hooks exit at once without contacting the daemon, and MCP tools answer "memhive disabled". |
 | `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |

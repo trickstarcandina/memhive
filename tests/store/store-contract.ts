@@ -49,6 +49,13 @@ export function storeContract(name: string, open: () => Store): void {
       expect(s.getSession(a.id)).toMatchObject({ projectId: p.id, userId: 'alice', cwd: a.cwd, endedAt: null });
     });
 
+    it('sessions keep their branch; context candidates carry it', () => {
+      const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id, { branch: 'feat/x' }); const b = sess(p.id); s.upsertSession(a); s.upsertSession(b);
+      s.insertObservations([obs({ projectId: p.id, sessionId: a.id, title: 'on branch' }), obs({ projectId: p.id, sessionId: b.id, title: 'no branch' })]);
+      expect(s.getSession(a.id)!.branch).toBe('feat/x'); expect(s.getSession(b.id)!.branch).toBeNull();
+      expect(Object.fromEntries(s.listContextObservations(p.id, 10).map((o) => [o.title, o.branch]))).toEqual({ 'on branch': 'feat/x', 'no branch': null });
+    });
+
     it('prompts: latest', () => {
       const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id); s.upsertSession(a);
       s.insertPrompt({ id: newId(), sessionId: a.id, text: 'one', createdAt: '2026-01-01T00:00:00Z' });

@@ -4,7 +4,8 @@ import { safeJsonParse } from './json.js';
 
 export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: string; baseUrl?: string; apiKey?: string }
 export interface EmbedSettings { baseUrl: string; apiKey?: string; model: string; dims: number }
-export interface ContextSettings { includeOtherUsers: boolean }   // false: only the local user's rows go into the session-start context
+/** 'mine': only the local user's rows go into the session-start context; 'team' (default): teammates' pulled rows too. */
+export interface ContextSettings { scope: 'team' | 'mine' }
 export interface Settings {
   llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number; context: ContextSettings;
   /** Project keys or globs (`*` one segment, `**` any) never recorded; also matched against the repo's root path. */
@@ -17,7 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
   llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
   embed: null,
   contextTokens: 2000,
-  context: { includeOtherUsers: true },
+  context: { scope: 'team' },
   excludeProjects: [],
 };
 
@@ -53,12 +54,16 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const embed: EmbedSettings | null = dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model ? null
     : { baseUrl, apiKey: env.MEMHIVE_EMBED_API_KEY ?? fe.apiKey, model, dims };
   const contextTokens = Number(env.MEMHIVE_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
-  const fc: Partial<ContextSettings> = isObj(file.context) ? (file.context as Partial<ContextSettings>) : {};
+  const fc = isObj(file.context) ? (file.context as Record<string, unknown>) : {};
+  const isScope = (v: unknown): v is ContextSettings['scope'] => v === 'team' || v === 'mine';
+  // Deprecated alias from 0.2 pre-releases: includeOtherUsers (MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS); false means scope 'mine'.
   const envOthers = env.MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS;
-  const includeOtherUsers = envOthers !== undefined && envOthers !== '' ? !['0', 'false', 'no', 'off'].includes(envOthers.toLowerCase()) : fc.includeOtherUsers !== false;
+  const scope: ContextSettings['scope'] = isScope(env.MEMHIVE_CONTEXT_SCOPE) ? env.MEMHIVE_CONTEXT_SCOPE
+    : envOthers !== undefined && envOthers !== '' ? (['0', 'false', 'no', 'off'].includes(envOthers.toLowerCase()) ? 'mine' : 'team')
+    : isScope(fc.scope) ? fc.scope : fc.includeOtherUsers === false ? 'mine' : 'team';
   const list = (v: unknown): string[] | undefined => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim()) : undefined;
   const excludeProjects = env.MEMHIVE_EXCLUDE_PROJECTS !== undefined ? env.MEMHIVE_EXCLUDE_PROJECTS.split(',').map((x) => x.trim()).filter(Boolean) : list(file.excludeProjects) ?? [];
-  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { includeOtherUsers }, excludeProjects };
+  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { scope }, excludeProjects };
 }
 
 export function saveSettings(home: string, settings: Settings): void {

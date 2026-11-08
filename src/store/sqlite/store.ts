@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type { Observation, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable } from '../types.js';
+import type { ContextObservation, Observation, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable } from '../types.js';
 import { SQLITE_MIGRATIONS } from './migrations.js';
 import { ftsTokens, toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
@@ -14,7 +14,7 @@ const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 const rowToProject = (r: Row): Project => ({ id: r.id, key: r.key, name: r.name, hubUrl: r.hub_url ?? null, createdAt: r.created_at });
-const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: r.synced_at ?? null, origin: r.origin });
+const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: r.synced_at ?? null, origin: r.origin, branch: r.branch ?? null });
 const rowToObservation = (r: Row): Observation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: r.origin, syncedAt: r.synced_at ?? null, seenCount: Number(r.seen_count ?? 1), lastSeenAt: r.last_seen_at ?? null });
 const rowToSyncState = (r: Row): SyncState => ({ projectId: r.project_id, pullCursor: Number(r.pull_cursor), hubEpoch: r.hub_epoch ?? null, backoffUntil: r.backoff_until ?? null, backoffMs: r.backoff_ms ?? null, strikes: Number(r.strikes ?? 0), lastError: r.last_error ?? null, lastErrorAt: r.last_error_at ?? null, lastPushAt: r.last_push_at ?? null, lastPullAt: r.last_pull_at ?? null, quarantined: Number(r.quarantined ?? 0) });
 const SYNC_COLS: Record<keyof SyncStatePatch, string> = { backoffUntil: 'backoff_until', backoffMs: 'backoff_ms', strikes: 'strikes', lastError: 'last_error', lastErrorAt: 'last_error_at', lastPushAt: 'last_push_at', lastPullAt: 'last_pull_at' };
@@ -111,10 +111,10 @@ export class SqliteStore implements Store {
   setProjectHub(id: string, hubUrl: string | null): void { this.db.prepare('UPDATE projects SET hub_url = ? WHERE id = ?').run(hubUrl, id); }
 
   upsertSession(s: Session): void {
-    this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at, synced_at, origin)
-      VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt, @syncedAt, @origin)
+    this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at, synced_at, origin, branch)
+      VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt, @syncedAt, @origin, @branch)
       ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL
-      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id`).run({ ...s, origin: s.origin ?? 'local' });
+      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id`).run({ ...s, origin: s.origin ?? 'local', branch: s.branch ?? null });
   }
   getSession(id: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined; return r ? rowToSession(r) : null; }
   getSessionByHost(host: string, hostSessionId: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE host = ? AND host_session_id = ?').get(host, hostSessionId) as Row | undefined; return r ? rowToSession(r) : null; }
@@ -190,6 +190,10 @@ export class SqliteStore implements Store {
   }
   listRecentObservations(projectId: string, limit: number): Observation[] {
     return (this.db.prepare('SELECT * FROM observations WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToObservation);
+  }
+  listContextObservations(projectId: string, limit: number): ContextObservation[] {
+    return (this.db.prepare('SELECT o.*, s.branch AS branch FROM observations o LEFT JOIN sessions s ON s.id = o.session_id WHERE o.project_id = ? ORDER BY o.created_at DESC, o.rowid DESC LIMIT ?').all(projectId, limit) as Row[])
+      .map((r) => ({ ...rowToObservation(r), branch: r.branch ?? null }));
   }
   listSessionObservations(sessionId: string, limit: number): Observation[] {
     return (this.db.prepare('SELECT * FROM observations WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(sessionId, limit) as Row[]).map(rowToObservation);

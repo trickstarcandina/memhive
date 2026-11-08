@@ -52,10 +52,11 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const { project } = resolved;
     if (ctx.sync && project.hubUrl) { await ctx.sync.startPull(project); ctx.sync.schedulePush(project.id); }   // push also retries rows left over from an earlier daemon
     // Rows pulled from teammates can be left out of auto-injected context (they stay searchable through MCP).
-    const me = ctx.userFor(project); const mine = <T extends { userId: string; origin?: string }>(rows: T[]) => ctx.settings.context?.includeOtherUsers === false ? rows.filter((r) => r.origin === 'local' || r.userId === me) : rows;   // own rows survive a login or rename
+    const me = ctx.userFor(project); const mine = <T extends { userId: string; origin?: string }>(rows: T[]) => ctx.settings.context?.scope === 'mine' ? rows.filter((r) => r.origin === 'local' || r.userId === me) : rows;   // own rows survive a login or rename
     const context = buildContext({
       projectName: project.name, observationCount: store.countObservations(project.id), sessionCount: store.countSessions(project.id), lastActivity: store.lastActivity(project.id),
-      summaries: mine(store.listRecentSummaries(project.id, 50)).slice(0, 3), observations: mine(store.listRecentObservations(project.id, 200)), budgetTokens: ctx.settings.contextTokens,
+      summaries: mine(store.listRecentSummaries(project.id, 50)).slice(0, 3), observations: mine(store.listContextObservations(project.id, 200)), budgetTokens: ctx.settings.contextTokens,
+      me, cwd: ev.cwd, branch: resolved.branch,
     });
     return ok({ context });
   }
