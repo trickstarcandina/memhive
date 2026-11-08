@@ -155,8 +155,10 @@ export class SqliteStore implements Store {
   transaction<T>(fn: () => T): T { return this.db.transaction(fn)(); }
   resolveIdPrefix(prefix: string): string | null {
     if (prefix.length < 4) return null;
-    // shortcut: suffix match scans the table, add an index on a reversed id if stores grow past ~1M rows
-    const rows = this.db.prepare('SELECT id FROM observations WHERE substr(id, 1, length(?)) = ? OR substr(id, -length(?)) = ? LIMIT 2').all(prefix, prefix, prefix, prefix) as Row[];
+    const p = prefix.toLowerCase();
+    // Head prefix: a range on the primary key. Tail: the indexed short_id for the 8-char form, a scan for other lengths.
+    const tail = p.length === 8 ? 'short_id = @p' : 'substr(id, -length(@p)) = @p';
+    const rows = this.db.prepare(`SELECT id FROM observations WHERE id >= @p AND id < @p || char(1114111) UNION SELECT id FROM observations WHERE ${tail} LIMIT 2`).all({ p }) as Row[];
     return rows.length === 1 ? rows[0].id : null;
   }
   listRecentObservations(projectId: string, limit: number): Observation[] {

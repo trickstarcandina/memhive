@@ -46,3 +46,29 @@ describe('sqlite migration 2 (session origin)', () => {
     s.close();
   });
 });
+
+describe('sqlite migration 7 (short_id)', () => {
+  it('an older database resolves 8-char short ids and head prefixes by index after the upgrade', () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'mh-')), 'm.db');
+    const raw = new Database(file);
+    raw.exec('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+    SQLITE_MIGRATIONS.slice(0, 5).forEach((sql, i) => { raw.exec(sql); raw.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(i + 1, 'x'); });
+    raw.prepare("INSERT INTO projects VALUES ('p', 'k', 'n', NULL, 'x')").run();
+    raw.prepare("INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at) VALUES ('s', 'p', 'u', 'h', 'hs', '/', 'x')").run();
+    const ids = ['0190aaaa-bbbb-7ccc-8ddd-eeeeffff0001', '0190aaaa-bbbb-7ccc-8ddd-eeee12345678'];
+    for (const id of ids) raw.prepare("INSERT INTO observations(id, project_id, session_id, user_id, type, title, created_at) VALUES (?, 'p', 's', 'u', 'discovery', 't', 'x')").run(id);
+    raw.close();
+    const s = new SqliteStore(file, { dims: null }); s.migrate();
+    expect(s.resolveIdPrefix('ffff0001')).toBe(ids[0]);
+    expect(s.resolveIdPrefix('12345678')).toBe(ids[1]);
+    expect(s.resolveIdPrefix('FFFF0001')).toBe(ids[0]);
+    expect(s.resolveIdPrefix('0190aaaa')).toBeNull();   // ambiguous head
+    expect(s.resolveIdPrefix('0190aaaa-bbbb-7ccc-8ddd-eeeeff')).toBe(ids[0]);
+    expect(s.resolveIdPrefix('5678')).toBe(ids[1]);   // other tail lengths still work
+    const db = (s as any).db as Database.Database;
+    const plan = (sql: string) => db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((r: any) => r.detail).join(' ');
+    expect(plan("SELECT id FROM observations WHERE short_id = 'x'")).toContain('observations_short_id');
+    expect(plan("SELECT * FROM sessions WHERE project_id = 'p' AND synced_at IS NULL")).toContain('sessions_unsynced');
+    s.close();
+  });
+});

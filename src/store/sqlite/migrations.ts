@@ -65,4 +65,11 @@ export const SQLITE_MIGRATIONS: string[] = [
   `
   CREATE INDEX IF NOT EXISTS observations_missing_embedding ON observations(embedding_model, created_at);
   `,
+  // 7: 8-char short ids (the random tail of a UUIDv7) resolve through an index instead of a scan per id; unsynced
+  // sessions are found by index like the other tables.
+  `
+  ALTER TABLE observations ADD COLUMN short_id TEXT GENERATED ALWAYS AS (substr(id, -8)) VIRTUAL;
+  CREATE INDEX IF NOT EXISTS observations_short_id ON observations(short_id);
+  CREATE INDEX IF NOT EXISTS sessions_unsynced ON sessions(project_id, synced_at);
+  `,
 ];
