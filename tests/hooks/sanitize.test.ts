@@ -445,3 +445,37 @@ describe('redactSecrets review round 1', () => {
     }
   });
 });
+
+describe('redactSecrets review round 2', () => {
+  it.each([
+    [`sudo curl -u admin:${P} x`, P, ['sudo curl -u ']],
+    [`x && curl -u admin:${P} x`, P, ['x && curl -u ']],
+    [`git push -u origin:main && curl -u admin:${P} x`, P, ['git push -u origin:main && curl -u ']],
+    [`machine h password ${P}`, P, ['machine h password ']],
+    [`define('DB_PASSWORD', '${P}');`, P, ["define('DB_PASSWORD', '", "');"]],
+    [`define("AUTH_KEY", "${P}")`, P, ['define("AUTH_KEY", "', '")']],
+    ['AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', 'wJalrXUtnFEMI', ['AWS Secret Access Key [None]: ']],
+    [`postgres://u:${P}@h`, P, ['postgres://u:', '@h']],
+  ] as [string, string, string[]][])('redacts %s', (input, core, keep) => {
+    const out = redactSecrets(input);
+    expect(out).not.toContain(core);
+    for (const k of keep) expect(out).toContain(k);
+    expect(redactSecrets(out)).toBe(out);
+  });
+  it('leaves ports, user:group flags and auth prose alone', () => {
+    for (const c of [
+      'http://localhost:3000/@vite/client', 'GET http://localhost:5173/@fs/home/x/src/main.ts 200', 'https://registry.npmjs.org:443/@types/node',
+      'http://127.0.0.1:8787/api/users/@me', 'https://example.com:8080/path?email=a@b.c', 'postgres://localhost:5432/db?user=a@b',
+      'git push -u origin:main', 'rsync -u src:dst/ ./', 'sudo -u postgres:postgres psql', 'scp -u a:b x',
+      'login with Google, then password reset email', 'Use login flow; password field must be 8 chars',
+      'login page redirects; password strength meter added', 'tokens[i] = next;', "define('WP_DEBUG', true);",
+    ]) expect(redactSecrets(c)).toBe(c);
+  });
+  it('stays under 300 ms on 2 MB inputs aimed at the round-2 rules', () => {
+    const N = 2 * 1024 * 1024;
+    for (const unit of ['http://a:1/@', 'a://b:12', 'define("KEY", ', "define('A_KEY'", 'login a password ', 'machine a login b ', 'secret access key [x]: ', 'sudo ', 'git push ']) {
+      const s = unit.repeat(Math.ceil(N / unit.length)).slice(0, N);
+      expect(timeMs(() => redactSecrets(s)), unit).toBeLessThan(300);
+    }
+  });
+});

@@ -72,13 +72,14 @@ const SECRET_ANY = new RegExp(SECRET_PATTERNS.map((r) => r.source).join('|'), 'g
 // Group 1 is kept, so the reader still sees what was there: scheme, user and host stay, only the password goes.
 // URL userinfo rules; they only run when the text holds a `://`, which skips three full passes on most text.
 const URL_PATTERNS: RegExp[] = [
+  // `host:3000/@vite/client` is a port then a path, not a password, in both rules below.
   // The password may hold `@`: it runs lazily to the `@` whose host part ends at a URL, JSON or code delimiter. The
   // lookbehind gives a scheme one start per run, and the atomic `(?=(?=(x))\2@)` precheck finds an `@` without
   // backtracking. Quotes end the password, so a later JSON field is never swallowed.
-  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)(?=(?=([^\s/@"'`]{0,256}))\2@)[^\s"'`]{1,256}?(?=@[^\s@/"'`,;)>\]}]{0,253}(?:[\s/?#"'`,;)>\]}]|$))/gi,
+  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)(?!\d{1,5}(?:[/?#]|$))(?=(?=([^\s/@"'`]{0,256}))\2@)[^\s"'`]{1,256}?(?=@[^\s@/"'`,;)>\]}]{0,253}(?:[\s/?#"'`,;)>\]}]|$))/gi,
   // Fail-closed fallback: no host terminator found (a long host, a `/` in the password), so redact up to the first `@`.
   // The scan stops at the next `://`, so hostile `a://b:` runs cost a few chars per start, not the whole window.
-  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)(?=((?:[^\s@"'`,;)>\]}:]|:(?!\/\/)){1,256}))\2(?=@)/gi,
+  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)(?!\d{1,5}(?:[/?#]|$))(?=((?:[^\s@"'`,;)>\]}:]|:(?!\/\/)){1,256}))\2(?=@)/gi,
   // Token-only userinfo (`https://TOKEN@host`); 20+ chars keeps `git@` and `user@` out.
   /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/)(?=([^\s:/@"'`]{20,256}))\2(?=@)/gi,
 ];
@@ -98,23 +99,28 @@ const PREFIXED_PATTERNS: RegExp[] = [
   /\b((?:mysql(?:dump|admin)?|mariadb)\b(?:(?!\s-p|mysql|mariadb)[^\n;&|]){0,200}\s-p)(?=[^\s-])[^\s"';&|]+/g,
   /\b((?:sshpass|(?:docker|podman)[ \t]+login)\b(?:(?!\s-p|sshpass|docker|podman)[^\n;&|]){0,200}\s-p[ \t]*)(?=[^\s-])[^\s"';&|]+/g,
   /(\s--password[ \t]+)(?=[^\s-])[^\s"';&|]+/g,
-  // netrc: a space-separated `password` counts only on a `machine`/`login` line, so prose stays.
-  /\b((?:machine|login)[ \t](?:(?!\b(?:password|machine|login)\b)[^\n]){0,200}\bpassword[ \t]+)\S+/g,
+  // netrc: a space-separated `password` counts only in netrc token order (`machine h login u password v`,
+  // `machine h password v`), so auth prose (`login with Google, then password reset`) stays.
+  // A token ending in `;` or `,` is prose punctuation, not a netrc value (`login flow; password field`).
+  /\b((?:machine[ \t]+[^\s;,]+[ \t]+)?(?:login|machine)[ \t]+[^\s;,]+[ \t]+password[ \t]+)\S+/g,
+  // PHP `define('DB_PASSWORD', 'v')` (wp-config.php); only names that hold a secret word.
+  /(\bdefine\([ \t]*(['"])[A-Z0-9_]{0,60}(?:PASSWORD|KEY|SALT|SECRET|TOKEN)[A-Z0-9_]{0,20}\2[ \t]*,[ \t]*['"])[^'"\n]*/g,
 ];
 // `curl -u user:pw`, `-uuser:pw`, `--user=user:pw`. A numeric `uid:gid`, or a `-u` inside a `docker|podman
-// run|exec|create` or `su` command segment (group 1 stops at `; & |`, a newline or a nested `curl`), is a user, not
+// run|exec|create`, `su`, `sudo`, `git push` (upstream), `rsync` or `scp` command segment (group 1 stops at `; & |`, a newline or a nested `curl`), is a user, not
 // a credential.
-const USER_FLAG = /(\b(?:(?:docker|podman)[ \t]+(?:run|exec|create)|su)\b(?:(?!curl\b)[^\n;&|])*)|((?:^|\s)(?:-u|--user)(?:[ \t]{1,5}|=)?["']?)(?!-)([^\s"':]+:[^\s"']+)/gm;
+const USER_FLAG = /(\b(?:(?:docker|podman)[ \t]+(?:run|exec|create)|su|sudo|git[ \t]+push|rsync|scp)\b(?:(?!curl\b)[^\n;&|])*)|((?:^|\s)(?:-u|--user)(?:[ \t]{1,5}|=)?["']?)(?!-)([^\s"':]+:[^\s"']+)/gm;
 // Keyword-anchored, no nested quantifiers: scanning stays linear (ReDoS). Quoted values are
 // escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token,
 // and a bounded `<...>` group (`Map<string, number>`) stays inside the token so it is judged and redacted whole.
 // `pass` needs a word end so `passed`/`passing` are not keys; `auth` must start a word part (not `oauth2`, `OAuth`)
 // and skips `author*`/`authority`/`authent*` but keeps `authorization`. Ambiguous names like `auth: foo` are
-// redacted: a false positive is cheaper than a leak. A closing `"]` / `']` lets `env["NAME"] = v` through. Spaces
+// redacted: a false positive is cheaper than a leak. A closing `"]` / `']` lets `env["NAME"] = v` through, and a
+// spaced `[...]` before the separator lets an `aws configure` prompt (`Secret Access Key [None]: v`) through. Spaces
 // around the separator stay on one line, so a YAML parent key (`auth:` then a newline) never takes its child.
 // A JSON-escaped quote (`\"`, a JSON document inside a JSON string) opens a value redacted to end of line: the
 // escape depth cannot be known, so guessing where the value closes would fail open.
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|(?<![a-z])auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url)[\w.-]{0,40})(\\?["']?\]?[ \t]{0,5}([:=])[ \t]{0,5})(?:(\\"[^\n]*)|("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|(?<![a-z])auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url|(?<![a-z])secret[ \t]+access[ \t]+key)[\w.-]{0,40})(\\?["']?\]?(?:[ \t]+\[[^\]\n]{0,40}\])?[ \t]{0,5}([:=])[ \t]{0,5})(?:(\\"[^\n]*)|("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
 // An auth scheme word whose credential an earlier rule already redacted.
 const SCHEME_WORD = /^(?:bearer|basic|digest|token)$/i;
 // A TS class member or constructor parameter (`private auth: AuthService`) is a declaration, so a PascalCase value is its type.
