@@ -14,10 +14,11 @@ import { writePause } from '../../src/shared/optout.js';
 import { resolvePaths } from '../../src/shared/paths.js';
 import { VERSION } from '../../src/shared/version.js';
 import { obs, sess } from '../store/store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const repo = path.resolve(import.meta.dirname, '../..');
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-doc-'));
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 async function doctor(home: string, extra: Parameters<typeof doctorCommand>[2] = {}, args: string[] = ['--no-ping']) {
   let out = '';
   const code = await doctorCommand(args, { stdout: (s) => { out += s; }, stderr: () => {} }, { home, env, cwd: home, ...extra });
@@ -92,7 +93,7 @@ describe('doctor checks', () => {
   });
   it('reports degraded vectors, missing embeddings and per-project sync state from the daemon', async () => {
     const home = mkHome();
-    const embedEnv = { ...env, MEMHIVE_EMBED_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '2' };
+    const embedEnv = { ...env, MEMHIVE_EMBED_BASE_URL: deadUrl, MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '2' };
     const ctx = createDaemonContext(home, embedEnv);
     const hub = 'http://127.0.0.1:9'; const p = ctx.store.getOrCreateProject('github.com/acme/app', 'app'); ctx.store.setProjectHub(p.id, hub);
     const s = sess(p.id); ctx.store.upsertSession(s); ctx.store.insertObservations([obs({ projectId: p.id, sessionId: s.id })]);

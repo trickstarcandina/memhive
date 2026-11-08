@@ -6,9 +6,10 @@ import { runHook } from '../../src/hooks/hook-command.js';
 import { readStdin, STDIN_LIMIT } from '../../src/hooks/stdin.js';
 import { PassThrough } from 'node:stream';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 
 describe('runHook', () => {
   it('session-start prints context JSON when daemon is up', async () => {

@@ -6,8 +6,9 @@ import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { readDaemonInfo, writeDaemonInfo } from '../../src/daemon/info.js';
 import { SqliteStore } from '../../src/store/sqlite/store.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 const until = async (cond: () => boolean, ms = 3000) => { const end = Date.now() + ms; while (!cond()) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 10)); } };
 
 describe('idle shutdown (G10)', () => {

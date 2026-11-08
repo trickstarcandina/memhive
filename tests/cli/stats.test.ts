@@ -5,9 +5,10 @@ import path from 'node:path';
 import { statsCommand } from '../../src/cli/commands/stats.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { obs, sess } from '../store/store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 const io = () => { let out = ''; return { io: { stdout: (s: string) => { out += s; }, stderr: () => {} }, text: () => out }; };
 
 describe('memhive stats', () => {

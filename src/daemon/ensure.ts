@@ -8,10 +8,16 @@ import { VERSION } from '../shared/version.js';
 declare const __filename: string;   // defined in the CJS bundle, undefined under vitest (ESM)
 export type SpawnFn = (bundlePath: string, home: string) => void;
 
-const defaultSpawn: SpawnFn = (bundlePath, home) => {
+const realSpawn: SpawnFn = (bundlePath, home) => {
   const child = spawn(process.execPath, [bundlePath, 'daemon', 'run'], { detached: true, stdio: 'ignore', env: { ...process.env, MEMHIVE_HOME: home } });
   child.unref();
 };
+let defaultSpawn: SpawnFn = realSpawn;
+/**
+ * Test-only: replaces the spawn used when a caller passes none. Under vitest, process.argv[1] is the vitest entry, so the
+ * real spawn would start a detached `vitest daemon run`; the test setup records the call instead. `null` restores it.
+ */
+export function setDefaultSpawn(fn: SpawnFn | null): void { defaultSpawn = fn ?? realSpawn; }
 
 const warnedNewer = new Set<string>();
 /** True when `v` is a lower x.y.z than `than` (a missing version, from before 0.2, is lower; a pre-release is lower than its release). */

@@ -11,11 +11,12 @@ import { daemonCommand } from '../../src/cli/commands/daemon.js';
 import { doctorCommand } from '../../src/cli/commands/doctor.js';
 import { daemonUnavailableMessage } from '../../src/cli/daemon-unavailable.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 describe('ensureDaemon', () => {
   it('returns running daemon info without spawning', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    const h = await startDaemon(createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' }), { port: 0 });
+    const h = await startDaemon(createDaemonContext(home, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' }), { port: 0 });
     let spawned = 0;
     const info = await ensureDaemon(home, { wait: true, spawn: () => { spawned++; } });
     expect(info!.port).toBe(h.info.port); expect(spawned).toBe(0);
@@ -43,7 +44,7 @@ describe('ensureDaemon', () => {
 });
 
 describe('daemon version', () => {
-  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
   it('daemon.json and /healthz carry the version', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const h = await startDaemon(createDaemonContext(home, env), { port: 0 });
@@ -91,7 +92,7 @@ describe('daemon version', () => {
 });
 
 describe('version skew direction and the lock (M1, M4)', () => {
-  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
   it('olderThan compares x.y.z, treats a missing version and pre-releases as older', () => {
     expect([olderThan('0.1.9', '0.2.0'), olderThan('0.10.0', '0.9.9'), olderThan(undefined, '0.2.0'), olderThan('0.2.0-rc.1', '0.2.0'), olderThan('0.2.0', '0.2.0'), olderThan('0.3.0', '0.2.0')])
       .toEqual([true, false, true, true, false, false]);

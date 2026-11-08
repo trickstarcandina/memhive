@@ -9,10 +9,11 @@ import { daemonCommand } from '../../src/cli/commands/daemon.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import { obs, sess } from '../store/store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
 const io = () => { const out: string[] = []; const err: string[] = []; return { out, err, io: { stdout: (s: string) => out.push(s), stderr: (s: string) => err.push(s) }, text: () => out.join(''), errText: () => err.join('') }; };
-const baseEnv = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const baseEnv = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 
 const home = mkHome(); const cwd = mkHome();
 let h: Awaited<ReturnType<typeof startDaemon>>; let ctx: ReturnType<typeof createDaemonContext>;

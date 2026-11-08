@@ -13,10 +13,11 @@ import { loadCredentials, saveCredentials } from '../../src/sync/credentials.js'
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import { obs, sess } from '../store/store-contract.js';
 import { main } from '../../src/cli/index.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 const cap = () => { const o = { out: '', err: '' }; return { o, io: { stdout: (s: string) => { o.out += s; }, stderr: (s: string) => { o.err += s; } } }; };
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 let hub: Awaited<ReturnType<typeof startHub>>; let hubUrl: string; let key: string; let hs: SqliteHubStore;
 beforeAll(async () => {
   hs = new SqliteHubStore(':memory:', { dims: null }); await hs.migrate();

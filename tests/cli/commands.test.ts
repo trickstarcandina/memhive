@@ -9,9 +9,10 @@ import { searchCommand } from '../../src/cli/commands/search.js';
 import { doctorCommand } from '../../src/cli/commands/doctor.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { readDaemonInfo } from '../../src/daemon/info.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const io = () => { const out: string[] = []; const err: string[] = []; return { out, err, io: { stdout: (s: string) => out.push(s), stderr: (s: string) => err.push(s) } }; };
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 
 it('parseArgs', () => {
   expect(parseArgs(['q', 'w', '--type', 'bugfix', '--yes', '--limit=5'])).toEqual({ positional: ['q', 'w'], flags: { type: 'bugfix', yes: true, limit: '5' } });

@@ -6,9 +6,10 @@ import Database from 'better-sqlite3';
 import { backupCommand, exportCommand, importCommand } from '../../src/cli/commands/transfer.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { obs, sess } from '../store/store-contract.js';
+import { deadUrl } from '../helpers/closed-port.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
-const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' };
+const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
 const io = () => { let out = ''; let err = ''; return { io: { stdout: (s: string) => { out += s; }, stderr: (s: string) => { err += s; } }, out: () => out, err: () => err }; };
 const KEY = 'github.com/acme/app';
 
