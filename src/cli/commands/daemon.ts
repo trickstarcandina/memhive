@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { CliIo } from '../index.js';
 import { resolvePaths } from '../../shared/paths.js';
 import { readDaemonInfo } from '../../daemon/info.js';
@@ -30,9 +32,25 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
     return alive ? 0 : 1;
   }
   if (sub === 'stop') {
-    if (!alive) { io.stdout('memhub daemon not running\n'); return 0; }
+    if (!alive) {
+      // A daemon from an older build fails the new health proof but still runs: stop it by pid, only when /proc shows it is ours.
+      const pid = info?.pid ?? Number(readText(path.join(home, 'daemon.lock')));
+      if (pid && pid !== process.pid && isOurDaemon(home, pid)) {
+        try { process.kill(pid, 'SIGTERM'); io.stdout(`memhub daemon (pid ${pid}) stopping\n`); return 0; } catch { /* already gone */ }
+      }
+      io.stdout('memhub daemon not running\n'); return 0;
+    }
     await new DaemonClient(info!).request('POST', '/v1/shutdown').catch(() => {});
     io.stdout('memhub daemon stopping\n'); return 0;
   }
   io.stderr(`memhub daemon: unknown subcommand "${sub}" (run|start|stop|status)\n`); return 1;
+}
+
+const readText = (file: string): string => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
+
+// shortcut: needs /proc (Linux); elsewhere an old daemon is left to its idle timeout.
+function isOurDaemon(home: string, pid: number): boolean {
+  const args = readText(`/proc/${pid}/cmdline`).split('\0');
+  const env = readText(`/proc/${pid}/environ`).split('\0');
+  return args.includes('daemon') && args.includes('run') && args.some((a) => a.includes('memhub')) && env.includes(`MEMHUB_HOME=${home}`);
 }

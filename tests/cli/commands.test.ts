@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +26,25 @@ describe('commands', () => {
     r = io(); expect(await daemonCommand(['stop'], r.io, { home })).toBe(0);
     for (let i = 0; i < 40 && readDaemonInfo(home); i++) await new Promise((res) => setTimeout(res, 50));
     expect(readDaemonInfo(home)).toBeNull();
+  });
+  it.skipIf(process.platform !== 'linux')('stop ends a daemon that fails the health proof (older build) by pid, only when it is ours', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const fake = (args: string[], env: NodeJS.ProcessEnv) => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ...args], { env, stdio: 'ignore' });
+    const exited = (c: ReturnType<typeof spawn>) => new Promise<boolean>((res) => { if (c.exitCode !== null || c.signalCode) res(true); c.once('exit', () => res(true)); setTimeout(() => res(false), 2000); });
+    const stranger = fake(['other', 'daemon', 'run'], { MEMHUB_HOME: home });
+    const writeInfo = (pid: number) => writeFileSync(path.join(home, 'daemon.json'), JSON.stringify({ port: 9, pid, token: 't', startedAt: '' }));
+    await new Promise((res) => setTimeout(res, 200));
+    writeInfo(stranger.pid!);
+    let r = io(); await daemonCommand(['stop'], r.io, { home });
+    expect(r.out.join('')).toContain('not running');
+    expect(await Promise.race([exited(stranger), new Promise((res) => setTimeout(() => res(false), 300))])).toBe(false);
+    stranger.kill();
+    const old = fake(['/x/memhub.cjs', 'daemon', 'run'], { MEMHUB_HOME: home });
+    await new Promise((res) => setTimeout(res, 200));
+    writeInfo(old.pid!);
+    r = io(); await daemonCommand(['stop'], r.io, { home });
+    expect(r.out.join('')).toContain(`(pid ${old.pid})`);
+    expect(await exited(old)).toBe(true);
   });
   it('search prints an index table', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
