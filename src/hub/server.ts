@@ -24,7 +24,8 @@ export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
 }
 
 export async function ensureAdminKey(store: HubStore): Promise<string | null> {
-  if ((await store.countUsers()) > 0) return null;
+  // Keyed on keys, not users: a crash between createUser and createApiKey must not leave a hub nobody can log in to.
+  if ((await store.listApiKeys()).length > 0) return null;
   await store.createUser('admin');
   const k = generateApiKey(); await store.createApiKey('admin', 'initial', k.hash);
   return k.raw;

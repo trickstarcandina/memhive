@@ -79,6 +79,16 @@ describe('hub http', () => {
   });
 });
 
+describe('ensureAdminKey', () => {
+  it('recovers from a crash between creating the admin user and its key', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null }); await st.migrate();
+    await st.createUser('admin');
+    expect(await ensureAdminKey(st)).toMatch(/^mh_/);
+    expect(await ensureAdminKey(st)).toBeNull();
+    await st.close();
+  });
+});
+
 describe('createHubStore', () => {
   it('throws without DATABASE_URL and on unknown scheme', () => {
     expect(() => createHubStore({})).toThrow(/DATABASE_URL/);
