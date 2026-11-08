@@ -14,6 +14,7 @@ const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadU
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const H = 36e5;
 
+const OBS0 = '0190aaaa-bbbb-7ccc-8ddd-eeeeffff0001';
 let ctx: DaemonContext; let anchorId = ''; const KEY = 'github.com/acme/routes';
 const route = (method: string, p: string, body?: unknown) => handleRoute(ctx, method, new URL(p, 'http://127.0.0.1'), body);
 
@@ -50,11 +51,19 @@ describe('daemon route matrix', () => {
   it.each([
     ['5', '5', 11], ['-3', '-3', 1], ['abc', 'NaN', 1], ['100', '100', 101], ['', '', 1], ['50', '0', 51],
   ])('timeline before=%s after=%s gives %i rows (0..50 each side)', async (before, after, n) => {
-    const r = await route('GET', `/v1/timeline?anchor=${anchorId}&before=${before}&after=${after}`);
+    const r = await route('GET', `/v1/timeline?project_key=${KEY}&anchor=${anchorId}&before=${before}&after=${after}`);
     expect(r.status).toBe(200); expect((r.body as { observations: unknown[] }).observations).toHaveLength(n);
   });
   it('timeline defaults to 5 on each side', async () => {
-    expect(((await route('GET', `/v1/timeline?anchor=${anchorId}`)).body as { observations: unknown[] }).observations).toHaveLength(11);
+    expect(((await route('GET', `/v1/timeline?project_key=${KEY}&anchor=${anchorId}`)).body as { observations: unknown[] }).observations).toHaveLength(11);
+  });
+
+  it('timeline with all_projects=1 reaches the anchor; an anchor outside project_key or missing is 404', async () => {
+    expect(((await route('GET', `/v1/timeline?all_projects=1&anchor=${anchorId}&before=1&after=1`)).body as { observations: unknown[] }).observations).toHaveLength(3);
+    for (const p of [`/v1/timeline?project_key=github.com/acme/elsewhere&anchor=${anchorId}`, `/v1/timeline?project_key=${KEY}`, `/v1/timeline?project_key=${KEY}&anchor=`]) {
+      const r = await route('GET', p);
+      expect(r.status, p).toBe(404); expect((r.body as { error: { code: string } }).error.code).toBe('not_found');
+    }
   });
 
   it.each([
@@ -65,8 +74,8 @@ describe('daemon route matrix', () => {
     ['POST', '/v1/events', { cwd: '/w', event: 'tool' }, 'bad_event'],
     ['GET', `/v1/search?project_key=${KEY}&type=nonsense`, undefined, 'bad_type'],
     ['GET', '/v1/search?q=x', undefined, 'missing_project'],
-    ['GET', '/v1/timeline', undefined, 'missing_anchor'],
-    ['GET', '/v1/timeline?anchor=', undefined, 'missing_anchor'],
+    ['GET', `/v1/timeline?anchor=${OBS0}`, undefined, 'missing_project'],
+    ['GET', `/v1/observations?ids=${OBS0}`, undefined, 'missing_project'],
   ])('%s %s %j -> 400 %s', async (method, p, body, code) => {
     const r = await route(method, p, body);
     expect(r.status).toBe(400); expect((r.body as { error: { code: string } }).error.code).toBe(code);
