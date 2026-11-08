@@ -2,6 +2,8 @@ import type { PushBody, PushResult, PullResult } from '../hub/routes.js';
 
 export class HubError extends Error { constructor(message: string, public readonly status: number, public readonly code: string) { super(message); this.name = 'HubError'; } }
 
+export interface HubConfigInfo { version?: string; embedding_model: string | null; embedding_dims: number | null; body_limit?: number }
+
 export class HubClient {
   private fetchImpl: typeof fetch;
   constructor(private hubUrl: string, private key: string, fetchImpl?: typeof fetch) { this.fetchImpl = fetchImpl ?? fetch; }
@@ -14,7 +16,7 @@ export class HubClient {
       return json as T;
     } finally { clearTimeout(t); }
   }
-  config() { return this.req<{ version: string; embedding_model: string | null; embedding_dims: number | null }>('GET', '/v1/config'); }
+  config() { return this.req<HubConfigInfo>('GET', '/v1/config'); }
   me() { return this.req<{ user: string }>('GET', '/v1/me'); }
   push(body: PushBody, timeoutMs = 15000) { return this.req<PushResult>('POST', '/v1/sync/push', body, timeoutMs); }
   pull(projectKey: string, since: number, limit = 500, timeoutMs = 10000) { return this.req<PullResult>('GET', `/v1/sync/pull?project_key=${encodeURIComponent(projectKey)}&since=${since}&limit=${limit}`, undefined, timeoutMs); }

@@ -4,3 +4,6 @@ dist
 docs
 tests
 .superpowers
+.env
+*.db
+*.db-*

@@ -3,6 +3,7 @@ import { HubDimsMismatch } from '../../src/hub/store/types.js';
 import type { HubStore, HubObservation } from '../../src/hub/store/types.js';
 import type { Session, Summary } from '../../src/store/types.js';
 import { newId } from '../../src/shared/ids.js';
+import { handleHubRoute } from '../../src/hub/routes.js';
 
 export const hobs = (p: Partial<HubObservation> & { projectId: string; sessionId: string }): HubObservation => ({
   id: newId(), userId: 'alice', type: 'discovery', title: 'T', subtitle: '', facts: ['f'], narrative: '', concepts: [], filesRead: [], filesModified: [],
@@ -101,6 +102,25 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>, op
       expect(await s.searchObservationsFts('jwt', { projectId: p.id, limit: 5 })).toHaveLength(1);
       expect(await s.searchObservationsFts('jwt', { projectId: p.id, type: 'bugfix', limit: 5 })).toHaveLength(0);
       expect(Array.isArray(await s.searchObservationsFts('a: "b" OR * ) ( NEAR', { projectId: p.id, limit: 5 }))).toBe(true);
+    });
+
+    it('push route: rows the DB would refuse are rejected per row (invalid_row), NUL is stripped, never a 500', async () => {
+      const cfg = { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 1 };
+      const route = (body: unknown) => handleHubRoute(s, cfg, { keyId: 'k', userName: 'alice' }, 'POST', new URL('http://h/v1/sync/push'), body);
+      const good = hsess('x'); const noHost = { ...hsess('x'), host: undefined }; const badStart = hsess('x', { startedAt: 'yesterday' });
+      const ok1 = hobs({ projectId: 'x', sessionId: good.id, title: 'nul\u0000title', facts: ['a\u0000b'] });
+      const badTime = hobs({ projectId: 'x', sessionId: good.id, createdAt: '2026-13-45 nope' });
+      const badFacts = { ...hobs({ projectId: 'x', sessionId: good.id }), facts: 'x' };
+      const sumBad: Summary = { id: newId(), projectId: 'x', sessionId: good.id, userId: 'u', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: 'not-a-date', origin: 'local', syncedAt: null };
+      const r = await route({ projectKey: 'k/v', projectName: 'v', sessions: [good, noHost, badStart], observations: [ok1, badTime, badFacts], summaries: [sumBad] });
+      expect(r.status).toBe(200);
+      const body = r.body as { accepted: Record<string, number>; rejected: Array<{ id: string; reason: string }> };
+      expect(body.accepted).toEqual({ sessions: 1, observations: 1, summaries: 0 });
+      expect(body.rejected.filter((x) => x.reason === 'invalid_row').map((x) => x.id).sort()).toEqual([noHost.id, badStart.id, badTime.id, badFacts.id, sumBad.id].sort());
+      const [stored] = await s.getObservations([ok1.id]);
+      expect(stored.title).toBe('nultitle'); expect(stored.facts).toEqual(['ab']);
+      const search = await handleHubRoute(s, cfg, { keyId: 'k', userName: 'alice' }, 'GET', new URL('http://h/v1/search?project_key=k%2Fv&q=nultitle&since=garbage'), undefined);
+      expect((search.body as { observations: unknown[] }).observations).toHaveLength(1);   // a malformed since is ignored, not passed to the DB
     });
 
     it('users and keys', async () => {

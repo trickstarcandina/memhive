@@ -3,13 +3,21 @@ import { resolvePaths } from '../../shared/paths.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
 import { DaemonClient, DaemonError } from '../../daemon/client.js';
 
-export async function syncCommand(_args: string[], io: CliIo, opts: { home?: string; cwd?: string } = {}): Promise<number> {
+// The daemon keeps syncing after the CLI stops waiting (a large backlog can take minutes), so a timeout is not a failure.
+export const SYNC_WAIT_MS = 60_000;
+export const SYNC_IN_BACKGROUND = 'sync is still running in the daemon and continues in the background; run `memhub sync` later to see the result\n';
+export const isTimeout = (e: unknown): boolean => e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError');
+
+export async function syncCommand(_args: string[], io: CliIo, opts: { home?: string; cwd?: string; waitMs?: number } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhub: daemon unavailable\n'); return 1; }
   try {
-    const r = await new DaemonClient(info).request<{ pushed: { accepted: { observations: number; summaries: number; sessions: number }; rejected: unknown[] } | null; pulled: number }>('POST', '/v1/sync', { cwd }, 60000);
+    const r = await new DaemonClient(info).request<{ pushed: { accepted: { observations: number; summaries: number; sessions: number }; rejected: unknown[] } | null; pulled: number }>('POST', '/v1/sync', { cwd }, opts.waitMs ?? SYNC_WAIT_MS);
     io.stdout(r.pushed ? `pushed ${r.pushed.accepted.observations} observations, ${r.pushed.accepted.summaries} summaries (${r.pushed.rejected.length} rejected); pulled ${r.pulled} rows\n` : `push skipped (not logged in or key rejected); pulled ${r.pulled} rows\n`);
     return 0;
-  } catch (e) { io.stderr(`memhub sync: ${e instanceof DaemonError ? e.message : String(e)}\n`); return 1; }
+  } catch (e) {
+    if (isTimeout(e)) { io.stdout(SYNC_IN_BACKGROUND); return 0; }
+    io.stderr(`memhub sync: ${e instanceof DaemonError ? e.message : String(e)}\n`); return 1;
+  }
 }

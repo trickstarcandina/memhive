@@ -11,12 +11,12 @@ export function readBody(req: IncomingMessage, limit = 2 * 1024 * 1024): Promise
   });
 }
 
-export function createJsonServer(handler: Handler, authorize: (url: URL, headers: IncomingMessage['headers']) => boolean = () => true, bodyLimit = 2 * 1024 * 1024): Server {
+export function createJsonServer(handler: Handler, authorize: (url: URL, headers: IncomingMessage['headers']) => boolean = () => true, bodyLimit = 2 * 1024 * 1024, unauthorizedMessage = 'bad daemon token'): Server {
   return createServer(async (req, res) => {
     let status = 500; let payload: unknown = { error: { code: 'internal', message: 'internal error' } };
     try {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-      if (!authorize(url, req.headers)) { res.writeHead(401, { 'content-type': 'application/json', connection: 'close' }); res.end(JSON.stringify({ error: { code: 'unauthorized', message: 'bad daemon token' } })); return; }
+      if (!authorize(url, req.headers)) { res.writeHead(401, { 'content-type': 'application/json', connection: 'close' }); res.end(JSON.stringify({ error: { code: 'unauthorized', message: unauthorizedMessage } })); return; }
       const raw = req.method === 'POST' ? await readBody(req, bodyLimit) : '';
       let body: unknown = undefined;
       if (raw) { try { body = JSON.parse(raw); } catch { status = 400; payload = { error: { code: 'bad_json', message: 'invalid JSON body' } }; res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(payload)); return; } }

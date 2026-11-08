@@ -12,7 +12,7 @@ usage: memhub <command>
   hook <claude-code|codex> <event>
   daemon <run|start|stop|status>
   mcp
-  search <query> [--type t] [--limit n]
+  search <query> [--type t] [--user u] [--since 7d] [--limit n]
   embed [--missing|--rebuild]
   serve
   key <create|list|revoke>

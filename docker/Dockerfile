@@ -16,5 +16,6 @@ COPY --from=build /app/package.json ./
 # Named volume /data inherits this ownership on first use.
 RUN mkdir -p /data && chown node:node /data
 EXPOSE 7777
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||7777)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 USER node
 CMD ["node", "dist/memhub.cjs", "serve"]

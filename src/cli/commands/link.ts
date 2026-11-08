@@ -3,6 +3,7 @@ import { resolvePaths } from '../../shared/paths.js';
 import { loadCredentials, normalizeHubUrl } from '../../sync/credentials.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
 import { DaemonClient, DaemonError } from '../../daemon/client.js';
+import { SYNC_IN_BACKGROUND, SYNC_WAIT_MS, isTimeout } from './sync.js';
 
 export async function linkCommand(args: string[], io: CliIo, opts: { home?: string; cwd?: string; unlink?: boolean } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
@@ -18,7 +19,11 @@ export async function linkCommand(args: string[], io: CliIo, opts: { home?: stri
   try {
     const r = await daemon.request<{ project: { key: string; hubUrl: string | null } }>('POST', '/v1/projects/link', { cwd, hubUrl });
     io.stdout(hubUrl ? `linked ${r.project.key} -> ${hubUrl}\n` : `unlinked ${r.project.key}\n`);
-    if (hubUrl) { const s = await daemon.request<{ pulled: number }>('POST', '/v1/sync', { cwd }, 30000); io.stdout(`initial sync: pulled ${s.pulled} rows\n`); }
+    if (hubUrl) {
+      const s = await daemon.request<{ pushed: { accepted: { observations: number } } | null; pulled: number }>('POST', '/v1/sync', { cwd }, SYNC_WAIT_MS);
+      io.stdout(`initial sync: pushed ${s.pushed?.accepted.observations ?? 0} observations, pulled ${s.pulled} rows\n`);
+    }
     return 0;
-  } catch (e) { io.stderr(`memhub ${opts.unlink ? 'unlink' : 'link'}: ${e instanceof DaemonError ? e.message : String(e)}\n`); return 1; }
+  } catch (e) {
+    if (isTimeout(e)) { io.stdout(SYNC_IN_BACKGROUND); return 0; } io.stderr(`memhub ${opts.unlink ? 'unlink' : 'link'}: ${e instanceof DaemonError ? e.message : String(e)}\n`); return 1; }
 }

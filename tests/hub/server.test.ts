@@ -25,11 +25,12 @@ afterAll(async () => { await hub.close(); });
 describe('hub http', () => {
   it('healthz is public, everything else needs a key', async () => {
     expect((await call(null, 'GET', '/healthz')).status).toBe(200);
-    expect((await call(null, 'GET', '/v1/config')).status).toBe(401);
+    const noKey = await call(null, 'GET', '/v1/config');
+    expect(noKey.status).toBe(401); expect(noKey.json.error.message).toBe('missing or invalid API key');   // not the daemon's wording
     expect((await call('mh_wrong', 'GET', '/v1/config')).status).toBe(401);
   });
   it('config and me', async () => {
-    expect((await call(aliceKey, 'GET', '/v1/config')).json).toMatchObject({ embedding_model: 'bge-m3', embedding_dims: 4 });
+    expect((await call(aliceKey, 'GET', '/v1/config')).json).toMatchObject({ embedding_model: 'bge-m3', embedding_dims: 4, body_limit: 2_000_000 });
     expect((await call(aliceKey, 'GET', '/v1/me')).json).toEqual({ user: 'alice' });
   });
   it('push assigns user from key, rejects model mismatch and bad dims per row, pull returns rows in order', async () => {

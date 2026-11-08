@@ -11,7 +11,7 @@ const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 const rowToProject = (r: Row): Project => ({ id: r.id, key: r.key, name: r.name, hubUrl: r.hub_url ?? null, createdAt: r.created_at });
-const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: r.synced_at ?? null });
+const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: r.synced_at ?? null, origin: r.origin });
 const rowToObservation = (r: Row): Observation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: r.origin, syncedAt: r.synced_at ?? null });
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: r.origin, syncedAt: r.synced_at ?? null });
 
@@ -82,9 +82,9 @@ export class SqliteStore implements Store {
   setProjectHub(id: string, hubUrl: string | null): void { this.db.prepare('UPDATE projects SET hub_url = ? WHERE id = ?').run(hubUrl, id); }
 
   upsertSession(s: Session): void {
-    this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at, synced_at)
-      VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt, @syncedAt)
-      ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL`).run(s);
+    this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at, synced_at, origin)
+      VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt, @syncedAt, @origin)
+      ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL`).run({ ...s, origin: s.origin ?? 'local' });
   }
   getSession(id: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined; return r ? rowToSession(r) : null; }
   getSessionByHost(host: string, hostSessionId: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE host = ? AND host_session_id = ?').get(host, hostSessionId) as Row | undefined; return r ? rowToSession(r) : null; }
@@ -186,7 +186,7 @@ export class SqliteStore implements Store {
   }
 
   listUnsynced(table: 'sessions' | 'observations' | 'summaries', projectId: string, limit: number): Array<Session | Observation | Summary> {
-    const rows = this.db.prepare(`SELECT * FROM ${table} WHERE project_id = ? AND synced_at IS NULL AND origin_is_local ORDER BY rowid LIMIT ?`.replace('origin_is_local', table === 'sessions' ? '1 = 1' : "origin = 'local'")).all(projectId, limit) as Row[];
+    const rows = this.db.prepare(`SELECT * FROM ${table} WHERE project_id = ? AND synced_at IS NULL AND origin = 'local' ORDER BY rowid LIMIT ?`).all(projectId, limit) as Row[];
     const conv: (r: Row) => Session | Observation | Summary = table === 'sessions' ? rowToSession : table === 'observations' ? rowToObservation : rowToSummary;
     return rows.map(conv);
   }
@@ -198,7 +198,7 @@ export class SqliteStore implements Store {
   setPullCursor(projectId: string, cursor: number): void { this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor) VALUES (?, ?) ON CONFLICT(project_id) DO UPDATE SET pull_cursor = excluded.pull_cursor').run(projectId, cursor); }
   resetProjectSync(projectId: string): void {
     this.db.transaction(() => {
-      for (const t of ['sessions', 'observations', 'summaries']) this.db.prepare(`UPDATE ${t} SET synced_at = NULL WHERE project_id = ?`).run(projectId);
+      for (const t of ['sessions', 'observations', 'summaries']) this.db.prepare(`UPDATE ${t} SET synced_at = NULL WHERE project_id = ? AND origin = 'local'`).run(projectId);
       this.setPullCursor(projectId, 0);
     })();
   }

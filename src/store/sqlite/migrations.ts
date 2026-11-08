@@ -29,4 +29,12 @@ export const SQLITE_MIGRATIONS: string[] = [
   CREATE TABLE sync_state (project_id TEXT PRIMARY KEY, pull_cursor INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE vec_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
   `,
+  // 2: sessions get an origin so pulled sessions are never pushed back under the local user. Existing pulled sessions are
+  // recognized by having only hub-origin rows.
+  `
+  ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'local';
+  UPDATE sessions SET origin = 'hub'
+    WHERE EXISTS (SELECT 1 FROM observations o WHERE o.session_id = sessions.id AND o.origin = 'hub' UNION ALL SELECT 1 FROM summaries m WHERE m.session_id = sessions.id AND m.origin = 'hub')
+      AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.session_id = sessions.id AND o.origin = 'local' UNION ALL SELECT 1 FROM summaries m WHERE m.session_id = sessions.id AND m.origin = 'local');
+  `,
 ];

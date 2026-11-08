@@ -111,6 +111,20 @@ export function storeContract(name: string, open: () => Store): void {
       expect(s.getPullCursor(p.id)).toBe(42);
     });
 
+    it('relink reset: only local-origin rows become unsynced, pulled sessions are never pushed, cursor is 0', () => {
+      const p = s.getOrCreateProject('k', 'n'); const mine = sess(p.id); const theirs = sess(p.id, { userId: 'bob', origin: 'hub', syncedAt: 'pulled' });
+      s.upsertSession(mine); s.upsertSession(theirs);
+      expect(s.getSession(theirs.id)!.origin).toBe('hub'); expect(s.getSession(mine.id)!.origin).toBe('local');
+      s.insertObservations([obs({ projectId: p.id, sessionId: theirs.id, userId: 'bob', origin: 'hub', syncedAt: 'pulled' })]);
+      expect(s.listUnsynced('sessions', p.id, 10).map((x) => x.id)).toEqual([mine.id]);
+      s.markSynced('sessions', [mine.id], 'old-hub'); s.setPullCursor(p.id, 99);
+      s.resetProjectSync(p.id);
+      expect(s.getPullCursor(p.id)).toBe(0);
+      expect(s.listUnsynced('sessions', p.id, 10).map((x) => x.id)).toEqual([mine.id]);
+      expect(s.getSession(theirs.id)!.syncedAt).toBe('pulled');
+      expect(s.listUnsynced('observations', p.id, 10)).toHaveLength(0);
+    });
+
     it('embeddings: missing list and set', () => {
       const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id); s.upsertSession(a);
       const o = obs({ projectId: p.id, sessionId: a.id }); s.insertObservations([o]);
