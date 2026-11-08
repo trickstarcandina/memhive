@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripPrivate, sanitizeToolPayload, sanitizePrompt } from '../../src/hooks/sanitize.js';
+import { stripPrivate, sanitizeToolPayload, sanitizePrompt, redactSecrets } from '../../src/hooks/sanitize.js';
 
 describe('stripPrivate', () => {
   it('removes closed private blocks, case-insensitive, multiline', () => {
@@ -55,4 +55,27 @@ describe('sanitizeToolPayload', () => {
 
 describe('sanitizePrompt', () => {
   it('strips private and trims', () => expect(sanitizePrompt('  hi <private>x</private> ')).toBe('hi'));
+});
+
+describe('redactSecrets', () => {
+  const R = '<redacted>';
+  it.each([
+    ['key sk-ant-api03-abcdefghijklmnopqrstuv', 'key ' + R],
+    ['sk-abcdefghijklmnopqrstuvwx', R],
+    ['ghp_abcdefghijklmnopqrstuvwx', R],
+    ['github_pat_abcdefghijklmnopqrstuvwx', R],
+    ['AKIAABCDEFGHIJKLMNOP', R],
+    ['xoxb-1234567890-abcdef', R],
+    ['mh_abcdefghijklmnopqrstuvwx', R],
+    ['Authorization: Bearer abc.def-123456', 'Authorization: ' + R],
+    ['-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY----- after', R + ' after'],
+    ['DB_PASSWORD=hunter2hunter', 'DB_PASSWORD=' + R],
+    ['{"api_key": "abc"}', '{"api_key": "' + R + '"}'],
+  ])('redacts %s', (i, o) => expect(redactSecrets(i)).toBe(o));
+  it('leaves normal code alone', () => {
+    for (const c of ['const token = getToken()', 'const tokenizer = new Tokenizer()', 'let x = 5']) expect(redactSecrets(c)).toBe(c);
+  });
+  it('is applied inside sanitizeToolPayload', () => {
+    expect(sanitizeToolPayload({ a: 'x ghp_abcdefghijklmnopqrstuvwx' })).toEqual({ a: 'x ' + R });
+  });
 });

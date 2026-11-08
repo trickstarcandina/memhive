@@ -4,6 +4,7 @@ import type { Observation, Store, Summary } from '../store/types.js';
 import { ProviderError, type Embedder, type LlmProvider } from '../providers/types.js';
 import { SessionBuffer, type ToolEvent } from './session-buffer.js';
 import { OBSERVER_SYSTEM, SUMMARY_SYSTEM, buildObservationPrompt, buildSummaryPrompt } from './prompts.js';
+import { redactSecrets } from '../hooks/sanitize.js';
 import { parseObservations, parseSummary, type ObservationDraft } from './parser.js';
 
 export type { ToolEvent } from './session-buffer.js';
@@ -42,6 +43,7 @@ export class Observer {
     if (s.buffer.size() >= this.opts.flushCount) { void this.flush(s); return; }
     if (s.timer) clearTimeout(s.timer);
     s.timer = setTimeout(() => { s.timer = null; void this.flush(s); }, this.opts.idleMs);
+    s.timer.unref?.();
   }
 
   async onStop(ctx: SessionCtx): Promise<void> {
@@ -52,23 +54,27 @@ export class Observer {
     if (this._authFailed) return;
     try {
       const text = await this.deps.provider.complete({ system: SUMMARY_SYSTEM, user: buildSummaryPrompt({ projectName: ctx.projectName, prompt, observations: s.turnObservations }), maxTokens: 1024 });
-      const draft = parseSummary(text);
+      const parsed = parseSummary(text);
+      const draft = parsed && { request: redactSecrets(parsed.request), learned: redactSecrets(parsed.learned), completed: redactSecrets(parsed.completed), nextSteps: redactSecrets(parsed.nextSteps) };
       if (!draft) { this.deps.logger.warn('summary unparseable', { sessionId: ctx.sessionId }); return; }
       const summary: Summary = { id: newId(), projectId: ctx.projectId, sessionId: ctx.sessionId, userId: ctx.userId, ...draft, createdAt: new Date().toISOString(), origin: 'local', syncedAt: null };
       this.deps.store.insertSummaries([summary]);
       this.onStored?.(ctx.projectId);
     } catch (e) { this.handleProviderError(e, 'summary'); }
-    finally { s.turnObservations = []; }
+    finally {
+      s.turnObservations = [];
+      if (s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);
+    }
   }
 
   /** Plan 2 sets this to trigger sync after new rows. */
   onStored: ((projectId: string) => void) | null = null;
 
-  async flushAll(): Promise<void> { await Promise.all([...this.sessions.values()].map((s) => this.flush(s))); }
+  async flushAll(): Promise<void> { await Promise.allSettled([...this.sessions.values()].map((s) => this.flush(s))); }
 
   private async flush(s: SessionState): Promise<void> {
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
-    if (s.inflight) { await s.inflight; }
+    while (s.inflight) await s.inflight;
     const events = s.buffer.drain();
     if (events.length === 0 || this._authFailed) return;
     s.inflight = this.generate(s, events).finally(() => { s.inflight = null; });
@@ -76,6 +82,11 @@ export class Observer {
   }
 
   private async generate(s: SessionState, events: ToolEvent[]): Promise<void> {
+    try { await this.generateUnsafe(s, events); }
+    catch (e) { this.deps.logger.error('observation batch failed', { sessionId: s.ctx.sessionId, error: e instanceof Error ? e.message : String(e) }); }
+  }
+
+  private async generateUnsafe(s: SessionState, events: ToolEvent[]): Promise<void> {
     const { store, provider, logger } = this.deps; const ctx = s.ctx;
     const prompt = store.latestPrompt(ctx.sessionId)?.text ?? null;
     const recentTitles = store.listSessionObservations(ctx.sessionId, 10).map((o) => o.title);
@@ -85,7 +96,7 @@ export class Observer {
     const drafts = parseObservations(text);
     if (drafts === null) { logger.warn('observer output unparseable, batch dropped', { sessionId: ctx.sessionId, events: events.length }); return; }
     if (drafts.length === 0) return;
-    const rows = drafts.map((d) => this.toRow(ctx, d));
+    const rows = drafts.slice(0, 20).map((d) => this.toRow(ctx, d));
     store.insertObservations(rows);
     s.turnObservations.push(...rows);
     logger.info('observations stored', { sessionId: ctx.sessionId, count: rows.length });
@@ -94,7 +105,8 @@ export class Observer {
   }
 
   private toRow(ctx: SessionCtx, d: ObservationDraft): Observation {
-    return { id: newId(), projectId: ctx.projectId, sessionId: ctx.sessionId, userId: ctx.userId, ...d, createdAt: new Date().toISOString(), embeddingModel: null, origin: 'local', syncedAt: null };
+    const r = redactSecrets;
+    return { id: newId(), projectId: ctx.projectId, sessionId: ctx.sessionId, userId: ctx.userId, ...d, title: r(d.title), subtitle: r(d.subtitle), narrative: r(d.narrative), facts: d.facts.map(r), concepts: d.concepts.map(r), filesRead: d.filesRead.map(r), filesModified: d.filesModified.map(r), createdAt: new Date().toISOString(), embeddingModel: null, origin: 'local', syncedAt: null };
   }
 
   private async embed(rows: Observation[]): Promise<number> {

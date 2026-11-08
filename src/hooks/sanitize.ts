@@ -25,6 +25,25 @@ export function sanitizePrompt(text: string): string {
   return stripPrivate(text).trim();
 }
 
+const SECRET_PATTERNS: RegExp[] = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  /\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}/g,
+  /\b(?:ghp|gho|ghs)_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /\bmh_[A-Za-z0-9_-]{20,}/g,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
+];
+// Only literal values: quoted strings, or unquoted tokens that are not a call like getToken().
+const SECRET_ASSIGN = /\b([\w.-]*(?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]*["']?\s*[:=]\s*)(?:(["'])[^"'\n]*\2|[^\s"'`(),;]{6,}(?![^\s"'`,;]*\())/gi;
+
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const re of SECRET_PATTERNS) out = out.replace(re, '<redacted>');
+  return out.replace(SECRET_ASSIGN, (_m, pre: string, q?: string) => (q ? `${pre}${q}<redacted>${q}` : `${pre}<redacted>`));
+}
+
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   const tail = max >= 200 ? TAIL : 0;
@@ -34,7 +53,7 @@ function truncate(s: string, max: number): string {
 }
 
 function sanitizeString(s: string, max: number): string {
-  const noPrivate = stripPrivate(s);
+  const noPrivate = redactSecrets(stripPrivate(s));
   const noImages = noPrivate.replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
   return truncate(noImages, max);
 }
