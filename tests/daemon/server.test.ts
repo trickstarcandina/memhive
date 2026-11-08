@@ -135,10 +135,10 @@ describe('user id per linked hub', () => {
     try {
       const { key, name } = projectKeyFor(linkedDir);
       ctx.store.setProjectHub(ctx.store.getOrCreateProject(key, name).id, 'https://b.example');
-      const linked = ctx.resolveSession(ev({ hostSessionId: 'l1', cwd: linkedDir }));
+      const linked = ctx.resolveSession(ev({ hostSessionId: 'l1', cwd: linkedDir }))!;
       expect(linked.ctx.userId).toBe('bob');
       expect(ctx.store.getSession(linked.ctx.sessionId)!.userId).toBe('bob');
-      expect(ctx.resolveSession(ev({ hostSessionId: 'p1', cwd: plainDir })).ctx.userId).toBe('alice');
+      expect(ctx.resolveSession(ev({ hostSessionId: 'p1', cwd: plainDir }))!.ctx.userId).toBe('alice');
     } finally { ctx.store.close(); }
   });
 });

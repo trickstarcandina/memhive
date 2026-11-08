@@ -13,7 +13,8 @@ import { createLogger } from '../shared/logger.js';
 import { SqliteStore } from '../store/sqlite/store.js';
 import { createEmbedder, createProvider } from '../providers/factory.js';
 import { Observer, type SessionCtx } from '../observer/observer.js';
-import { projectKeyFor } from '../shared/project-key.js';
+import { projectKeyFor, type ProjectInfo } from '../shared/project-key.js';
+import { envDisabled, matchesAny, pauseReader } from '../shared/optout.js';
 import { newId } from '../shared/ids.js';
 import type { HookEvent } from '../hooks/types.js';
 import type { Project } from '../store/types.js';
@@ -57,17 +58,34 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   const userFor = (project: Project): string => { const c = loadCredentials(home); return (project.hubUrl && c.hubs[project.hubUrl]?.user) || defaultUser(c) || 'local'; };
   const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null, embedModel: settings.embed?.model ?? null });
   observer.onStored = (projectId) => sync.schedulePush(projectId);
+  const paused = pauseReader(home);
+  const disabled = envDisabled(env);
+  const excluded = (info: ProjectInfo) => info.disabled || matchesAny(settings.excludeProjects, info.key, info.top);
+  // Excluded sessions have no row to remember them by; without this every event of one would spawn git again.
+  const excludedSessions = new Set<string>();
   const ctx: DaemonContext = {
     home, store, observer, embedder, settings, logger, userId, sync, userFor,
+    pausedUntil: () => (disabled ? Infinity : paused()),
+    excludedCwd: (cwd) => excluded(projectKeyFor(cwd)),
     resolveSession(ev: HookEvent) {
+      if (ctx.pausedUntil() !== null) return null;
+      const sk = `${ev.host}\0${ev.hostSessionId}`;
+      if (excludedSessions.has(sk)) return null;
+      const skip = () => { if (excludedSessions.size >= 10_000) excludedSessions.clear(); excludedSessions.add(sk); return null; };
       let session = store.getSessionByHost(ev.host, ev.hostSessionId);
       // Existing session: reuse its project (no git spawns per event, no split on cwd change).
       let project = session ? store.getProject(session.projectId) : null;
-      if (!project) { const { key, name } = projectKeyFor(ev.cwd); project = store.getOrCreateProject(key, name); }
+      let branch = session?.branch ?? null;
+      if (project && matchesAny(settings.excludeProjects, project.key)) return skip();
+      if (!project) {
+        const info = projectKeyFor(ev.cwd);
+        if (excluded(info)) return skip();
+        project = store.getOrCreateProject(info.key, info.name); branch = info.branch;
+      }
       const user = session?.userId ?? userFor(project);
-      if (!session) { session = { id: newId(), projectId: project.id, userId: user, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null }; store.upsertSession(session); }
+      if (!session) { session = { id: newId(), projectId: project.id, userId: user, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null, branch }; store.upsertSession(session); }
       const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId: user };
-      return { ctx: sctx, project };
+      return { ctx: sctx, project, branch };
     },
   };
   return ctx;

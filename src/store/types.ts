@@ -1,6 +1,6 @@
 export type ObservationType = 'decision' | 'bugfix' | 'feature' | 'refactor' | 'discovery' | 'config' | 'problem' | 'workaround';
 export interface Project { id: string; key: string; name: string; hubUrl: string | null; createdAt: string }
-export interface Session { id: string; projectId: string; userId: string; host: string; hostSessionId: string; cwd: string; startedAt: string; endedAt: string | null; syncedAt: string | null; origin?: 'local' | 'hub' }   // origin defaults to 'local'; pulled sessions are 'hub'
+export interface Session { id: string; projectId: string; userId: string; host: string; hostSessionId: string; cwd: string; startedAt: string; endedAt: string | null; syncedAt: string | null; origin?: 'local' | 'hub'; branch?: string | null }   // origin defaults to 'local'; pulled sessions are 'hub'; branch is local only
 export interface Prompt { id: string; sessionId: string; text: string; createdAt: string }
 export interface Observation { id: string; projectId: string; sessionId: string; userId: string; type: ObservationType; title: string; subtitle: string; facts: string[]; narrative: string; concepts: string[]; filesRead: string[]; filesModified: string[]; createdAt: string; embeddingModel: string | null; origin: 'local' | 'hub'; syncedAt: string | null }
 export interface Summary { id: string; projectId: string; sessionId: string; userId: string; request: string; learned: string; completed: string; nextSteps: string; createdAt: string; origin: 'local' | 'hub'; syncedAt: string | null }

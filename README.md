@@ -132,7 +132,8 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
   "llm": { "provider": "openai-compat", "model": "qwen2.5:7b", "baseUrl": "http://localhost:11434/v1", "apiKey": "optional" },
   "embed": { "baseUrl": "http://localhost:11434/v1", "model": "bge-m3", "dims": 1024, "apiKey": "optional" },
   "contextTokens": 2000,
-  "context": { "includeOtherUsers": true }
+  "context": { "includeOtherUsers": true },
+  "excludeProjects": ["github.com/acme/secret-*", "/home/me/clients/**"]
 }
 ```
 
@@ -153,7 +154,18 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size (`embed.dims`). Setting it enables vector search; unset means FTS-only search. |
 | `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block, about 4 characters per token (`contextTokens`). |
 | `MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS` | `1` | Set to `0` to keep teammates' pulled rows out of the session-start context; MCP search still finds them (`context.includeOtherUsers`). |
+| `MEMHIVE_EXCLUDE_PROJECTS` | none | Comma-separated project keys or globs that are never recorded (`excludeProjects`). See [Opting out](#opting-out). |
+| `MEMHIVE_DISABLED` | unset | Set to `1` to turn memhive off: hooks exit at once without contacting the daemon, and MCP tools answer "memhive disabled". |
 | `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
+
+### Opting out
+
+- **Everything, for a while:** `memhive pause 1h` (or `30m`, `2d`; no duration pauses until `memhive resume`). The pause lives in `~/.memhive/state.json`, not in settings, and the daemon notices within 5 seconds. Nothing is recorded and session start injects no context while paused.
+- **Everything, for a shell or a CI job:** `MEMHIVE_DISABLED=1`.
+- **Some projects, always:** list them in `excludeProjects`. Each entry is a project key or a glob over keys, where `*` matches inside one `/` segment and `**` matches across segments. Entries are also matched against the repo's root directory, which is the only way to exclude a directory without a git remote. The daemon reads settings at start; restart it (`memhive daemon stop`) after a change.
+- **One repo, for everyone who clones it:** commit `.memhive.json` with `{ "disabled": true }` at the repo root (or in a subdirectory, for that part of the tree).
+
+An excluded or paused session gets an empty context, and its prompts and tool calls are dropped before they reach the observer. `memhive doctor` says when capture is paused or the current project is excluded. Exclusion is decided when a session starts; a session that is already running keeps going until it ends, unless its project key matches `excludeProjects`.
 
 ### Project identity
 
@@ -161,6 +173,7 @@ Memory is grouped by project. The key is the repo's `origin` remote, normalized:
 
 - A directory with no git `origin` gets a local key, `path:` plus a hash of its absolute path. It cannot be shared, and moving the directory starts a new memory.
 - Every package of a monorepo shares the repo's memory, and a fork with its own `origin` gets its own.
+- A package can have its own memory: commit `.memhive.json` with `{ "project": "github.com/acme/mono/packages/web" }` in the package directory. The nearest `.memhive.json` between the working directory and the repo root applies. The override must start with the repo's own key and a `/`. Any other value is ignored, because a committed file could otherwise point a cloned repo at another project's memory.
 
 ## Privacy
 

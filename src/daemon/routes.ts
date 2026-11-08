@@ -29,7 +29,14 @@ function resolveIds(ctx: DaemonContext, raw: string): string[] {
 export async function handleRoute(ctx: DaemonContext, method: string, url: URL, body: unknown): Promise<{ status: number; body: unknown }> {
   const { store } = ctx; const q = url.searchParams; const path = url.pathname;
 
-  if (method === 'GET' && path === '/v1/status') return ok({ observerAuthFailed: ctx.observer.authFailed, pushBlocked: ctx.sync?.blockedProjects?.() ?? [], hubErrors: ctx.sync?.hubErrors?.() ?? [] });
+  if (method === 'GET' && path === '/v1/status') {
+    const until = ctx.pausedUntil(); const cwd = q.get('cwd');
+    return ok({
+      observerAuthFailed: ctx.observer.authFailed, pushBlocked: ctx.sync?.blockedProjects?.() ?? [], hubErrors: ctx.sync?.hubErrors?.() ?? [],
+      paused_until: until === null ? null : until === Infinity ? 'indefinite' : new Date(until).toISOString(),
+      excluded: cwd ? ctx.excludedCwd(cwd) : null,
+    });
+  }
 
   if (method === 'GET' && path === '/v1/project') {
     const cwd = q.get('cwd') ?? process.cwd();
@@ -40,7 +47,9 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
   if (method === 'POST' && path === '/v1/sessions/start') {
     const ev = body as HookEvent;
     if (!ev?.hostSessionId || !ev.cwd) return err(400, 'bad_event', 'hostSessionId and cwd required');
-    const { project } = ctx.resolveSession(ev);
+    const resolved = ctx.resolveSession(ev);
+    if (!resolved) return ok({ context: '', excluded: true });
+    const { project } = resolved;
     if (ctx.sync && project.hubUrl) { await ctx.sync.startPull(project); ctx.sync.schedulePush(project.id); }   // push also retries rows left over from an earlier daemon
     // Rows pulled from teammates can be left out of auto-injected context (they stay searchable through MCP).
     const me = ctx.userFor(project); const mine = <T extends { userId: string; origin?: string }>(rows: T[]) => ctx.settings.context?.includeOtherUsers === false ? rows.filter((r) => r.origin === 'local' || r.userId === me) : rows;   // own rows survive a login or rename
@@ -54,7 +63,9 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
   if (method === 'POST' && path === '/v1/events') {
     const ev = body as HookEvent;
     if (!ev?.hostSessionId || !ev.cwd || !ev.event) return err(400, 'bad_event', 'invalid event');
-    const { ctx: sctx } = ctx.resolveSession(ev);
+    const resolved = ctx.resolveSession(ev);
+    if (!resolved) return ok({}, 202);   // paused, disabled or excluded: dropped before the observer sees it
+    const { ctx: sctx } = resolved;
     const warn = (e: unknown) => ctx.logger.warn('event handling failed', { event: ev.event, error: String(e) });
     switch (ev.event) {
       case 'prompt': ctx.observer.onPrompt(sctx, ev.prompt ?? ''); break;

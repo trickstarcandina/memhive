@@ -18,6 +18,7 @@ usage: memhive <command>
   key <create|list|revoke|rotate>   user <list|remove>   project list
   login <hub-url> [--key-stdin]
   link <hub-url> | unlink | sync
+  pause [30m|1h|2d] | resume
   version
 `;
 
@@ -38,6 +39,8 @@ const SUB_USAGE: Record<string, string> = {
   link: 'usage: memhive link <hub-url>   (links the current project to a hub you are logged in to)\n',
   unlink: 'usage: memhive unlink   (stops syncing the current project)\n',
   sync: 'usage: memhive sync   (push and pull the current project now)\n',
+  pause: 'usage: memhive pause [duration like 30m, 1h, 2d]   (record nothing until then; no duration: until memhive resume)\n',
+  resume: 'usage: memhive resume   (ends a pause)\n',
 };
 
 // engines is advisory to npm; without this an old Node fails with a native ABI or syntax error.
@@ -68,6 +71,8 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'link': return (await import('./commands/link.js')).linkCommand(rest, { stdout, stderr });
     case 'unlink': return (await import('./commands/link.js')).linkCommand(rest, { stdout, stderr }, { unlink: true });
     case 'sync': return (await import('./commands/sync.js')).syncCommand(rest, { stdout, stderr });
+    case 'pause': return (await import('./commands/pause.js')).pauseCommand(rest, { stdout, stderr });
+    case 'resume': return (await import('./commands/pause.js')).pauseCommand(rest, { stdout, stderr }, { resume: true });
     case 'uninstall': return (await import('./commands/uninstall.js')).uninstallCommand(rest, { stdout, stderr });
     default: stderr(`memhive: unknown command "${cmd}"\n${USAGE}`); return 1;
   }

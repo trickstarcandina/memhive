@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-export interface Paths { home: string; db: string; settings: string; credentials: string; daemonInfo: string; logs: string; marketplace: string; plugin: string }
+export interface Paths { home: string; db: string; settings: string; credentials: string; daemonInfo: string; state: string; logs: string; marketplace: string; plugin: string }
 
 export function resolvePaths(home = process.env.MEMHIVE_HOME ?? path.join(homedir(), '.memhive')): Paths {
   return {
@@ -11,6 +11,7 @@ export function resolvePaths(home = process.env.MEMHIVE_HOME ?? path.join(homedi
     settings: path.join(home, 'settings.json'),
     credentials: path.join(home, 'credentials.json'),
     daemonInfo: path.join(home, 'daemon.json'),
+    state: path.join(home, 'state.json'),
     logs: path.join(home, 'logs'),
     marketplace: path.join(home, 'marketplace'),
     plugin: path.join(home, 'marketplace', 'plugin'),
@@ -18,7 +19,7 @@ export function resolvePaths(home = process.env.MEMHIVE_HOME ?? path.join(homedi
 }
 
 // Names memhive writes in its home and logs dir; a dir holding anything else is not ours to tighten.
-const OWN_ENTRY = /^(?:memhive\.db(?:-wal|-shm|-journal)?|settings\.json|credentials\.json|daemon\.(?:json|lock(?:\.break)?)|logs|marketplace|[\w-]+\.log(?:\.1|\.rotate)?)$|\.tmp$/;
+const OWN_ENTRY = /^(?:memhive\.db(?:-wal|-shm|-journal)?|settings\.json|credentials\.json|state\.json|daemon\.(?:json|lock(?:\.break)?)|logs|marketplace|[\w-]+\.log(?:\.1|\.rotate)?)$|\.tmp$/;
 
 const warnedDirs = new Set<string>();
 let warnSink = (msg: string): void => { process.stderr.write(msg); };

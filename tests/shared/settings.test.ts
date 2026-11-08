@@ -82,4 +82,10 @@ describe('settings', () => {
     rmSync(path.join(home, 'settings.json'));
     expect(loadSettings(home, { MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS: '0' }).context.includeOtherUsers).toBe(false);
   });
+  it('excludeProjects: file list, env comma list wins, junk entries dropped', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ excludeProjects: ['github.com/a/*', 3, ' ', 'x'] }));
+    expect(loadSettings(home, {}).excludeProjects).toEqual(['github.com/a/*', 'x']);
+    expect(loadSettings(home, { MEMHIVE_EXCLUDE_PROJECTS: ' p/** , q ,' }).excludeProjects).toEqual(['p/**', 'q']);
+  });
 });

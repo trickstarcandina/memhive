@@ -5,9 +5,11 @@ import { readDaemonInfo } from '../../daemon/info.js';
 import { DaemonClient } from '../../daemon/client.js';
 import { createEmbedder, createProvider } from '../../providers/factory.js';
 import { VERSION } from '../../shared/version.js';
+import { envDisabled, matchesAny, pausedUntil } from '../../shared/optout.js';
+import { projectKeyFor } from '../../shared/project-key.js';
 
 // Never prints secrets: API keys and the daemon token are reported only as set / not set.
-export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: string; env?: NodeJS.ProcessEnv; ping?: boolean } = {}): Promise<number> {
+export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: string; env?: NodeJS.ProcessEnv; ping?: boolean; cwd?: string } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const env = opts.env ?? process.env;
   let problems = 0;
   const line = (ok: boolean, text: string) => { io.stdout(`${ok ? 'ok  ' : 'FAIL'} ${text}\n`); if (!ok) problems++; };
@@ -27,6 +29,10 @@ export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: s
       if (emb) { const [v] = await emb.embed(['ping']); line(v.length === emb.dims, `embedder ping: ${v.length} dims`); }
     } catch (e) { line(false, `embedder ping failed: ${e instanceof Error ? e.message : e}`); }
   }
+  const until = envDisabled(env) ? Infinity : pausedUntil(home);
+  if (until !== null) io.stdout(`info capture ${envDisabled(env) ? 'disabled by MEMHIVE_DISABLED' : until === Infinity ? 'paused until `memhive resume`' : `paused until ${new Date(until).toISOString()}`}\n`);
+  const here = projectKeyFor(opts.cwd ?? process.cwd());
+  if (here.disabled || matchesAny(s.excludeProjects, here.key, here.top)) io.stdout(`info this project (${here.key}) is excluded from capture (${here.disabled ? '.memhive.json' : 'excludeProjects'})\n`);
   const info = readDaemonInfo(home);
   const alive = info ? await new DaemonClient(info).health() : false;
   line(true, alive ? `daemon running on port ${info!.port}` : 'daemon not running (starts on first hook)');

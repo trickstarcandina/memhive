@@ -37,7 +37,7 @@ describe('hub protocol', () => {
     expect(r.pushed).toBeNull(); expect(r.pulled).toBe(0);
     expect(r.error).toMatch(/^hub_protocol: .*protocol 2.*upgrade memhive/);
     expect(t.urls.filter((u) => !u.endsWith('/v1/config'))).toEqual([]);
-    const ctx = { store: t.store, sync: t.engine, observer: { authFailed: false } } as unknown as DaemonContext;
+    const ctx = { store: t.store, sync: t.engine, observer: { authFailed: false }, pausedUntil: () => null } as unknown as DaemonContext;
     const st = (await handleRoute(ctx, 'GET', new URL('http://x/v1/status'), undefined)).body as { hubErrors: Array<{ hub: string; error: string }> };
     expect(st.hubErrors).toEqual([{ hub: hubUrl, error: expect.stringContaining('hub_protocol') }]);
   });

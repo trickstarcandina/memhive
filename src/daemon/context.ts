@@ -20,7 +20,12 @@ export interface SyncHooks {
 export interface DaemonContext {
   home: string; store: Store; observer: Observer; embedder: Embedder | null; settings: Settings; logger: Logger; userId: string;
   sync: SyncHooks | null;
-  resolveSession(ev: HookEvent): { ctx: SessionCtx; project: Project };
+  /** null: memhive is paused or disabled, or the project is excluded; the event must not be recorded. */
+  resolveSession(ev: HookEvent): { ctx: SessionCtx; project: Project; branch: string | null } | null;
+  /** Epoch ms the pause ends (Infinity: until resume), or null; MEMHIVE_DISABLED in the daemon's env counts as Infinity. */
+  pausedUntil(): number | null;
+  /** Exclusion by settings.excludeProjects or `.memhive.json` for a working directory (spawns git). */
+  excludedCwd(cwd: string): boolean;
   /** The user of the hub the project is linked to; else the default user (`userId`). */
   userFor(project: Project): string;
 }

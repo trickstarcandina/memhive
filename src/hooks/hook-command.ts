@@ -5,14 +5,16 @@ import { DaemonClient } from '../daemon/client.js';
 import { createLogger } from '../shared/logger.js';
 import { resolvePaths, setHomeWarningSink } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
+import { envDisabled } from '../shared/optout.js';
 
-export interface HookDeps { readStdin(): Promise<string>; ensureDaemon: typeof defaultEnsureDaemon; fetchImpl: typeof fetch; stdout(s: string): void; home: string; now(): Date }
+export interface HookDeps { readStdin(): Promise<string>; ensureDaemon: typeof defaultEnsureDaemon; fetchImpl: typeof fetch; stdout(s: string): void; home: string; now(): Date; env: NodeJS.ProcessEnv }
 
 const EVENT_TIMEOUT_MS = 250;
 const START_TIMEOUT_MS = 5000;
 
 export async function runHook(args: string[], deps: Partial<HookDeps> = {}): Promise<number> {
-  const d: HookDeps = { readStdin: defaultReadStdin, ensureDaemon: defaultEnsureDaemon, fetchImpl: fetch, stdout: (s) => process.stdout.write(s), home: resolvePaths().home, now: () => new Date(), ...deps };
+  if (envDisabled(deps.env ?? process.env)) return 0;   // opted out: no stdin read, no log file, no daemon
+  const d: HookDeps = { readStdin: defaultReadStdin, ensureDaemon: defaultEnsureDaemon, fetchImpl: fetch, stdout: (s) => process.stdout.write(s), home: resolvePaths().home, now: () => new Date(), env: process.env, ...deps };
   const log = createLogger(d.home, 'hook');
   setHomeWarningSink((m) => log.warn(m.trim()));   // spec: a hook never writes to stderr
   try {
