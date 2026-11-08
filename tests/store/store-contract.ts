@@ -118,6 +118,12 @@ export function storeContract(name: string, open: () => Store): void {
       expect(s.getPullCursor(p.id)).toBe(0);
       s.setPullCursor(p.id, 42);
       expect(s.getPullCursor(p.id)).toBe(42);
+      expect(s.getHubEpoch(p.id)).toBeNull();
+      s.setHubEpoch(p.id, 'e1');
+      expect(s.getHubEpoch(p.id)).toBe('e1');
+      expect(s.getPullCursor(p.id)).toBe(42);
+      s.resetProjectSync(p.id);
+      expect(s.getHubEpoch(p.id)).toBeNull();
     });
 
     it('relink reset: only local-origin rows become unsynced, pulled sessions are never pushed, cursor is 0', () => {

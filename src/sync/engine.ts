@@ -180,15 +180,21 @@ export class SyncEngine implements SyncHooks {
       let page;
       try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now())); }
       catch (e) { this.failed(project, 'pull', e); break; }
-      // A cursor past the hub's last seq means the hub lost its data (restored or recreated): pull from 0 and push local rows again.
-      // An older hub without max_seq skips this check.
+      // A cursor past the hub's last seq, or a new hub epoch (project id), means the hub lost its data (restored or recreated):
+      // pull from 0 and push local rows again. An older hub without max_seq / epoch skips that check.
       // At most one reset per call, and the deadline still applies, so a buggy hub cannot loop us.
-      if (!wasReset && Number.isSafeInteger(page.max_seq) && page.max_seq >= 0 && since > page.max_seq) {
-        logger.warn('pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
+      const epoch = typeof page.epoch === 'string' && page.epoch ? page.epoch : null;
+      const knownEpoch = epoch ? store.getHubEpoch(project.id) : null;
+      const newEpoch = epoch !== null && knownEpoch !== null && knownEpoch !== epoch;
+      const pastEnd = Number.isSafeInteger(page.max_seq) && page.max_seq >= 0 && since > page.max_seq;
+      if (!wasReset && (newEpoch || pastEnd)) {
+        logger.warn(newEpoch ? 'hub epoch changed (hub recreated?); resyncing project' : 'pull cursor is past the hub max_seq (hub reset?); resyncing project', { hub: project.hubUrl, cursor: since, maxSeq: page.max_seq });
         store.resetProjectSync(project.id); since = 0; wasReset = true; this.schedulePush(project.id);
+        if (epoch) store.setHubEpoch(project.id, epoch);
         if (Date.now() > deadline) break;
         continue;
       }
+      if (epoch && knownEpoch !== epoch) store.setHubEpoch(project.id, epoch);   // first seen, or changed again after this call's reset
       const now = new Date().toISOString();
       for (const s of page.sessions) {
         // A session already pulled is updated (the hub re-logs it when it ends or its cwd changes). Our own sessions, and a

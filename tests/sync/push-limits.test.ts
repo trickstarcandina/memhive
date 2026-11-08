@@ -219,6 +219,36 @@ describe('pull robustness', () => {
     expect(reset).toHaveBeenCalledTimes(1);
     expect(pulls).toBeGreaterThan(1);
   });
+  it('a new hub epoch (hub recreated and already past our cursor) restarts the pull once and re-queues local rows', async () => {
+    let fake: unknown = null;
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => fake && String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify(fake), { status: 200 }) : inner(url, init) });
+    addObs(t, 1, null);
+    await t.engine.push(t.project);
+    await t.engine.pull(t.project, 2000);
+    const hubId = (await t.hs.getProjectByKey(t.project.key))!.id;
+    expect(t.store.getHubEpoch(t.project.id)).toBe(hubId);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
+    fake = { sessions: [], observations: [], summaries: [], next_seq: 5000, has_more: false, max_seq: 5000, epoch: 'new-hub' };
+    const reset = vi.spyOn(t.store, 'resetProjectSync');
+    await t.engine.pull(t.project, 2000);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(t.store.getHubEpoch(t.project.id)).toBe('new-hub');
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
+    await t.engine.pull(t.project, 2000);
+    expect(reset).toHaveBeenCalledTimes(1);   // same epoch again: no second reset
+  });
+  it('the first epoch seen is stored without a reset, and a hub without epoch never resets on it', async () => {
+    let page: Record<string, unknown> = { sessions: [], observations: [], summaries: [], next_seq: 50, has_more: false, max_seq: 50 };
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify(page), { status: 200 }) : inner(url, init) });
+    const reset = vi.spyOn(t.store, 'resetProjectSync');
+    t.store.setPullCursor(t.project.id, 50);
+    await t.engine.pull(t.project, 1000);
+    expect(t.store.getHubEpoch(t.project.id)).toBeNull();
+    page = { ...page, epoch: 'e1' };
+    await t.engine.pull(t.project, 1000);
+    expect(t.store.getHubEpoch(t.project.id)).toBe('e1');
+    expect(reset).not.toHaveBeenCalled();
+  });
   it('a max_seq that is not a safe non-negative integer is ignored', async () => {
     for (const max_seq of [-1, 1.5, 'x', 1e300]) {
       const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).includes('/v1/sync/pull') ? new Response(JSON.stringify({ sessions: [], observations: [], summaries: [], next_seq: 50, has_more: false, max_seq }), { status: 200 }) : inner(url, init) });

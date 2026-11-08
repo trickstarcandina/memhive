@@ -55,6 +55,8 @@ describe('hub http', () => {
     expect(beyond.json.next_seq).toBe(999999); expect(beyond.json.has_more).toBe(false);
     expect(beyond.json.max_seq).toBe(pull.json.next_seq);   // lets a client with a cursor past the end detect a hub reset
     expect((await call(bobKey, 'GET', '/v1/sync/pull?project_key=nope&since=5')).json.max_seq).toBe(0);
+    expect(pull.json.epoch).toEqual(expect.any(String));   // the hub project id: a recreated hub gives a new one
+    expect((await call(bobKey, 'GET', '/v1/sync/pull?project_key=nope&since=5')).json.epoch).toBeUndefined();
   });
   it('re-pushing the same session from another machine is idempotent', async () => {
     const sid = newId(); const s = hsess('x', { id: sid });

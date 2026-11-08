@@ -205,8 +205,12 @@ export class SqliteStore implements Store {
   resetProjectSync(projectId: string): void {
     this.db.transaction(() => {
       for (const t of ['sessions', 'observations', 'summaries']) this.db.prepare(`UPDATE ${t} SET synced_at = NULL WHERE project_id = ? AND origin = 'local'`).run(projectId);
-      this.setPullCursor(projectId, 0);
+      this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor, hub_epoch) VALUES (?, 0, NULL) ON CONFLICT(project_id) DO UPDATE SET pull_cursor = 0, hub_epoch = NULL').run(projectId);
     })();
+  }
+  getHubEpoch(projectId: string): string | null { const r = this.db.prepare('SELECT hub_epoch FROM sync_state WHERE project_id = ?').get(projectId) as Row | undefined; return (r?.hub_epoch as string | null | undefined) ?? null; }
+  setHubEpoch(projectId: string, epoch: string): void {
+    this.db.prepare('INSERT INTO sync_state(project_id, pull_cursor, hub_epoch) VALUES (?, 0, ?) ON CONFLICT(project_id) DO UPDATE SET hub_epoch = excluded.hub_epoch').run(projectId, epoch);
   }
   countObservations(projectId: string): number { return Number((this.db.prepare('SELECT COUNT(*) c FROM observations WHERE project_id = ?').get(projectId) as Row).c); }
   countSessions(projectId: string): number { return Number((this.db.prepare('SELECT COUNT(*) c FROM sessions WHERE project_id = ?').get(projectId) as Row).c); }

@@ -37,7 +37,9 @@ export interface Store {
   markSynced(table: 'sessions' | 'observations' | 'summaries', ids: string[], at: string): void;
   getPullCursor(projectId: string): number;
   setPullCursor(projectId: string, cursor: number): void;
-  resetProjectSync(projectId: string): void;   // relink: local-origin rows are unsynced again (pulled rows stay), pull restarts from 0
+  getHubEpoch(projectId: string): string | null;   // last hub epoch seen in a pull; null = none yet
+  setHubEpoch(projectId: string, epoch: string): void;
+  resetProjectSync(projectId: string): void;   // relink: local-origin rows are unsynced again (pulled rows stay), pull restarts from 0, epoch forgotten
   countObservations(projectId: string): number;
   countSessions(projectId: string): number;
   lastActivity(projectId: string): string | null;         // max(observations.created_at)

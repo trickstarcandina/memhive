@@ -37,4 +37,8 @@ export const SQLITE_MIGRATIONS: string[] = [
     WHERE EXISTS (SELECT 1 FROM observations o WHERE o.session_id = sessions.id AND o.origin = 'hub' UNION ALL SELECT 1 FROM summaries m WHERE m.session_id = sessions.id AND m.origin = 'hub')
       AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.session_id = sessions.id AND o.origin = 'local' UNION ALL SELECT 1 FROM summaries m WHERE m.session_id = sessions.id AND m.origin = 'local');
   `,
+  // 3: the hub epoch (hub project id) last seen per project, to detect a recreated hub that already grew past our cursor.
+  `
+  ALTER TABLE sync_state ADD COLUMN hub_epoch TEXT;
+  `,
 ];
