@@ -16,12 +16,13 @@ const headerKey = (line: string) => { const m = stripComment(line).trim().match(
 // shortcut: line-based edit (keeps bytes); multi-line strings/arrays are not tracked, so callers must use setTomlBooleanChecked.
 export function setTomlBoolean(content: string, tableHeader: string, key: string, value: boolean): string {
   const want = headerKey(tableHeader)!;
-  const line = `${key} = ${value ? 'true' : 'false'}`;
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';   // keep the file's line endings
+  const line = `${key} = ${value ? 'true' : 'false'}${eol === '\r\n' ? '\r' : ''}`;   // lines are split on \n only
   const lines = content.split('\n');
   const start = lines.findIndex((l) => headerKey(l) === want);
   if (start === -1) {
     const trimmed = content.replace(/\s+$/, '');
-    return `${trimmed}${trimmed ? '\n\n' : ''}${tableHeader}\n${line}\n`;
+    return `${trimmed}${trimmed ? eol + eol : ''}${tableHeader}${eol}${line.replace(/\r$/, '')}${eol}`;
   }
   let end = start + 1;
   while (end < lines.length && !/^\s*\[/.test(lines[end])) end++;

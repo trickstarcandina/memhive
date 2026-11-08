@@ -14,24 +14,40 @@ const DEFAULTS: ObserverOptions = { flushCount: 8, idleMs: 5000, maxAgeMs: 30000
 
 interface SessionState { buffer: SessionBuffer; timer: NodeJS.Timeout | null; inflight: Promise<void> | null; turnObservations: Observation[]; ctx: SessionCtx; touchedAt: number }
 const IDLE_DROP_MS = 30 * 60 * 1000;
+// After a 401/403 the observer stays paused until settings give a new provider, or this long has passed (then one new try).
+const AUTH_RETRY_MS = 15 * 60 * 1000;
 
 export const embeddingText = (o: Pick<Observation, 'title' | 'subtitle' | 'facts' | 'narrative'>) => [o.title, o.subtitle, ...o.facts, o.narrative].filter(Boolean).join('\n');
 
 export class Observer {
   private sessions = new Map<string, SessionState>();
   private opts: ObserverOptions;
-  private _authFailed = false;
-  private summarizedPrompt = new Map<string, string>();
-  constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger }, opts: Partial<ObserverOptions> = {}) {
+  private authFailedAt: number | null = null;
+  // Session id -> prompt id last summarized; pruned with idle sessions (Codex sends no SessionEnd).
+  private summarizedPrompt = new Map<string, { promptId: string; at: number }>();
+  constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger; reloadProvider?: () => LlmProvider | null }, opts: Partial<ObserverOptions> = {}) {
     this.opts = { ...DEFAULTS, ...opts };
   }
   /** Test seam: live session entries. */
   get sessionCount(): number { return this.sessions.size; }
-  get authFailed(): boolean { return this._authFailed; }
+  get authFailed(): boolean { return this.authFailedAt !== null; }
+
+  /** True while an auth failure pauses provider calls; a changed provider (settings) or the cooldown lifts it. */
+  private paused(): boolean {
+    if (this.authFailedAt === null) return false;
+    const next = this.deps.reloadProvider?.() ?? null;
+    if (next) { this.deps.provider = next; this.authFailedAt = null; this.deps.logger.info('provider reloaded after auth failure'); return false; }
+    if (Date.now() - this.authFailedAt < AUTH_RETRY_MS) return true;
+    this.authFailedAt = null;
+    return false;
+  }
+  /** Test seam: live summary markers. */
+  get summaryMarkerCount(): number { return this.summarizedPrompt.size; }
 
   private state(ctx: SessionCtx): SessionState {
     const now = Date.now();
     for (const [id, o] of this.sessions) if (id !== ctx.sessionId && now - o.touchedAt > IDLE_DROP_MS && !o.inflight) { if (o.timer) clearTimeout(o.timer); this.sessions.delete(id); }
+    for (const [id, m] of this.summarizedPrompt) if (id !== ctx.sessionId && now - m.at > IDLE_DROP_MS) this.summarizedPrompt.delete(id);
     let s = this.sessions.get(ctx.sessionId);
     if (!s) { s = { buffer: new SessionBuffer(this.opts.maxEvents, this.opts.maxAgeMs), timer: null, inflight: null, turnObservations: [], ctx, touchedAt: now }; this.sessions.set(ctx.sessionId, s); }
     s.touchedAt = now;
@@ -59,32 +75,44 @@ export class Observer {
       await this.flush(s);
       await this.summarize(s, ctx);
     } finally {
-      s.turnObservations = [];
-      if (s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);
+      // A failed summary keeps its turn observations so SessionEnd can retry it.
+      if (s.buffer.size() === 0 && !s.inflight && !s.timer && s.turnObservations.length === 0) this.sessions.delete(ctx.sessionId);
     }
   }
 
   /** Session end: summarize only if the last Stop did not already cover the latest prompt. */
   async onSessionEnd(ctx: SessionCtx): Promise<void> {
-    try { await this.onStop(ctx); } finally { this.summarizedPrompt.delete(ctx.sessionId); }
+    try { await this.onStop(ctx); } finally {
+      this.summarizedPrompt.delete(ctx.sessionId);
+      const s = this.sessions.get(ctx.sessionId);
+      if (s && s.buffer.size() === 0 && !s.inflight && !s.timer) this.sessions.delete(ctx.sessionId);   // no retry after the end
+    }
   }
 
   private async summarize(s: SessionState, ctx: SessionCtx): Promise<void> {
     const latest = this.deps.store.latestPrompt(ctx.sessionId);
-    if (latest && this.summarizedPrompt.get(ctx.sessionId) === latest.id) return;
-    if (latest) this.summarizedPrompt.set(ctx.sessionId, latest.id);
+    const prev = this.summarizedPrompt.get(ctx.sessionId);
+    if (latest && prev?.promptId === latest.id) return;
     const prompt = latest?.text ?? null;
-    if (s.turnObservations.length === 0 && (prompt ?? '').length < 20) return;
-    if (this._authFailed) return;
+    const observations = s.turnObservations;
+    if (observations.length === 0 && (prompt ?? '').length < 20) { s.turnObservations = []; return; }
+    if (this.paused()) return;
+    // Claim the turn before awaiting: a racing Stop/SessionEnd then sees it summarized (or nothing new without a prompt row).
+    if (latest) this.summarizedPrompt.set(ctx.sessionId, { promptId: latest.id, at: Date.now() });
+    s.turnObservations = [];
+    const unclaim = () => {
+      if (latest && this.summarizedPrompt.get(ctx.sessionId)?.promptId === latest.id) { if (prev) this.summarizedPrompt.set(ctx.sessionId, prev); else this.summarizedPrompt.delete(ctx.sessionId); }
+      s.turnObservations = [...observations, ...s.turnObservations];
+    };
     try {
-      const text = await this.deps.provider.complete({ system: SUMMARY_SYSTEM, user: buildSummaryPrompt({ projectName: ctx.projectName, prompt, observations: s.turnObservations }), maxTokens: 1024 });
+      const text = await this.deps.provider.complete({ system: SUMMARY_SYSTEM, user: buildSummaryPrompt({ projectName: ctx.projectName, prompt, observations }), maxTokens: 1024 });
       const parsed = parseSummary(text);
       const draft = parsed && { request: redactSecrets(parsed.request), learned: redactSecrets(parsed.learned), completed: redactSecrets(parsed.completed), nextSteps: redactSecrets(parsed.nextSteps) };
       if (!draft) { this.deps.logger.warn('summary unparseable', { sessionId: ctx.sessionId }); return; }
       const summary: Summary = { id: newId(), projectId: ctx.projectId, sessionId: ctx.sessionId, userId: ctx.userId, ...draft, createdAt: new Date().toISOString(), origin: 'local', syncedAt: null };
       this.deps.store.insertSummaries([summary]);
       this.onStored?.(ctx.projectId);
-    } catch (e) { this.handleProviderError(e, 'summary'); }
+    } catch (e) { unclaim(); this.handleProviderError(e, 'summary'); }
   }
 
   /** Plan 2 sets this to trigger sync after new rows. */
@@ -96,7 +124,7 @@ export class Observer {
     if (s.timer) { clearTimeout(s.timer); s.timer = null; }
     while (s.inflight) await s.inflight;
     const events = s.buffer.drain();
-    if (events.length === 0 || this._authFailed) return;
+    if (events.length === 0 || this.paused()) return;
     s.inflight = this.generate(s, events).finally(() => { s.inflight = null; });
     await s.inflight;
   }
@@ -148,7 +176,7 @@ export class Observer {
 
   private handleProviderError(e: unknown, stage: string): void {
     const kind = e instanceof ProviderError ? e.kind : 'other';
-    if (kind === 'auth') this._authFailed = true;
+    if (kind === 'auth') this.authFailedAt = Date.now();
     this.deps.logger.warn(`${stage} dropped: provider ${kind}`, { error: e instanceof Error ? e.message : String(e) });
   }
 }

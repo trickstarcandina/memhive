@@ -3,7 +3,7 @@ import type { Observation } from '../store/types.js';
 
 const est = (o: Observation) => Math.ceil((o.title.length + o.subtitle.length + o.narrative.length + o.facts.join(' ').length) / 4);
 // Stored text is data: keep each field on one line (control chars incl. newlines become spaces).
-const line = (s: string) => s.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').trim();
+const line = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim();
 
 export function formatIndex(obs: Observation[]): string {
   if (obs.length === 0) return 'No observations found.';
@@ -11,8 +11,9 @@ export function formatIndex(obs: Observation[]): string {
   return ['| ID | Time | Type | Title | User | ~tokens |', '|----|------|------|-------|------|---------|', ...rows].join('\n');
 }
 
-// Narrative is model-written data: fence it and defuse lines that could pass as headings or separators.
-const fence = (n: string) => ['<<<narrative', ...n.replace(/\r\n|[\r\u2028\u2029\u0085]/g, '\n').split('\n').map((l) => (/^\s*(#|---|<<<|narrative>>>)/.test(l) ? ` ${l.trimStart()}` : l)), 'narrative>>>'].join('\n');
+// Narrative is model-written data: fence it and defuse lines that could pass as headings, breaks or the fence itself.
+// A leading backslash escapes them in CommonMark; mere indentation does not (up to 3 spaces still count).
+const fence = (n: string) => ['<<<narrative', ...n.replace(/\r\n|[\r\v\f\u2028\u2029\u0085]/g, '\n').split('\n').map((l) => (/^\s*(#|[-*_=]{3,}|<<<|narrative>>>)/.test(l) ? `\\${l.trimStart()}` : l)), 'narrative>>>'].join('\n');
 
 export function formatFull(obs: Observation[]): string {
   if (obs.length === 0) return 'No observations found.';

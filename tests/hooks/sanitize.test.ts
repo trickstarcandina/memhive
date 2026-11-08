@@ -41,6 +41,27 @@ describe('sanitizeToolPayload', () => {
     expect(out).toContain('<elided chars=150>');
     expect(out.length).toBeLessThanOrEqual(70);
   });
+  it('carries an open private block across sibling fields and object keys', () => {
+    expect(sanitizeToolPayload(['keep <private>s1', 'inner', 1234, 's2</private> after'])).toEqual(['keep ', '', null, ' after']);
+    // Keys inside the open block are private too.
+    expect(sanitizeToolPayload({ a: 'keep <private>s1', b: 'inner', c: 's2</private> after', d: 'shown' })).toEqual({ a: 'keep ', '': ' after', d: 'shown' });
+    expect(sanitizeToolPayload({ ['x<private>k</private>']: 'v', ['<private>k2']: 'gone', ['</private>z']: 'back' })).toEqual({ x: 'v', '': '', z: 'back' });
+  });
+  it('redacts a secret-named key whose name is split by a private tag', () => {
+    expect(sanitizeToolPayload({ 'pass<private>x</private>word': 'hunter2' })).toEqual({ password: '<redacted>' });
+    expect(sanitizeToolPayload({ '<private>password</private>': 'hunter2', 'x<private>token</private>': 42 })).toEqual({ '': '<redacted>', x: '<redacted>' });
+    expect(sanitizeToolPayload({ 'api_<private>z</private>key': 'abc', 'password<private>_count</private>': 7 })).toEqual({ api_key: '<redacted>', password: '<redacted>' });
+  });
+  it('never splits a surrogate pair when truncating', () => {
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const out = sanitizeToolPayload('ab' + '\u{1F600}'.repeat(300) + 'c', 201) as string;
+    expect(out).toContain('<elided');
+    expect(out).not.toMatch(lone);
+  });
+  it('elides non-base64 data:image urls', () => {
+    expect(sanitizeToolPayload('x data:image/svg+xml,%3Csvg%3E%3C/svg%3E y')).toBe('x <image elided bytes=19> y');
+    expect(sanitizeToolPayload('src="data:image/svg+xml;charset=utf-8,<svg/>"')).toBe('src="<image elided bytes=6>"');
+  });
   it('leaves numbers, booleans and null alone', () => {
     expect(sanitizeToolPayload({ n: 1, b: false, z: null })).toEqual({ n: 1, b: false, z: null });
   });
@@ -108,7 +129,26 @@ describe('redactSecrets', () => {
     expect(redactSecrets('api_key: XyZ123abc')).toBe('api_key: ' + R);
     expect(redactSecrets('token: Abcdefghij\nnext: 1')).toBe('token: ' + R + '\nnext: 1');
     expect(redactSecrets('secret: Abc123;')).toBe('secret: ' + R + ';');
-    for (const c of ['token: null', 'secret: Foo | null;', 'f(token: Token)', 'token: Token,', 'token: string[]', 'token: bigint;']) expect(redactSecrets(c)).toBe(c);
+    for (const c of ['token: null', 'secret: Foo | null;', 'f(token: Token)', 'f(a, token: Token = t)', 'token: string[]', 'token: bigint;']) expect(redactSecrets(c)).toBe(c);
+  });
+  it('redacts a bare identifier or unknown generic outside parameter context (false positive beats a leak)', () => {
+    expect(redactSecrets('password: Config;')).toBe('password: ' + R + ';');
+    expect(redactSecrets('token: Token,')).toBe('token: ' + R + ',');
+    expect(redactSecrets('password: Pass<word>;')).toBe('password: ' + R + ';');
+    expect(redactSecrets('password: Pass<word, more>')).toBe('password: ' + R);
+    expect(redactSecrets('password: Pass<word, more>;')).toBe('password: ' + R + ';');
+  });
+  it('redacts a secret hidden in the type arguments of a generic', () => {
+    for (const c of ['password: Map<hunter2secret99>', 'token: Promise<sk-ant-xxxxxxxx>', 'token: Promise<sk-ant-' + 'a'.repeat(30) + '>', 'password: Map<hunterpass>', 'f(token: Ref<abc=def>)', 'token: Map<a:b>;']) {
+      const out = redactSecrets(c);
+      expect(out).toContain(R);
+      expect(out).not.toMatch(/hunter|sk-ant|abc=def|a:b/);
+    }
+    expect(redactSecrets('password: Map<string, number>')).toBe('password: Map<string, number>');
+    expect(redactSecrets('token: Promise<NodeJS.Timeout | null>;')).toBe('token: Promise<NodeJS.Timeout | null>;');
+  });
+  it('treats a well-known generic as a type whole, also at end of line', () => {
+    for (const c of ['password: Map<string, number>', 'token: Promise<Map<string, number>>', 'token: Record<string, string>\nnext']) expect(redactSecrets(c)).toBe(c);
   });
   it('accepts only balanced, digit-free generics and arrays as types', () => {
     for (const c of ['password: hunter2<3', 'password: Hunter<3', 'password: Pass<word>', 'token: abcd1[]']) expect(redactSecrets(c)).toBe(c.slice(0, c.indexOf(':') + 2) + R);

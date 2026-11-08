@@ -1,11 +1,11 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createJsonServer } from './http.js';
 import { handleRoute } from './routes.js';
 import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, type DaemonInfo } from './info.js';
-import { DaemonClient } from './client.js';
+import { DaemonClient, healthProof } from './client.js';
 import type { DaemonContext } from './context.js';
 import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
 import { loadSettings } from '../shared/settings.js';
@@ -16,6 +16,7 @@ import { Observer, type SessionCtx } from '../observer/observer.js';
 import { projectKeyFor } from '../shared/project-key.js';
 import { newId } from '../shared/ids.js';
 import type { HookEvent } from '../hooks/types.js';
+import type { Project } from '../store/types.js';
 import type { LlmProvider } from '../providers/types.js';
 import { SyncEngine } from '../sync/engine.js';
 import { defaultUser, loadCredentials } from '../sync/credentials.js';
@@ -26,29 +27,46 @@ function tokenOk(got: string | string[] | undefined, want: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// DNS rebinding: a browser page whose name resolves to 127.0.0.1 still sends its own Host, so only loopback names pass.
+function hostOk(host: string | undefined, port: number): boolean {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`;
+}
+
 export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = process.env): DaemonContext {
   ensureHomeDir(home);
   const settings = loadSettings(home, env);
   const logger = createLogger(home, 'daemon', env);
   const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, warn: (m, d) => logger.warn(m, d) });
   store.migrate();
-  const embedder = createEmbedder(settings);
+  // Degraded sqlite-vec drops every vector, so do not pay for embedding calls; rows stay NULL for a later backfill.
+  const embedder = store.vectorsDegraded ? null : createEmbedder(settings);
   let provider: LlmProvider;
   try { provider = createProvider(settings); }
   catch (e) { logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) }); provider = { complete: async () => { throw e; } }; }
-  const observer = new Observer({ store, provider, embedder, logger });
+  // After an auth failure the observer asks for a new provider; one is built only when settings.json changed.
+  const settingsStamp = () => { try { return statSync(resolvePaths(home).settings).mtimeMs; } catch { return 0; } };
+  let stamp = settingsStamp();
+  const reloadProvider = (): LlmProvider | null => {
+    const now = settingsStamp(); if (now === stamp) return null;
+    stamp = now;
+    try { return createProvider(loadSettings(home, env)); } catch (e) { logger.warn('settings changed but provider still unusable', { error: String(e) }); return null; }
+  };
+  const observer = new Observer({ store, provider, embedder, logger, reloadProvider });
   const userId = defaultUser(loadCredentials(home)) ?? 'local';
+  // Read per call: a login after the daemon started is picked up. With several hubs, the linked one decides.
+  const userFor = (project: Project): string => { const c = loadCredentials(home); return (project.hubUrl && c.hubs[project.hubUrl]?.user) || defaultUser(c) || 'local'; };
   const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null, embedModel: settings.embed?.model ?? null });
   observer.onStored = (projectId) => sync.schedulePush(projectId);
   const ctx: DaemonContext = {
-    home, store, observer, embedder, settings, logger, userId, sync,
+    home, store, observer, embedder, settings, logger, userId, sync, userFor,
     resolveSession(ev: HookEvent) {
       let session = store.getSessionByHost(ev.host, ev.hostSessionId);
       // Existing session: reuse its project (no git spawns per event, no split on cwd change).
       let project = session ? store.getProject(session.projectId) : null;
       if (!project) { const { key, name } = projectKeyFor(ev.cwd); project = store.getOrCreateProject(key, name); }
-      if (!session) { session = { id: newId(), projectId: project.id, userId, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null }; store.upsertSession(session); }
-      const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId };
+      const user = session?.userId ?? userFor(project);
+      if (!session) { session = { id: newId(), projectId: project.id, userId: user, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null }; store.upsertSession(session); }
+      const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId: user };
       return { ctx: sctx, project };
     },
   };
@@ -63,16 +81,28 @@ function pidAlive(pid: number): boolean { try { process.kill(pid, 0); return tru
 // either answers an authenticated health check or took the lock under 5 s ago (still starting up).
 async function acquireLock(home: string): Promise<string> {
   const file = path.join(home, 'daemon.lock');
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try { writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 }); return file; }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
-    let holder = NaN; let age = Infinity;
-    try { holder = Number(readFileSync(file, 'utf8')); age = Date.now() - statSync(file).mtimeMs; } catch { continue; }   // vanished: retry
+    let holder = NaN; let mtime = 0;
+    try { holder = Number(readFileSync(file, 'utf8')); mtime = statSync(file).mtimeMs; } catch { continue; }   // vanished: retry
     if (pidAlive(holder)) {
       const info = readDaemonInfo(home);
-      if (age < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
+      if (Date.now() - mtime < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
     }
-    rmSync(file, { force: true });
+    // Break the stale lock under a second exclusive lock and only if it is still the file judged stale, so two
+    // starters cannot both remove it (the second would delete the first one's fresh lock) and both start.
+    const breaker = `${file}.break`;
+    try { writeFileSync(breaker, String(process.pid), { flag: 'wx', mode: 0o600 }); }
+    catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      try { if (Date.now() - statSync(breaker).mtimeMs > 5000) rmSync(breaker, { force: true }); } catch { /* gone */ }   // breaker left by a crash
+      await new Promise((r) => setTimeout(r, 50));
+      continue;
+    }
+    try { if (statSync(file).mtimeMs === mtime && Number(readFileSync(file, 'utf8')) === holder) rmSync(file, { force: true }); }
+    catch { /* already gone */ }
+    finally { rmSync(breaker, { force: true }); }
   }
   throw new DaemonAlreadyRunning();
 }
@@ -89,13 +119,14 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
   const server = createJsonServer(async (method, url, body) => {
     if (url.pathname === '/healthz') {
       const nonce = url.searchParams.get('nonce') ?? '';
-      return { status: 200, body: { ok: true, pid: process.pid, proof: createHmac('sha256', token).update(nonce).digest('hex') } };
+      return { status: 200, body: { ok: true, proof: healthProof(token, nonce, process.pid) } };   // pid is bound in the proof, not disclosed
     }
     touch();
     if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(closeSafe, 10); return { status: 200, body: {} }; }
     try { return await handleRoute(ctx, method, url, body); }
     catch (e) { ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
-  }, (url, headers) => url.pathname === '/healthz' || tokenOk(headers['x-memhub-daemon-token'], token));
+  }, (url, headers) => hostOk(headers.host, port()) && (url.pathname === '/healthz' || tokenOk(headers['x-memhub-daemon-token'], token)));
+  const port = () => (server.address() as AddressInfo | null)?.port ?? -1;
   try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(opts.port ?? 0, '127.0.0.1', resolve); }); }
   catch (e) { rmSync(lock, { force: true }); throw e; }
   const info: DaemonInfo = { port: (server.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString() };

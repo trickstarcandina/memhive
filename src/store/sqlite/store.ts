@@ -28,14 +28,19 @@ export class SqliteStore implements Store {
   private dims: number | null;
 
   private vecOff = false;
+  /** True when dims were configured but sqlite-vec failed to load (vectors cannot be stored or searched). */
+  get vectorsDegraded(): boolean { return this.vecOff; }
 
   constructor(file: string, opts: { dims: number | null; warn?: (msg: string, data?: object) => void; loadVec?: (db: Database.Database) => void }) {
+    // Owner-only before SQLite opens it: SQLite creates -wal/-shm with the db file's mode.
+    const onDisk = file !== ':memory:' && !file.startsWith('file:');
+    if (onDisk) { fs.closeSync(fs.openSync(file, 'a', 0o600)); fs.chmodSync(file, 0o600); }
     this.db = new Database(file);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('foreign_keys = ON');
     this.dims = opts.dims;
-    try { if (fs.existsSync(file)) fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+    if (onDisk) for (const f of [`${file}-wal`, `${file}-shm`]) { try { fs.chmodSync(f, 0o600); } catch { /* not created yet */ } }
     if (this.dims) {
       try { (opts.loadVec ?? ((d) => sqliteVec.load(d)))(this.db); }
       catch (e) { opts.warn?.('sqlite-vec failed to load; vector search disabled (FTS only)', { error: String(e) }); this.dims = null; this.vecOff = true; }
@@ -84,7 +89,8 @@ export class SqliteStore implements Store {
   upsertSession(s: Session): void {
     this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at, synced_at, origin)
       VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt, @syncedAt, @origin)
-      ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL`).run({ ...s, origin: s.origin ?? 'local' });
+      ON CONFLICT(id) DO UPDATE SET cwd = excluded.cwd, ended_at = COALESCE(excluded.ended_at, sessions.ended_at), synced_at = NULL
+      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id`).run({ ...s, origin: s.origin ?? 'local' });
   }
   getSession(id: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined; return r ? rowToSession(r) : null; }
   getSessionByHost(host: string, hostSessionId: string): Session | null { const r = this.db.prepare('SELECT * FROM sessions WHERE host = ? AND host_session_id = ?').get(host, hostSessionId) as Row | undefined; return r ? rowToSession(r) : null; }

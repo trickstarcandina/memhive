@@ -79,6 +79,34 @@ describe('Observer', () => {
     expect(observer.authFailed).toBe(true);
   });
 
+  it('auth failure recovers when settings give a new provider', async () => {
+    const bad = vi.fn().mockRejectedValue(new ProviderError('bad key', 'auth', 401));
+    const good = vi.fn(async () => obsJson(1));
+    let next: LlmProvider | null = null;
+    const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
+    const p = store.getOrCreateProject('k', 'proj'); const s = sess(p.id); store.upsertSession(s);
+    const ctx: SessionCtx = { sessionId: s.id, projectId: p.id, projectName: 'proj', userId: 'local' };
+    const observer = new Observer({ store, provider: { complete: bad }, embedder: null, logger: silent, reloadProvider: () => next });
+    observer.onTool(ctx, tool(0)); await vi.runAllTimersAsync();
+    observer.onTool(ctx, tool(1)); await vi.runAllTimersAsync();
+    expect(bad).toHaveBeenCalledTimes(1);
+    next = { complete: good };
+    observer.onTool(ctx, tool(2)); await vi.runAllTimersAsync();
+    expect(good).toHaveBeenCalledTimes(1);
+    expect(observer.authFailed).toBe(false);
+    expect(store.countObservations(p.id)).toBe(1);
+  });
+
+  it('auth failure allows one new try after a cooldown', async () => {
+    const complete = vi.fn().mockRejectedValueOnce(new ProviderError('bad key', 'auth', 401)).mockResolvedValue(obsJson(1));
+    const { ctx, observer } = setup({ complete });
+    observer.onTool(ctx, tool(0)); await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    observer.onTool(ctx, tool(1)); await vi.runAllTimersAsync();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(observer.authFailed).toBe(false);
+  });
+
   it('drops unparseable output and bounds the buffer', async () => {
     const complete = vi.fn(async () => 'garbage');
     const { store, ctx, observer } = setup({ complete }, null);
@@ -153,5 +181,49 @@ describe('Observer', () => {
     observer.onPrompt(ctx, 'hi');
     await observer.onStop(ctx);
     expect(observer.sessionCount).toBe(0);
+  });
+});
+
+describe('Observer summaries', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('a SessionEnd that races an in-flight Stop summary does not write a second one (no prompt row)', async () => {
+    let release!: (v: string) => void;
+    const complete = vi.fn().mockResolvedValueOnce(obsJson(1)).mockImplementationOnce(() => new Promise<string>((r) => { release = r; })).mockResolvedValue(sumJson);
+    const { store, ctx, observer } = setup({ complete });
+    observer.onTool(ctx, tool(0));
+    const stop = observer.onStop(ctx);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    const end = observer.onSessionEnd(ctx);
+    release(sumJson);
+    await Promise.all([stop, end]);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(store.listRecentSummaries(ctx.projectId, 5)).toHaveLength(1);
+  });
+
+  it('retries a failed Stop summary at SessionEnd, with the turn observations', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(obsJson(1)).mockRejectedValueOnce(new ProviderError('boom', 'transport')).mockResolvedValueOnce(sumJson);
+    const { store, ctx, observer } = setup({ complete });
+    observer.onPrompt(ctx, 'implement the login flow please');
+    observer.onTool(ctx, tool(0));
+    await observer.onStop(ctx);
+    expect(store.listRecentSummaries(ctx.projectId, 5)).toHaveLength(0);
+    await observer.onSessionEnd(ctx);
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect((complete.mock.calls[2] as any)[0].user).toContain('obs 0');
+    expect(store.listRecentSummaries(ctx.projectId, 5)).toHaveLength(1);
+    expect(observer.sessionCount).toBe(0);
+  });
+
+  it('prunes summary markers of sessions that never send SessionEnd (Codex)', async () => {
+    const complete = vi.fn(async () => sumJson);
+    const { ctx, observer } = setup({ complete });
+    observer.onPrompt(ctx, 'implement the login flow please');
+    await observer.onStop(ctx);
+    expect(observer.summaryMarkerCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+    observer.onTool({ ...ctx, sessionId: 'other' }, tool(1));
+    expect(observer.summaryMarkerCount).toBe(0);
   });
 });

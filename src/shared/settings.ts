@@ -6,6 +6,8 @@ export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: s
 export interface EmbedSettings { baseUrl: string; apiKey?: string; model: string; dims: number }
 export interface Settings { llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number }
 
+export const DEFAULT_MODELS: Record<LlmSettings['provider'], string> = { anthropic: 'claude-haiku-5-5', 'openai-compat': 'qwen2.5:7b' };
+
 export const DEFAULT_SETTINGS: Settings = {
   llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
   embed: null,
@@ -25,6 +27,9 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const fl: Partial<LlmSettings> = isObj(file.llm) ? (file.llm as Partial<LlmSettings>) : {};
   const llm: LlmSettings = { ...DEFAULT_SETTINGS.llm, ...fl };
   if (env.MEMHUB_LLM_PROVIDER === 'anthropic' || env.MEMHUB_LLM_PROVIDER === 'openai-compat') llm.provider = env.MEMHUB_LLM_PROVIDER;
+  if (llm.provider !== 'anthropic' && llm.provider !== 'openai-compat') llm.provider = DEFAULT_SETTINGS.llm.provider;
+  // The file's model belongs to the file's provider; another provider (env switch, or none saved) gets its own default.
+  if (!fl.model || (fl.provider ?? DEFAULT_SETTINGS.llm.provider) !== llm.provider) llm.model = DEFAULT_MODELS[llm.provider];
   if (llm.provider === 'anthropic') {
     if (env.MEMHUB_ANTHROPIC_API_KEY) llm.apiKey = env.MEMHUB_ANTHROPIC_API_KEY;
     if (env.MEMHUB_ANTHROPIC_MODEL) llm.model = env.MEMHUB_ANTHROPIC_MODEL;
@@ -34,13 +39,12 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
     if (env.MEMHUB_LLM_MODEL) llm.model = env.MEMHUB_LLM_MODEL;
   }
   const fe: Partial<EmbedSettings> = isObj(file.embed) ? (file.embed as Partial<EmbedSettings>) : {};
+  // An empty env url/model wins (that disables embeddings); a config missing url, model or a positive dims is none.
   const dims = posInt(env.MEMHUB_EMBED_DIMS) ?? posInt(fe.dims);
-  const embed: EmbedSettings | null = dims === undefined ? null : {
-    baseUrl: env.MEMHUB_EMBED_BASE_URL ?? fe.baseUrl ?? '',
-    apiKey: env.MEMHUB_EMBED_API_KEY ?? fe.apiKey,
-    model: env.MEMHUB_EMBED_MODEL ?? fe.model ?? '',
-    dims,
-  };
+  const baseUrl = env.MEMHUB_EMBED_BASE_URL ?? fe.baseUrl ?? '';
+  const model = env.MEMHUB_EMBED_MODEL ?? fe.model ?? '';
+  const embed: EmbedSettings | null = dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model ? null
+    : { baseUrl, apiKey: env.MEMHUB_EMBED_API_KEY ?? fe.apiKey, model, dims };
   const contextTokens = Number(env.MEMHUB_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
   return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens };
 }

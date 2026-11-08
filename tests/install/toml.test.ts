@@ -21,3 +21,8 @@ it('checked: handles # inside a quoted table name', () => {
   expect(setTomlBooleanChecked(src, '[plugins."memhub@x"]', 'enabled', true)).toBe('[plugins."a#b"]\nenabled = false\n\n[plugins."memhub@x"]\nenabled = true\n');
   expect(setTomlBooleanChecked(src, '[plugins."a#b"]', 'enabled', true)).toBe('[plugins."a#b"]\nenabled = true\n\n[plugins."memhub@x"]\nenabled = false\n');
 });
+it('keeps CRLF line endings when inserting, replacing or appending', () => {
+  expect(setTomlBoolean('[features]\r\nx = 1\r\n', '[features]', 'hooks', true)).toBe('[features]\r\nhooks = true\r\nx = 1\r\n');
+  expect(setTomlBoolean('[features]\r\nhooks = false\r\n', '[features]', 'hooks', true)).toBe('[features]\r\nhooks = true\r\n');
+  expect(setTomlBoolean('model = "x"\r\n', '[features]', 'hooks', true)).toBe('model = "x"\r\n\r\n[features]\r\nhooks = true\r\n');
+});

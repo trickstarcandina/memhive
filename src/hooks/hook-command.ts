@@ -3,7 +3,7 @@ import { readStdin as defaultReadStdin, STDIN_LIMIT } from './stdin.js';
 import { ensureDaemon as defaultEnsureDaemon } from '../daemon/ensure.js';
 import { DaemonClient } from '../daemon/client.js';
 import { createLogger } from '../shared/logger.js';
-import { resolvePaths } from '../shared/paths.js';
+import { resolvePaths, setHomeWarningSink } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
 
 export interface HookDeps { readStdin(): Promise<string>; ensureDaemon: typeof defaultEnsureDaemon; fetchImpl: typeof fetch; stdout(s: string): void; home: string; now(): Date }
@@ -14,13 +14,15 @@ const START_TIMEOUT_MS = 5000;
 export async function runHook(args: string[], deps: Partial<HookDeps> = {}): Promise<number> {
   const d: HookDeps = { readStdin: defaultReadStdin, ensureDaemon: defaultEnsureDaemon, fetchImpl: fetch, stdout: (s) => process.stdout.write(s), home: resolvePaths().home, now: () => new Date(), ...deps };
   const log = createLogger(d.home, 'hook');
+  setHomeWarningSink((m) => log.warn(m.trim()));   // spec: a hook never writes to stderr
   try {
     const [host, hostEvent] = args;
     const adapter = getAdapter(host ?? '');
     if (!adapter) { log.warn('unknown host', { host }); return 0; }
     const raw = await d.readStdin();
     if (!raw.trim()) { log.warn('empty stdin', { host, hostEvent }); return 0; }
-    if (raw.length > STDIN_LIMIT) { log.warn('stdin too large', { host, hostEvent, bytes: raw.length }); return 0; }
+    // Accepted deviation from spec 5: an event over 2 MB is dropped, not trimmed (the cut JSON cannot be parsed).
+    if (Buffer.byteLength(raw) > STDIN_LIMIT) { log.warn('stdin too large', { host, hostEvent, bytes: Buffer.byteLength(raw) }); return 0; }
     const payload = safeJsonParse(raw);
     if (payload === undefined) { log.warn('invalid JSON on stdin', { host, hostEvent, bytes: raw.length }); return 0; }
     const ev = adapter.parse(payload, d.now());

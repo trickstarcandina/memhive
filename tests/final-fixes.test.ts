@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, existsSync, chmodSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,6 +12,7 @@ import { getAdapter } from '../src/hooks/adapters/index.js';
 import { stripPrivate, sanitizePrompt } from '../src/hooks/sanitize.js';
 import { createDaemonContext } from '../src/daemon/server.js';
 import { createLogger } from '../src/shared/logger.js';
+import { setHomeWarningSink } from '../src/shared/paths.js';
 import { saveSettings, DEFAULT_SETTINGS } from '../src/shared/settings.js';
 import { sess, obs } from './store/store-contract.js';
 
@@ -113,9 +114,25 @@ describe('file modes', () => {
     expect(mode(path.join(home, 'memhub.db'))).toBe(0o600);
   });
   it('tightens an existing loose home', () => {
-    const home = tmp();
+    const home = tmp(); chmodSync(home, 0o755);
+    writeFileSync(path.join(home, 'settings.json'), '{}');
     createDaemonContext(home, {}).store.close();
     expect(mode(home)).toBe(0o700);
+  });
+  it('leaves the mode of a shared directory MEMHUB_HOME points at, warns, and keeps memhub files private', () => {
+    const home = tmp(); chmodSync(home, 0o755);
+    writeFileSync(path.join(home, 'notes.txt'), 'not memhub');
+    const warnings: string[] = [];
+    setHomeWarningSink((m) => warnings.push(m));
+    const ctx = createDaemonContext(home, {});   // migrate writes, so the WAL files exist while the store is open
+    createLogger(home, 'x', {}).info('hi');
+    saveSettings(home, DEFAULT_SETTINGS);
+    expect(mode(home)).toBe(0o755);
+    expect(warnings.join('')).toMatch(/readable by other users/);
+    for (const f of ['memhub.db', 'memhub.db-wal', 'memhub.db-shm', 'settings.json', 'logs/x.log', 'logs/daemon.log']) if (existsSync(path.join(home, f))) expect([f, mode(path.join(home, f))]).toEqual([f, 0o600]);
+    expect(mode(path.join(home, 'logs'))).toBe(0o700);
+    expect(existsSync(path.join(home, 'memhub.db-wal'))).toBe(true);
+    ctx.store.close();
   });
 });
 

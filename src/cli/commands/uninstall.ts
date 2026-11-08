@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { CliIo } from '../index.js';
@@ -10,6 +11,7 @@ export async function uninstallCommand(_args: string[], io: CliIo, opts: { home?
   await daemonCommand(['stop'], io, { home });
   for (const l of uninstallClaudeCode(run)) io.stdout(`  claude-code: ${l}\n`);
   for (const l of uninstallCodex(env.CODEX_HOME ?? path.join(homedir(), '.codex'), run)) io.stdout(`  codex: ${l}\n`);
+  rmSync(resolvePaths(home).marketplace, { recursive: true, force: true });   // rendered plugin files only, never memory
   io.stdout(`Plugin removed. Your memory stays in ${home}; delete that folder to remove it.\n`);
   return 0;
 }

@@ -5,9 +5,10 @@ import path from 'node:path';
 export function normalizeRemote(url: string): string | null {
   let s = url.trim();
   if (!s) return null;
+  const hadScheme = /^[a-z+]+:\/\//i.test(s);
   s = s.replace(/^[a-z+]+:\/\//i, '');          // scheme
   s = s.replace(/^[^@/]+@/, '');                 // user@
-  s = s.replace(/^([^:/]+):(\d+)\//, '$1/');     // host:port/ -> host/
+  if (hadScheme) s = s.replace(/^([^:/]+):(\d+)\//, '$1/');   // host:port/ -> host/ (scp-like host:123/repo has no port)
   s = s.replace(/^([^:/]+):/, '$1/');            // scp-like host:path
   s = s.replace(/\.git\/?$/i, '').replace(/\/+$/, '');
   if (!/^[^/]+\/.+/.test(s) || /\s/.test(s)) return null;

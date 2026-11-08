@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import path from 'node:path';
 import { z } from 'zod';
 import { DaemonClient, DaemonError } from '../daemon/client.js';
 import { ensureDaemon } from '../daemon/ensure.js';
@@ -36,7 +37,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string; recon
 
   server.registerTool('search', {
     description: 'Step 1 of 3. Search past observations for this project. Returns a compact index (ids, types, titles). Follow with timeline and get_observations.',
-    inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().optional(), since: z.string().optional().describe('ISO date or relative like 7d, 12h'), project: z.string().optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
+    inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().max(200).optional(), since: z.string().max(64).optional().describe('ISO date or relative like 7d, 12h'), project: z.string().max(1000).optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
   }, async (a) => {
     const q = new URLSearchParams({ q: a.query, project_key: a.project ?? (await projectKey()), limit: String(a.limit) });
     if (a.type) q.set('type', a.type);
@@ -73,12 +74,18 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string; recon
   return server;
 }
 
+/** MEMHUB_CWD from the plugin's .mcp.json, unless the host left it empty or unexpanded; then the process cwd. */
+export function mcpCwd(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
+  const v = env.MEMHUB_CWD;
+  return v && path.isAbsolute(v) && !v.includes('${') ? v : cwd;
+}
+
 export async function runMcp(): Promise<number> {
   const home = resolvePaths().home;
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { process.stderr.write('memhub: daemon could not be started\n'); return 1; }
   const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000 }); return i ? new DaemonClient(i) : null; };
-  const server = createMcpServer({ client: new DaemonClient(info), cwd: process.env.MEMHUB_CWD ?? process.cwd(), reconnect });
+  const server = createMcpServer({ client: new DaemonClient(info), cwd: mcpCwd(), reconnect });
   await server.connect(new StdioServerTransport());
   await new Promise(() => {}); // stdio transport keeps the process alive until the host closes it
   return 0;

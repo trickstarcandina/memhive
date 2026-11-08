@@ -1,6 +1,9 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { DaemonInfo } from './info.js';
 
+/** HMAC over the nonce and the daemon pid: proves the listener knows the token and is the pid in daemon.json. */
+export const healthProof = (token: string, nonce: string, pid: number): string => createHmac('sha256', token).update(`${nonce}:${pid}`).digest('hex');
+
 export class DaemonError extends Error { constructor(message: string, public readonly status: number) { super(message); this.name = 'DaemonError'; } }
 
 export class DaemonClient {
@@ -24,9 +27,9 @@ export class DaemonClient {
       const nonce = randomBytes(16).toString('hex');
       const r = await this.fetchImpl(`${this.baseUrl}/healthz?nonce=${nonce}`, { signal: ctl.signal });
       if (!r.ok) return false;
-      const j = (await r.json()) as { ok?: boolean; pid?: number; proof?: string };
-      if (j.ok !== true || j.pid !== this.info.pid || typeof j.proof !== 'string') return false;
-      const want = Buffer.from(createHmac('sha256', this.info.token).update(nonce).digest('hex'));
+      const j = (await r.json()) as { ok?: boolean; proof?: string };
+      if (j.ok !== true || typeof j.proof !== 'string') return false;
+      const want = Buffer.from(healthProof(this.info.token, nonce, this.info.pid));
       const got = Buffer.from(j.proof);
       return got.length === want.length && timingSafeEqual(got, want);
     } catch { return false; } finally { clearTimeout(t); }

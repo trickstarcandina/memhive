@@ -29,6 +29,8 @@ function resolveIds(ctx: DaemonContext, raw: string): string[] {
 export async function handleRoute(ctx: DaemonContext, method: string, url: URL, body: unknown): Promise<{ status: number; body: unknown }> {
   const { store } = ctx; const q = url.searchParams; const path = url.pathname;
 
+  if (method === 'GET' && path === '/v1/status') return ok({ observerAuthFailed: ctx.observer.authFailed });
+
   if (method === 'GET' && path === '/v1/project') {
     const cwd = q.get('cwd') ?? process.cwd();
     const { key, name } = projectKeyFor(cwd);
@@ -79,6 +81,8 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
 
   if (method === 'POST' && path === '/v1/memories') {
     const b = (body ?? {}) as { projectKey?: string; text?: string; title?: string; type?: string };
+    // Same caps as the MCP save_memory schema; the route is reachable without MCP.
+    if ((typeof b.text === 'string' && b.text.length > 20000) || (typeof b.title === 'string' && b.title.length > 2000)) return err(400, 'too_long', 'text max 20000 chars, title max 2000');
     const clean = (v: string) => redactSecrets(stripPrivate(v)).trim();
     const text = typeof b.text === 'string' ? clean(b.text) : '';
     const title = typeof b.title === 'string' ? clean(b.title) : '';
@@ -87,8 +91,8 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const type = (b.type && OBSERVATION_TYPES.includes(b.type as ObservationType) ? b.type : 'discovery') as ObservationType;
     const now = new Date().toISOString();
     let session = store.getSessionByHost('manual', project.id);
-    if (!session) { session = { id: newId(), projectId: project.id, userId: ctx.userId, host: 'manual', hostSessionId: project.id, cwd: '', startedAt: now, endedAt: null, syncedAt: null }; store.upsertSession(session); }
-    const o: Observation = { id: newId(), projectId: project.id, sessionId: session.id, userId: ctx.userId, type, title: (title || text).slice(0, 200), subtitle: '', facts: [text], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: now, embeddingModel: null, origin: 'local', syncedAt: null };
+    if (!session) { session = { id: newId(), projectId: project.id, userId: ctx.userFor(project), host: 'manual', hostSessionId: project.id, cwd: '', startedAt: now, endedAt: null, syncedAt: null }; store.upsertSession(session); }
+    const o: Observation = { id: newId(), projectId: project.id, sessionId: session.id, userId: session.userId, type, title: (title || text).slice(0, 200), subtitle: '', facts: [text], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: now, embeddingModel: null, origin: 'local', syncedAt: null };
     store.insertObservations([o]);
     if (ctx.embedder) { try { const [v] = await ctx.embedder.embed([embeddingText(o)]); store.setObservationEmbedding(o.id, v, ctx.embedder.model); } catch { /* backfill later */ } }
     ctx.sync?.schedulePush(project.id);

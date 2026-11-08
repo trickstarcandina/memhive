@@ -45,6 +45,18 @@ describe('commands', () => {
     expect(text).toContain('api key set');
     expect(text).not.toContain('sk-secret-123');
   });
+  it('doctor reports an observer auth failure from the running daemon', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const ctx = createDaemonContext(home, env);
+    const h = await startDaemon(ctx, { port: 0 });
+    try {
+      let r = io(); await doctorCommand([], r.io, { home, env, ping: false });
+      expect(r.out.join('')).toContain('ok   observer');
+      ctx.observer['authFailedAt'] = Date.now();
+      r = io(); expect(await doctorCommand([], r.io, { home, env, ping: false })).toBe(1);
+      expect(r.out.join('')).toMatch(/FAIL observer: .*401\/403/);
+    } finally { await h.close(); }
+  });
   it('doctor survives a malformed settings.json', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     writeFileSync(path.join(home, 'settings.json'), '{not json');
@@ -55,5 +67,6 @@ describe('commands', () => {
     const r = io();
     expect(await searchCommand(['q', '--limit', 'abc'], r.io, { home: mkdtempSync(path.join(tmpdir(), 'mh-')) })).toBe(2);
     expect(r.err.join('')).toContain('usage');
+    expect(await searchCommand(['q', '--limit'], io().io, { home: mkdtempSync(path.join(tmpdir(), 'mh-')) })).toBe(2);   // bare flag is not 1
   });
 });

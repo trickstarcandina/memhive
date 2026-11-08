@@ -18,6 +18,10 @@ describe('claude-code adapter', () => {
     expect(e.event).toBe('tool');
     expect(e.tool).toEqual({ name: 'Edit', input: { file_path: '/work/app/src/auth.ts', old_string: 'a', new_string: 'b' }, output: { success: true }, failed: false });
   });
+  it('a private block opened in tool_input hides tool_response up to its close', () => {
+    const e = a.parse({ session_id: 's', cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo <private>' }, tool_response: { stdout: 'secret</private> ok' } }, now)!;
+    expect(e.tool).toMatchObject({ input: { command: 'echo ' }, output: { '': ' ok' } });   // the key is inside the block too
+  });
   it('tool failure', () => {
     const e = a.parse(fx('claude-code', 'post-tool-use-failure'), now)!;
     expect(e.tool).toEqual({ name: 'Bash', input: { command: 'npm test' }, output: { error: 'exit 1', is_interrupt: false }, failed: true });

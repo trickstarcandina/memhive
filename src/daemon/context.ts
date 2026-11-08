@@ -15,4 +15,6 @@ export interface DaemonContext {
   home: string; store: Store; observer: Observer; embedder: Embedder | null; settings: Settings; logger: Logger; userId: string;
   sync: SyncHooks | null;
   resolveSession(ev: HookEvent): { ctx: SessionCtx; project: Project };
+  /** The user of the hub the project is linked to; else the default user (`userId`). */
+  userFor(project: Project): string;
 }

@@ -28,7 +28,8 @@ export function normalizeHookPayload(raw: unknown, host: Host, allowed: Readonly
     const name = typeof r.tool_name === 'string' ? r.tool_name : 'unknown';
     const failed = hostEvent === 'PostToolUseFailure';
     const output = failed ? { error: r.error, is_interrupt: r.is_interrupt === true } : r.tool_response;
-    ev.tool = { name, input: sanitizeToolPayload(r.tool_input), output: sanitizeToolPayload(output), failed };
+    const state = { depth: 0 };   // shared: a private block opened in the input also hides the output
+    ev.tool = { name, input: sanitizeToolPayload(r.tool_input, undefined, state), output: sanitizeToolPayload(output, undefined, state), failed };
   }
   return ev;
 }
