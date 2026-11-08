@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readdirSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../../src/shared/settings.js';
@@ -92,10 +92,10 @@ describe('settings', () => {
     expect(loadSettings(home, {}).excludeProjects).toEqual(['github.com/a/*', 'x']);
     expect(loadSettings(home, { MEMHIVE_EXCLUDE_PROJECTS: ' p/** , q ,' }).excludeProjects).toEqual(['p/**', 'q']);
   });
-  it('retentionDays: default keeps all but discoveries 180 d; file per type; env sets the default', () => {
+  it('retentionDays: opt-in (every type kept by default); file per type, 0 means keep; env sets the default', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    expect(loadSettings(home, {}).retentionDays).toEqual({ default: null, discovery: 180 });
-    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ retentionDays: { default: 365, discovery: null, bugfix: 30, bogus: 1, decision: -2 } }));
+    expect(loadSettings(home, {}).retentionDays).toEqual({ default: null });
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ retentionDays: { default: 365, discovery: 0, bugfix: 30, bogus: 1, decision: -2 } }));
     expect(loadSettings(home, {}).retentionDays).toEqual({ default: 365, discovery: null, bugfix: 30 });
     expect(loadSettings(home, { MEMHIVE_RETENTION_DAYS: '90' }).retentionDays.default).toBe(90);
     expect(loadSettings(home, { MEMHIVE_RETENTION_DAYS: '0' }).retentionDays.default).toBeNull();
@@ -117,5 +117,12 @@ describe('settings', () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(loadSettings(home, {}).llm.apiKey).toBe('sk-secret');
     expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+  it('saveSettings (as install does) never writes untouched retention defaults', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    saveSettings(home, { ...DEFAULT_SETTINGS, ...loadSettings(home, {}) });
+    expect(JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8'))).not.toHaveProperty('retentionDays');
+    saveSettings(home, { ...DEFAULT_SETTINGS, retentionDays: { default: null, bugfix: 30 } });
+    expect(JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8')).retentionDays).toEqual({ default: null, bugfix: 30 });
   });
 });

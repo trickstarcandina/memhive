@@ -12,7 +12,7 @@ export interface Settings {
   llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number; context: ContextSettings;
   /** Project keys or globs (`*` one segment, `**` any) never recorded; also matched against the repo's root path. */
   excludeProjects: string[];
-  /** Days to keep observations, per type, else `default`; null keeps forever. Pinned rows are always kept. */
+  /** Opt-in: days to keep observations, per type, else `default`; null (the default for all) or 0 keeps forever. Pinned rows are always kept. */
   retentionDays: RetentionDays;
   /** Project keys or globs MCP `search` may read besides the current project (default none). */
   mcp: { allowProjects: string[] };
@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS: Settings = {
   contextTokens: 2000,
   context: { scope: 'team' },
   excludeProjects: [],
-  retentionDays: { default: null, discovery: 180 },
+  retentionDays: { default: null },   // opt-in: a default that deletes would remove notes on the first start after an upgrade
   mcp: { allowProjects: [] },
 };
 
@@ -73,7 +73,7 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const list = (v: unknown): string[] | undefined => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim()) : undefined;
   const excludeProjects = env.MEMHIVE_EXCLUDE_PROJECTS !== undefined ? env.MEMHIVE_EXCLUDE_PROJECTS.split(',').map((x) => x.trim()).filter(Boolean) : list(file.excludeProjects) ?? [];
   const fr = isObj(file.retentionDays) ? (file.retentionDays as Record<string, unknown>) : {};
-  const days = (v: unknown): number | null | undefined => (v === null ? null : posInt(v));
+  const days = (v: unknown): number | null | undefined => (v === null || v === 0 || v === '0' ? null : posInt(v));
   const retentionDays: RetentionDays = { ...DEFAULT_SETTINGS.retentionDays };
   for (const k of ['default', ...OBSERVATION_TYPES] as const) { const d = days(fr[k]); if (d !== undefined) retentionDays[k] = d; }
   if (env.MEMHIVE_RETENTION_DAYS !== undefined && env.MEMHIVE_RETENTION_DAYS !== '') retentionDays.default = posInt(env.MEMHIVE_RETENTION_DAYS) ?? null;   // 0 or junk: keep forever
@@ -85,6 +85,9 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
 export function saveSettings(home: string, settings: Settings): void {
   const p = resolvePaths(home);
   ensureHomeDir(home);
+  // Untouched retention is not written: a saved copy of today's default would outlive any later change to it.
+  const { retentionDays, ...rest } = settings;
+  const out = Object.values(retentionDays ?? {}).some((v) => v !== null && v !== undefined) ? settings : rest;
   // tmp (0600 before any byte of an API key is written) + rename: never truncated, never briefly world-readable.
-  writeFileAtomic(p.settings, JSON.stringify(settings, null, 2) + '\n', 0o600);
+  writeFileAtomic(p.settings, JSON.stringify(out, null, 2) + '\n', 0o600);
 }
