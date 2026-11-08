@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { writeFileAtomic } from './atomic.js';
 import { ensureHomeDir, resolvePaths } from './paths.js';
 import { safeJsonParse } from './json.js';
 import { OBSERVATION_TYPES, type ObservationType } from '../store/types.js';
@@ -84,6 +85,6 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
 export function saveSettings(home: string, settings: Settings): void {
   const p = resolvePaths(home);
   ensureHomeDir(home);
-  writeFileSync(p.settings, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 });
-  chmodSync(p.settings, 0o600); // writeFileSync mode applies only on create
+  // tmp (0600 before any byte of an API key is written) + rename: never truncated, never briefly world-readable.
+  writeFileAtomic(p.settings, JSON.stringify(settings, null, 2) + '\n', 0o600);
 }

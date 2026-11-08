@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../../src/shared/settings.js';
@@ -106,5 +106,16 @@ describe('settings', () => {
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ mcp: { allowProjects: ['github.com/acme/*'] } }));
     expect(loadSettings(home, {}).mcp.allowProjects).toEqual(['github.com/acme/*']);
     expect(loadSettings(home, { MEMHIVE_MCP_ALLOW_PROJECTS: 'a, b' }).mcp.allowProjects).toEqual(['a', 'b']);
+  });
+  it('saveSettings is atomic and never leaves a 0644 window', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const file = path.join(home, 'settings.json');
+    writeFileSync(file, '{"contextTokens": 5}'); chmodSync(file, 0o644);
+    const ino = statSync(file).ino;
+    saveSettings(home, { ...DEFAULT_SETTINGS, llm: { ...DEFAULT_SETTINGS.llm, apiKey: 'sk-secret' } });
+    expect(statSync(file).ino).not.toBe(ino);   // a fresh 0600 file renamed over the old one; the 0644 inode never held the key
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(loadSettings(home, {}).llm.apiKey).toBe('sk-secret');
+    expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 });

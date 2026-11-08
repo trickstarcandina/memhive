@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { detectHosts, installClaudeCode, installCodex, uninstallCodex, type RunFn } from '../../src/install/hosts.js';
@@ -46,4 +46,17 @@ it('uninstall never appends a table', () => {
   writeFileSync(cfg, 'model = "x"\n');
   uninstallCodex(home, ok);
   expect(readFileSync(cfg, 'utf8')).toBe('model = "x"\n');
+});
+it('installCodex keeps a backup of config.toml, replaces it atomically and keeps its mode', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'cx-'));
+  const cfg = path.join(home, 'config.toml');
+  writeFileSync(cfg, 'model = "x"\n'); chmodSync(cfg, 0o640);
+  const ino = statSync(cfg).ino;
+  expect(installCodex('/m', home, ok).ok).toBe(true);
+  expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n');
+  expect(statSync(cfg).ino).not.toBe(ino);   // renamed into place, not rewritten in place
+  expect(statSync(cfg).mode & 0o777).toBe(0o640);
+  uninstallCodex(home, ok);
+  expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n');   // the first backup is never overwritten
+  expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
 });

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { writeFileAtomic } from '../shared/atomic.js';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -36,6 +37,16 @@ export function uninstallClaudeCode(run: RunFn = defaultRun): string[] {
   return log;
 }
 
+/** The host's own config: keep a one-time backup of the user's original, then replace it atomically with its mode kept. */
+function writeCodexConfig(cfg: string, content: string): void {
+  let mode: number | undefined;
+  if (existsSync(cfg)) {
+    mode = statSync(cfg).mode & 0o777;
+    if (!existsSync(`${cfg}.memhive-bak`)) copyFileSync(cfg, `${cfg}.memhive-bak`);
+  }
+  writeFileAtomic(cfg, content, mode);
+}
+
 export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): { log: string[]; ok: boolean } {
   const log: string[] = [];
   const cfg = path.join(codexHome, 'config.toml');
@@ -47,7 +58,7 @@ export function installCodex(marketplaceRoot: string, codexHome: string, run: Ru
     content = setTomlBooleanChecked(content, '[features]', 'hooks', true);
     content = setTomlBooleanChecked(content, `[plugins."${PLUGIN_ID}"]`, 'enabled', true);
     mkdirSync(codexHome, { recursive: true });
-    writeFileSync(cfg, content);
+    writeCodexConfig(cfg, content);
   } catch (e) {
     log.push(`FAILED to edit ${cfg}: ${(e as Error).message}`); manual(); return { log, ok: false };
   }
@@ -62,7 +73,7 @@ export function uninstallCodex(codexHome: string, run: RunFn = defaultRun): stri
   if (existsSync(cfg)) {
     const src = readFileSync(cfg, 'utf8');
     if (hasTomlTable(src, header)) {
-      try { writeFileSync(cfg, setTomlBooleanChecked(src, header, 'enabled', false)); log.push(`disabled ${PLUGIN_ID} in ${cfg}`); }
+      try { writeCodexConfig(cfg, setTomlBooleanChecked(src, header, 'enabled', false)); log.push(`disabled ${PLUGIN_ID} in ${cfg}`); }
       catch (e) { log.push(`FAILED to edit ${cfg}: ${(e as Error).message}; set enabled = false under ${header} by hand`); }
     }
   }
