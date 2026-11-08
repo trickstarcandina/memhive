@@ -2,7 +2,7 @@ import type { CliIo } from '../index.js';
 import { parseArgs } from '../args.js';
 import { resolvePaths } from '../../shared/paths.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
-import { DaemonClient } from '../../daemon/client.js';
+import { DaemonClient, DaemonError } from '../../daemon/client.js';
 import { formatIndex } from '../../mcp/format.js';
 import type { Observation, SearchResult } from '../../store/types.js';
 
@@ -16,7 +16,9 @@ export async function searchCommand(args: string[], io: CliIo, opts: { home?: st
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
   const client = new DaemonClient(info);
-  const key = (await client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(cwd)}`)).project.key;
+  let key: string;
+  try { key = (await client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(cwd)}`)).project.key; }
+  catch (e) { if (e instanceof DaemonError && e.status === 409) { io.stderr(`memhive: ${e.message}\n`); return 1; } throw e; }
   const q = new URLSearchParams({ q: query, project_key: key, limit: String(limit) });
   for (const k of ['type', 'user', 'since']) if (typeof flags[k] === 'string') q.set(k, flags[k] as string);
   const r = await client.request<{ results?: SearchResult[]; observations: Observation[] }>('GET', `/v1/search?${q}`);

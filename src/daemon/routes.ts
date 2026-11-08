@@ -5,11 +5,13 @@ import { buildContext } from '../context/builder.js';
 import { newId } from '../shared/ids.js';
 import { OBSERVATION_TYPES, type Observation, type ObservationType, type SearchFilters } from '../store/types.js';
 import { projectKeyFor } from '../shared/project-key.js';
+import { matchesAny } from '../shared/optout.js';
 import { embeddingText } from '../observer/observer.js';
 import { normalizeHubUrl } from '../sync/credentials.js';
 import { redactSecrets, stripPrivate } from '../hooks/sanitize.js';
 
 const ok = (body: unknown, status = 200) => ({ status, body });
+const EXCLUDED_MSG = 'memhive does not record this project (excludeProjects or .memhive.json); nothing was saved';
 const err = (status: number, code: string, message: string) => ({ status, body: { error: { code, message } } });
 
 function parseSince(v: string | null): string | undefined {
@@ -40,8 +42,10 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
 
   if (method === 'GET' && path === '/v1/project') {
     const cwd = q.get('cwd') ?? process.cwd();
-    const { key, name } = projectKeyFor(cwd);
-    return ok({ project: store.getOrCreateProject(key, name) });
+    const info = projectKeyFor(cwd);
+    if (ctx.excludedInfo(info)) return err(409, 'excluded', EXCLUDED_MSG);
+    // A lookup never creates the project: an MCP call in a repo with no memory yet must leave no row behind.
+    return ok({ project: store.getProjectByKey(info.key) ?? { key: info.key, name: info.name } });
   }
 
   if (method === 'POST' && path === '/v1/sessions/start') {
@@ -110,13 +114,15 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
   }
 
   if (method === 'POST' && path === '/v1/memories') {
-    const b = (body ?? {}) as { projectKey?: string; text?: string; title?: string; type?: string };
+    const b = (body ?? {}) as { projectKey?: string; text?: string; title?: string; type?: string; cwd?: string };
     // Same caps as the MCP save_memory schema; the route is reachable without MCP.
     if ((typeof b.text === 'string' && b.text.length > 20000) || (typeof b.title === 'string' && b.title.length > 2000)) return err(400, 'too_long', 'text max 20000 chars, title max 2000');
     const clean = (v: string) => redactSecrets(stripPrivate(v)).trim();
     const text = typeof b.text === 'string' ? clean(b.text) : '';
     const title = typeof b.title === 'string' ? clean(b.title) : '';
     if (!b.projectKey || !text) return err(400, 'bad_memory', 'projectKey and text required');
+    if (ctx.pausedUntil() !== null) return err(409, 'paused', 'memhive is paused or disabled (memhive resume); nothing was saved');
+    if (matchesAny(ctx.settings.excludeProjects, b.projectKey) || (typeof b.cwd === 'string' && b.cwd && ctx.excludedCwd(b.cwd))) return err(409, 'excluded', EXCLUDED_MSG);
     const project = store.getProjectByKey(b.projectKey) ?? store.getOrCreateProject(b.projectKey, b.projectKey.split('/').pop() ?? b.projectKey);
     const type = (b.type && OBSERVATION_TYPES.includes(b.type as ObservationType) ? b.type : 'discovery') as ObservationType;
     const now = new Date().toISOString();

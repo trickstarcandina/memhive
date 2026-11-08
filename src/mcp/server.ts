@@ -47,7 +47,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const projectKey = async () => (await rpc.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(deps.cwd)}`)).project.key;
   const textResult = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
   // Checked per call, so the server never needs a daemon while MEMHIVE_DISABLED is set.
-  const tool: typeof server.registerTool = (name, config, cb) => server.registerTool(name, config, (async (...a: unknown[]) => (envDisabled(deps.env ?? process.env) ? textResult('memhive disabled (MEMHIVE_DISABLED is set); nothing was read or saved.') : (cb as (...x: unknown[]) => unknown)(...a))) as typeof cb);
+  // A 409 (paused, excluded project) is an answer for the agent, not a tool failure.
+  const tool: typeof server.registerTool = (name, config, cb) => server.registerTool(name, config, (async (...a: unknown[]) => {
+    if (envDisabled(deps.env ?? process.env)) return textResult('memhive disabled (MEMHIVE_DISABLED is set); nothing was read or saved.');
+    try { return await (cb as (...x: unknown[]) => unknown)(...a); }
+    catch (e) { if (e instanceof DaemonError && e.status === 409) return textResult(e.message); throw e; }
+  }) as typeof cb);
 
   tool('search', {
     description: 'Step 1 of 3. Search past observations and session summaries for this project. Returns a compact index (ids, types, titles; summaries have type session-summary). Follow with timeline and get_observations.',
@@ -85,7 +90,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     description: 'Save a note for future sessions of this project (a decision, a gotcha, a convention).',
     inputSchema: { text: z.string().min(1).max(20000), title: z.string().max(2000).optional(), type: z.enum(OBSERVATION_TYPES).default('discovery') },
   }, async (a) => {
-    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/memories', { projectKey: await projectKey(), text: a.text, title: a.title, type: a.type });
+    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/memories', { projectKey: await projectKey(), cwd: deps.cwd, text: a.text, title: a.title, type: a.type });
     return textResult(`Saved #${shortId(r.observation.id)} · ${r.observation.type} · ${r.observation.title.replace(/\s+/g, ' ')}`);
   });
 

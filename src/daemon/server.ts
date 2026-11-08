@@ -70,6 +70,7 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
     home, store, observer, embedder, settings, logger, userId, sync, userFor,
     pausedUntil: () => (disabled ? Infinity : paused()),
     excludedCwd: (cwd) => excluded(projectKeyFor(cwd)),
+    excludedInfo: excluded,
     resolveSession(ev: HookEvent) {
       if (ctx.pausedUntil() !== null) return null;
       const sk = `${ev.host}\0${ev.hostSessionId}`;

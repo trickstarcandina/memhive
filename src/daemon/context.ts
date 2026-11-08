@@ -4,6 +4,7 @@ import type { Embedder } from '../providers/types.js';
 import type { Settings } from '../shared/settings.js';
 import type { Logger } from '../shared/logger.js';
 import type { HookEvent } from '../hooks/types.js';
+import type { ProjectInfo } from '../shared/project-key.js';
 
 export interface SyncHooks {
   pull(project: Project, timeoutMs: number): Promise<number>;
@@ -26,6 +27,7 @@ export interface DaemonContext {
   pausedUntil(): number | null;
   /** Exclusion by settings.excludeProjects or `.memhive.json` for a working directory (spawns git). */
   excludedCwd(cwd: string): boolean;
+  excludedInfo(info: ProjectInfo): boolean;   // same, for a key already resolved
   /** The user of the hub the project is linked to; else the default user (`userId`). */
   userFor(project: Project): string;
 }

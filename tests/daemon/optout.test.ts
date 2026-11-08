@@ -8,6 +8,7 @@ import { createDaemonContext } from '../../src/daemon/server.js';
 import { handleRoute } from '../../src/daemon/routes.js';
 import { runHook } from '../../src/hooks/hook-command.js';
 import { createMcpServer } from '../../src/mcp/server.js';
+import { DaemonError } from '../../src/daemon/client.js';
 import { pauseCommand } from '../../src/cli/commands/pause.js';
 import { pausedUntil, pauseReader, writePause } from '../../src/shared/optout.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
@@ -114,5 +115,42 @@ describe('opt-out', () => {
     expect((await feed(ctx, mk())).excluded).toBe(true);
     expect(((await handleRoute(ctx, 'GET', url('/v1/status'), undefined)).body as { paused_until: string }).paused_until).toBe('indefinite');
     ctx.store.close();
+  });
+});
+
+describe('opt-out covers MCP writes (M5)', () => {
+  const mcp = async (home: string, cwd: string, extra: Record<string, string> = {}) => {
+    const ctx = createDaemonContext(home, env(extra));
+    const client = { request: async (m: 'GET' | 'POST', p: string, body?: unknown) => { const r = await handleRoute(ctx, m, new URL('http://x' + p), body); if (r.status >= 400) throw new DaemonError((r.body as any).error.message, r.status); return r.body; } } as never;
+    const server = createMcpServer({ client, cwd });
+    const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a);
+    const c = new Client({ name: 't', version: '0' }); await c.connect(b);
+    const call = async (name: string, args: Record<string, unknown>) => (await c.callTool({ name, arguments: args }) as { content: Array<{ text: string }>; isError?: boolean });
+    return { ctx, c, call };
+  };
+  it('save_memory in an excluded project (settings or .memhive.json) saves nothing and creates no project row', async () => {
+    const repo = mk(); const key = projectKeyFor(repo).key;
+    const t = await mcp(mk(), repo, { MEMHIVE_EXCLUDE_PROJECTS: key });
+    const r = await t.call('save_memory', { text: 'secret plan' });
+    expect(r.isError).toBeFalsy(); expect(r.content[0].text).toContain('does not record this project');
+    expect((await t.call('search', { query: 'secret' })).content[0].text).toContain('does not record this project');
+    expect(t.ctx.store.getProjectByKey(key)).toBeNull();
+    await t.c.close(); t.ctx.store.close();
+    const repo2 = mk(); writeFileSync(path.join(repo2, '.memhive.json'), JSON.stringify({ disabled: true }));
+    const t2 = await mcp(mk(), repo2);
+    expect((await t2.call('save_memory', { text: 'secret plan' })).content[0].text).toContain('does not record this project');
+    expect(t2.ctx.store.getProjectByKey(projectKeyFor(repo2).key)).toBeNull();
+    await t2.c.close(); t2.ctx.store.close();
+  });
+  it('save_memory while paused saves nothing; a plain project lookup never creates a row', async () => {
+    const home = mk(); const repo = mk(); writePause(home, Infinity);
+    const t = await mcp(home, repo);
+    expect((await t.call('save_memory', { text: 'later' })).content[0].text).toContain('paused');
+    expect(t.ctx.store.getProjectByKey(projectKeyFor(repo).key)).toBeNull();
+    writePause(home, null);
+    const t2 = await mcp(home, repo);
+    expect((await t2.call('search', { query: 'x' })).content[0].text).toContain('No observations');
+    expect(t2.ctx.store.getProjectByKey(projectKeyFor(repo).key)).toBeNull();
+    await t.c.close(); await t2.c.close(); t.ctx.store.close(); t2.ctx.store.close();
   });
 });
