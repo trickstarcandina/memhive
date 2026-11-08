@@ -30,6 +30,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      # the built bundle in real processes (hooks, detached daemon, MCP stdio); skipped by `npm test` only without a build
+      - run: npx vitest run tests/e2e
 
       # Installs the packed tarball the way a user would, so a broken `files` list, bin path or
       # native prebuild for this platform fails here instead of after publishing.
