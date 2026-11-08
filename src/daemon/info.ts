@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { resolvePaths } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
 
@@ -12,6 +12,8 @@ export function readDaemonInfo(home: string): DaemonInfo | null {
 }
 export function writeDaemonInfo(home: string, info: DaemonInfo): void {
   mkdirSync(home, { recursive: true });
-  writeFileSync(resolvePaths(home).daemonInfo, JSON.stringify(info), { mode: 0o600 });
+  const p = resolvePaths(home).daemonInfo; const tmp = `${p}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(info), { mode: 0o600 });
+  renameSync(tmp, p);
 }
 export function removeDaemonInfo(home: string): void { rmSync(resolvePaths(home).daemonInfo, { force: true }); }

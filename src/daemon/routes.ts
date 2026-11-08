@@ -18,6 +18,8 @@ function parseSince(v: string | null): string | undefined {
   return new Date(Date.now() - ms).toISOString();
 }
 
+const clamp = (v: string | null, dflt: number) => Math.min(Math.max(Number(v ?? dflt) || 0, 0), 50);
+
 function resolveIds(ctx: DaemonContext, raw: string): string[] {
   return raw.split(',').map((s) => s.trim()).filter(Boolean).map((id) => ctx.store.resolveIdPrefix(id) ?? id);
 }
@@ -47,11 +49,12 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const ev = body as HookEvent;
     if (!ev?.hostSessionId || !ev.cwd || !ev.event) return err(400, 'bad_event', 'invalid event');
     const { ctx: sctx } = ctx.resolveSession(ev);
+    const warn = (e: unknown) => ctx.logger.warn('event handling failed', { event: ev.event, error: String(e) });
     switch (ev.event) {
       case 'prompt': ctx.observer.onPrompt(sctx, ev.prompt ?? ''); break;
       case 'tool': if (ev.tool) ctx.observer.onTool(sctx, { ...ev.tool, at: ev.at }); break;
-      case 'stop': void ctx.observer.onStop(sctx); break;
-      case 'session-end': void ctx.observer.onStop(sctx).then(() => store.endSession(sctx.sessionId, ev.at)); break;
+      case 'stop': ctx.observer.onStop(sctx).catch(warn); break;
+      case 'session-end': ctx.observer.onStop(sctx).then(() => store.endSession(sctx.sessionId, ev.at)).catch(warn); break;
       case 'session-start': break;
     }
     return ok({}, 202);
@@ -69,7 +72,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
 
   if (method === 'GET' && path === '/v1/timeline') {
     const [anchor] = resolveIds(ctx, q.get('anchor') ?? ''); if (!anchor) return err(400, 'missing_anchor', 'anchor required');
-    return ok({ observations: store.timeline(anchor, Number(q.get('before') ?? 5) || 5, Number(q.get('after') ?? 5) || 5) });
+    return ok({ observations: store.timeline(anchor, clamp(q.get('before'), 5), clamp(q.get('after'), 5)) });
   }
 
   if (method === 'POST' && path === '/v1/memories') {

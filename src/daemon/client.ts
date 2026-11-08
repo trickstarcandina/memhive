@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { DaemonInfo } from './info.js';
 
 export class DaemonError extends Error { constructor(message: string, public readonly status: number) { super(message); this.name = 'DaemonError'; } }
@@ -16,8 +17,18 @@ export class DaemonClient {
       return json as T;
     } finally { clearTimeout(t); }
   }
+  // Proves the listener knows the token (HMAC over a fresh nonce) so a squatter on the port is treated as dead.
   async health(timeoutMs = 200): Promise<boolean> {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
-    try { const r = await this.fetchImpl(this.baseUrl + '/healthz', { signal: ctl.signal }); return r.ok; } catch { return false; } finally { clearTimeout(t); }
+    try {
+      const nonce = randomBytes(16).toString('hex');
+      const r = await this.fetchImpl(`${this.baseUrl}/healthz?nonce=${nonce}`, { signal: ctl.signal });
+      if (!r.ok) return false;
+      const j = (await r.json()) as { ok?: boolean; pid?: number; proof?: string };
+      if (j.ok !== true || j.pid !== this.info.pid || typeof j.proof !== 'string') return false;
+      const want = Buffer.from(createHmac('sha256', this.info.token).update(nonce).digest('hex'));
+      const got = Buffer.from(j.proof);
+      return got.length === want.length && timingSafeEqual(got, want);
+    } catch { return false; } finally { clearTimeout(t); }
   }
 }

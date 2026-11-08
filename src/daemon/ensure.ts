@@ -16,7 +16,8 @@ export async function ensureDaemon(home: string, opts: { wait: boolean; spawn?: 
   const info = readDaemonInfo(home);
   if (info) {
     if (await new DaemonClient(info, opts.fetchImpl).health()) return info;
-    if (!pidAlive(info.pid)) removeDaemonInfo(home);
+    const stale = !pidAlive(info.pid) || Date.now() - Date.parse(info.startedAt) > 5000;   // old + unhealthy = dead or hung (or pid reused)
+    if (stale) removeDaemonInfo(home);
     else return opts.wait ? waitFor(home, opts) : null;   // alive pid but not answering yet: starting up
   }
   (opts.spawn ?? defaultSpawn)(opts.bundlePath ?? (typeof __filename === 'string' ? __filename : process.argv[1]), home);

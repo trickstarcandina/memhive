@@ -1,3 +1,5 @@
+import { existsSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,5 +56,33 @@ describe('daemon', () => {
   });
   it('unknown route is 404', async () => {
     await expect(client.request('GET', '/nope')).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('daemon lock and authenticated health', () => {
+  const env = { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' };
+  it('second daemon on the same home refuses and leaves the first daemon.json intact', async () => {
+    const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const first = await startDaemon(createDaemonContext(h2, env), { port: 0 });
+    const ctx2 = createDaemonContext(h2, env);
+    await expect(startDaemon(ctx2, { port: 0 })).rejects.toMatchObject({ name: 'DaemonAlreadyRunning' });
+    ctx2.store.close();
+    expect(readDaemonInfo(h2)!.token).toBe(first.info.token);
+    await first.close();
+    expect(readDaemonInfo(h2)).toBeNull();
+    expect(existsSync(path.join(h2, 'daemon.lock'))).toBe(false);
+  });
+  it('replaces a stale lock from a dead pid', async () => {
+    const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeFileSync(path.join(h2, 'daemon.lock'), '999999');
+    const d = await startDaemon(createDaemonContext(h2, env), { port: 0 });
+    await d.close();
+  });
+  it('a squatter answering ok without a valid proof is treated as dead', async () => {
+    const srv = createServer((_q, r) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify({ ok: true, pid: process.pid, proof: 'x' })); });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const port = (srv.address() as any).port;
+    expect(await new DaemonClient({ port, pid: process.pid, token: 't', startedAt: '' }).health()).toBe(false);
+    await new Promise((r) => srv.close(r));
   });
 });

@@ -27,4 +27,11 @@ describe('ensureDaemon', () => {
     const info = await ensureDaemon(home, { wait: true, spawn: () => {}, waitMs: 300 });
     expect(info).toBeNull();
   });
+  it('respawns when daemon.json names a live foreign pid that never answers and is old', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    writeDaemonInfo(home, { port: 1, pid: process.pid, token: 't', startedAt: '2020-01-01T00:00:00Z' });
+    let spawned = 0;
+    expect(await ensureDaemon(home, { wait: false, spawn: () => { spawned++; } })).toBeNull();
+    expect(spawned).toBe(1);
+  });
 });

@@ -1,9 +1,11 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createJsonServer } from './http.js';
 import { handleRoute } from './routes.js';
-import { writeDaemonInfo, removeDaemonInfo, type DaemonInfo } from './info.js';
+import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, type DaemonInfo } from './info.js';
+import { DaemonClient } from './client.js';
 import type { DaemonContext } from './context.js';
 import { resolvePaths } from '../shared/paths.js';
 import { loadSettings } from '../shared/settings.js';
@@ -48,22 +50,49 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   return ctx;
 }
 
+export class DaemonAlreadyRunning extends Error { constructor() { super('another memhub daemon is already running'); this.name = 'DaemonAlreadyRunning'; } }
+
+function pidAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
+
+// Exclusive lock so two racing spawns cannot both own daemon.json. A holder counts as live if its pid is alive and it
+// either answers an authenticated health check or took the lock under 5 s ago (still starting up).
+async function acquireLock(home: string): Promise<string> {
+  const file = path.join(home, 'daemon.lock');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 }); return file; }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
+    let holder = NaN; let age = Infinity;
+    try { holder = Number(readFileSync(file, 'utf8')); age = Date.now() - statSync(file).mtimeMs; } catch { continue; }   // vanished: retry
+    if (pidAlive(holder)) {
+      const info = readDaemonInfo(home);
+      if (age < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
+    }
+    rmSync(file, { force: true });
+  }
+  throw new DaemonAlreadyRunning();
+}
+
 export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idleMs?: number } = {}): Promise<{ info: DaemonInfo; close(): Promise<void> }> {
+  const lock = await acquireLock(ctx.home);
   const token = randomBytes(24).toString('base64url');
   const idleMs = opts.idleMs ?? 30 * 60 * 1000;
   let idleTimer: NodeJS.Timeout | null = null;
   let closing: Promise<void> | null = null;
-  const touch = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => void close(), idleMs); idleTimer.unref?.(); };
+  const touch = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => closeSafe(), idleMs); idleTimer.unref?.(); };
 
-  const server = createJsonServer(async (method, url, body, headers) => {
-    if (url.pathname === '/healthz') return { status: 200, body: { ok: true, pid: process.pid } };
-    if (!tokenOk(headers['x-memhub-daemon-token'], token)) return { status: 401, body: { error: { code: 'unauthorized', message: 'bad daemon token' } } };
+  const closeSafe = () => { close().catch((e) => ctx.logger.warn('close failed', { error: String(e) })); };
+  const server = createJsonServer(async (method, url, body) => {
+    if (url.pathname === '/healthz') {
+      const nonce = url.searchParams.get('nonce') ?? '';
+      return { status: 200, body: { ok: true, pid: process.pid, proof: createHmac('sha256', token).update(nonce).digest('hex') } };
+    }
     touch();
-    if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(() => void close(), 10); return { status: 200, body: {} }; }
+    if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(closeSafe, 10); return { status: 200, body: {} }; }
     try { return await handleRoute(ctx, method, url, body); }
-    catch (e) { ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: e instanceof Error ? e.message : String(e) } } }; }
-  });
-  await new Promise<void>((resolve) => server.listen(opts.port ?? 0, '127.0.0.1', resolve));
+    catch (e) { ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
+  }, (url, headers) => url.pathname === '/healthz' || tokenOk(headers['x-memhub-daemon-token'], token));
+  try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(opts.port ?? 0, '127.0.0.1', resolve); }); }
+  catch (e) { rmSync(lock, { force: true }); throw e; }
   const info: DaemonInfo = { port: (server.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString() };
   writeDaemonInfo(ctx.home, info);
   touch();
@@ -76,7 +105,8 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
     try { await ctx.observer.flushAll(); } catch { /* best effort */ }
     await new Promise<void>((r) => server.close(() => r()));
     server.closeAllConnections?.();
-    removeDaemonInfo(ctx.home);
+    if (readDaemonInfo(ctx.home)?.token === token) removeDaemonInfo(ctx.home);   // never delete a successor's file
+    try { if (Number(readFileSync(lock, 'utf8')) === process.pid) rmSync(lock, { force: true }); } catch { /* gone */ }
     ctx.store.close();
     ctx.logger.info('daemon stopped');
   })();
