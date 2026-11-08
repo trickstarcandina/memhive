@@ -27,6 +27,7 @@ Claude Code and Codex remember past sessions: personal by default, shared throug
 
 <p>
 <a href="https://www.npmjs.com/package/memhive"><b>npm</b></a> ·
+<a href="https://github.com/trickstarcandina/memhive/pkgs/npm/memhive"><b>GitHub Packages</b></a> ·
 <a href="https://github.com/trickstarcandina/memhive/releases"><b>Releases</b></a> ·
 <a href="#configuration"><b>Configuration</b></a> ·
 <a href="#team-hub"><b>Team hub</b></a> ·

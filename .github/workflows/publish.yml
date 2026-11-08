@@ -69,3 +69,29 @@ jobs:
       - run: npm ci
       # prepublishOnly builds dist/. No NODE_AUTH_TOKEN: OIDC authenticates, and npm attaches provenance.
       - run: npm publish --access public
+
+  # Mirror to GitHub Packages so the release shows under the repo's Packages. GitHub Packages
+  # only takes a scope equal to the owner, so the copy is renamed @trickstarcandina/memhive
+  # (the `memhive` command stays). Separate job: if it fails, "Re-run failed jobs" retries
+  # only this one, never npmjs again.
+  github-packages:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://npm.pkg.github.com
+      - run: npm ci
+      - run: npm pkg set name=@trickstarcandina/memhive
+      # The workflow's GITHUB_TOKEN is enough; no personal access token needed.
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
