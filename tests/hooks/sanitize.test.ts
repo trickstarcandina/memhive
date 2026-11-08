@@ -47,6 +47,11 @@ describe('sanitizeToolPayload', () => {
     expect(sanitizeToolPayload({ a: 'keep <private>s1', b: 'inner', c: 's2</private> after', d: 'shown' })).toEqual({ a: 'keep ', '': ' after', d: 'shown' });
     expect(sanitizeToolPayload({ ['x<private>k</private>']: 'v', ['<private>k2']: 'gone', ['</private>z']: 'back' })).toEqual({ x: 'v', '': '', z: 'back' });
   });
+  it('redacts a secret-named key whose name is split by a private tag', () => {
+    expect(sanitizeToolPayload({ 'pass<private>x</private>word': 'hunter2' })).toEqual({ password: '<redacted>' });
+    expect(sanitizeToolPayload({ '<private>password</private>': 'hunter2', 'x<private>token</private>': 42 })).toEqual({ '': '<redacted>', x: '<redacted>' });
+    expect(sanitizeToolPayload({ 'api_<private>z</private>key': 'abc', 'password<private>_count</private>': 7 })).toEqual({ api_key: '<redacted>', password: '<redacted>' });
+  });
   it('never splits a surrogate pair when truncating', () => {
     const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
     const out = sanitizeToolPayload('ab' + '\u{1F600}'.repeat(300) + 'c', 201) as string;

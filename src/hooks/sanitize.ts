@@ -135,7 +135,9 @@ export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: Pri
   const out: Record<string, unknown> = {};
   for (const [rawKey, v] of Object.entries(rec)) {
     const k = stripPrivate(rawKey, state);
-    const hidden = SECRET_KEY.test(k) && !COUNT_KEY.test(k) && (typeof v === 'string' || typeof v === 'number');
+    // Judge both forms: stripping a tag out of a key must never make it less sensitive.
+    const secretKey = (x: string) => SECRET_KEY.test(x) && !COUNT_KEY.test(x);
+    const hidden = (secretKey(rawKey) || secretKey(k)) && (typeof v === 'string' || typeof v === 'number');
     out[k] = hidden ? '<redacted>' : sanitizeToolPayload(v, maxChars, state, depth + 1);
   }
   return out;
