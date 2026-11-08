@@ -41,9 +41,21 @@ const SECRET_PATTERNS: RegExp[] = [
 const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|([^\s"'`,;(){}]{4,}))/gi;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
-// A TS/JSON-ish type after `name:` (`string`, `Foo`, `Foo[]`, `Map<a,b>`, `a | b`), not a value.
-const TYPE_PART = /^(?:string|number|boolean|any|unknown|object|null|undefined|never|void|[A-Z]\w*(?:<.*)?|\w+\[\])$/;
+// After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env secret:
+// a primitive keyword, a generic/array shape, a `|` union of those, or a digit-free identifier in
+// member/param context (followed by `;`, `,`, `=`, `)` or `|`). A bare word at end of line is a value.
+const TS_PRIMITIVE = /^(?:string|number|boolean|any|unknown|object|null|undefined|never|void|bigint|symbol)(?:\[\])*$/;
+const TS_SHAPE = /^[A-Za-z_$][\w$.]*(?:<.*|(?:\[\])+)$/;
+const TS_IDENT = /^[A-Za-z_$][A-Za-z_$.]*$/;
 const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
+const MEMBER_FOLLOW = /^[ \t]*[;,=)|]/;
+
+function looksLikeType(bare: string, follow: string): boolean {
+  if (!TYPE_FOLLOW.test(follow)) return false;
+  const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_SHAPE.test(p);
+  if (bare.includes('|')) return bare.split('|').every(typeLike);
+  return typeLike(bare) || (TS_IDENT.test(bare) && MEMBER_FOLLOW.test(follow));
+}
 
 export function redactSecrets(text: string): string {
   let out = text;
@@ -54,7 +66,7 @@ export function redactSecrets(text: string): string {
     if (!bare || REFERENCE.test(bare)) return m;
     if (str[offset + m.length] === '(') return m; // call, e.g. getToken()
     if (COUNT_KEY.test(str.slice(Math.max(0, offset - 12), offset) + name)) return m;
-    if (sep === ':' && bare.split('|').every((p) => TYPE_PART.test(p)) && TYPE_FOLLOW.test(str.slice(offset + m.length))) return m;
+    if (sep === ':' && looksLikeType(bare, str.slice(offset + m.length, offset + m.length + 64))) return m;
     return `${name}${pre}<redacted>`;
   });
 }
@@ -70,10 +82,19 @@ function truncate(s: string, max: number): string {
   return `${head}\n<elided chars=${s.length - max}>\n${rest}`;
 }
 
+// Drops a token cut by the cap; fails closed (drops up to 1 KB) when no whitespace is near.
+function dropPartialTail(s: string): string {
+  const stop = Math.max(0, s.length - 1024);
+  for (let i = s.length - 1; i >= stop; i--) if (/\s/.test(s[i])) return s.slice(0, i + 1);
+  return s.slice(0, stop);
+}
+
 function sanitizeString(s: string, max: number): string {
   const noImages = stripPrivate(s).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
-  // Hard pre-cap bounds the scan; redact before truncating so a secret is never cut into a fragment.
-  return truncate(redactSecrets(noImages.slice(0, PRE_CAP)), max);
+  // Hard pre-cap bounds the scan. Redact a slightly wider window first, so a secret straddling the cap
+  // is matched whole, then cap and drop the cut trailing token; truncate last so nothing is a fragment.
+  if (noImages.length <= PRE_CAP) return truncate(redactSecrets(noImages), max);
+  return truncate(dropPartialTail(redactSecrets(noImages.slice(0, PRE_CAP + 1024)).slice(0, PRE_CAP)), max);
 }
 
 export function sanitizeToolPayload(value: unknown, maxChars = 16000, depth = 0): unknown {

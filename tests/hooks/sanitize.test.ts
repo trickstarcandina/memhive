@@ -102,6 +102,26 @@ describe('redactSecrets', () => {
     expect(redactSecrets('api_key=abc1')).toBe('api_key=' + R);
     for (const c of ['password: string;', 'token: string | null,', 'secret: Foo[];', 'maxTokens: number = 100000', 'token: Map<string, number>;', 'TOKEN_COUNT=1000000', 'max_tokens=100000']) expect(redactSecrets(c)).toBe(c);
   });
+  it('treats a capitalised bare word as a value unless it is in TS type context', () => {
+    expect(redactSecrets('password: Hunter2Hunter')).toBe('password: ' + R);
+    expect(redactSecrets('token: Abcdefghij')).toBe('token: ' + R);
+    expect(redactSecrets('api_key: XyZ123abc')).toBe('api_key: ' + R);
+    expect(redactSecrets('token: Abcdefghij\nnext: 1')).toBe('token: ' + R + '\nnext: 1');
+    expect(redactSecrets('secret: Abc123;')).toBe('secret: ' + R + ';');
+    for (const c of ['token: null', 'secret: Foo | null;', 'f(token: Token)', 'token: Token,', 'token: string[]', 'token: bigint;']) expect(redactSecrets(c)).toBe(c);
+  });
+  it('is linear on hostile type-like input', () => {
+    const t = Date.now();
+    redactSecrets('token: A<'.repeat(110000));
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+  it('leaves no fragment of a secret straddling the 256 KB pre-cap', () => {
+    const secret = 'sk-ant-' + 'abcdefghij'.repeat(4);
+    const pad = 'x '.repeat((256 * 1024 - 10) / 2);
+    const out = sanitizeToolPayload(pad + secret + ' tail', 1_000_000) as string;
+    expect(out).not.toMatch(/sk-ant|abcdefgh|<reda(?!cted>)/);
+    expect(out.length).toBeLessThanOrEqual(256 * 1024);
+  });
   it('redacts a long bare value to its end and judges references on the whole token', () => {
     expect(redactSecrets('token=' + 'a'.repeat(900) + ' next')).toBe('token=' + R + ' next');
     expect(redactSecrets('token=this.x;rm')).toBe('token=this.x;rm');
