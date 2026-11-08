@@ -4,6 +4,7 @@ import { startHub, ensureAdminKey, createHubStore, hubConfigFromEnv } from '../.
 import { generateApiKey } from '../../src/hub/auth.js';
 import { hobs, hsess } from './hub-store-contract.js';
 import { newId } from '../../src/shared/ids.js';
+import { HUB_PROTOCOL, HubConfigInfoSchema, PullResultSchema } from '../../src/hub/wire.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 let hub: Awaited<ReturnType<typeof startHub>>; let store: SqliteHubStore; let aliceKey: string; let bobKey: string;
@@ -30,7 +31,9 @@ describe('hub http', () => {
     expect((await call('mh_wrong', 'GET', '/v1/config')).status).toBe(401);
   });
   it('config and me', async () => {
-    expect((await call(aliceKey, 'GET', '/v1/config')).json).toMatchObject({ embedding_model: 'bge-m3', embedding_dims: 4, body_limit: 2_000_000 });
+    const cfg = (await call(aliceKey, 'GET', '/v1/config')).json;
+    expect(cfg).toMatchObject({ embedding_model: 'bge-m3', embedding_dims: 4, body_limit: 2_000_000, protocol: HUB_PROTOCOL });
+    expect(HubConfigInfoSchema.safeParse(cfg).success).toBe(true);
     expect((await call(aliceKey, 'GET', '/v1/me')).json).toEqual({ user: 'alice' });
   });
   it('push assigns user from key, rejects model mismatch and bad dims per row, pull returns rows in order', async () => {
@@ -44,7 +47,7 @@ describe('hub http', () => {
     expect(push.json.rejected.map((r: any) => r.id).sort()).toEqual([o2.id, o3.id].sort());
     expect(push.json.rejected[0].reason).toBe('embedding_model_mismatch');
     const pull = await call(bobKey, 'GET', '/v1/sync/pull?project_key=github.com%2Ft%2Fr&since=0');
-    expect(pull.status).toBe(200);
+    expect(pull.status).toBe(200); expect(PullResultSchema.safeParse(pull.json).success).toBe(true);
     expect(pull.json.sessions[0].userId).toBe('alice');
     expect(pull.json.observations.map((o: any) => o.title)).toEqual(['ok', 'no vec']);
     expect(pull.json.observations[0].embedding).toEqual([1, 0, 0, 0]);
@@ -126,6 +129,30 @@ describe('hub push hardening', () => {
     expect(r.json.rejected).toEqual([{ id: sid, reason: 'not_owner' }, { id: o.id, reason: 'unknown_session' }, { id: mine.id, reason: 'unknown_session' }]);
     expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', cwd: '/alice', endedAt: null });
     expect((await store.getObservations([o.id]))[0]).toMatchObject({ userId: 'alice', title: 'alice-obs' });
+  });
+  it('push rejects oversized observation fields', async () => {
+    const sid = newId(); const big = (n: number) => 'x'.repeat(n);
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['title', { title: big(1001) }], ['subtitle', { subtitle: big(1001) }], ['narrative', { narrative: big(20_001) }],
+      ['facts', { facts: Array.from({ length: 101 }, () => 'f') }], ['concepts', { concepts: [big(4001)] }],
+      ['filesRead', { filesRead: [big(4001)] }], ['filesModified', { filesModified: Array.from({ length: 101 }, () => 'f') }],
+    ];
+    const obsRows = cases.map(([, p]) => ({ ...hobs({ projectId: 'x', sessionId: sid }), ...p }));
+    const fine = hobs({ projectId: 'x', sessionId: sid, title: big(1000), narrative: big(20_000), facts: Array.from({ length: 100 }, () => big(40)) });
+    const sums = (['request', 'learned', 'completed', 'nextSteps'] as const).map((f) => ({ ...sum(sid), [f]: big(20_001) }));
+    const sessions = (['host', 'hostSessionId', 'cwd'] as const).map((f) => hsess('x', { [f]: big(1001) }));
+    const r = await push(aliceKey, { sessions: [hsess('x', { id: sid }), ...sessions], observations: [...obsRows, fine], summaries: sums });
+    expect(r.status).toBe(200);
+    expect(r.json.accepted).toEqual({ sessions: 1, observations: 1, summaries: 0 });
+    const byId = new Map(r.json.rejected.map((x: any) => [x.id, x]));
+    cases.forEach(([field], i) => expect(byId.get(obsRows[i].id)).toEqual({ id: obsRows[i].id, reason: 'invalid_row', field }));
+    sums.forEach((m, i) => expect(byId.get(m.id)).toMatchObject({ reason: 'invalid_row', field: ['request', 'learned', 'completed', 'nextSteps'][i] }));
+    sessions.forEach((s, i) => expect(byId.get(s.id)).toMatchObject({ reason: 'invalid_row', field: ['host', 'hostSessionId', 'cwd'][i] }));
+    expect(JSON.stringify(r.json)).not.toContain('xxxx');   // names the field, never echoes the value
+    for (const top of [{ projectKey: big(1001) }, { projectName: big(1001) }, { projectKey: '' }]) {
+      const bad = await call(aliceKey, 'POST', '/v1/sync/push', { projectKey: PK, sessions: [], observations: [], summaries: [], ...top });
+      expect(bad.status).toBe(400); expect(bad.json.error.code).toBe('bad_push');
+    }
   });
   it('invalid vectors are rejected per row', async () => {
     const sid = newId(); const bad = hobs({ projectId: 'x', sessionId: sid, title: 'nan', embedding: [1, 'a' as any, 0, 0], embeddingModel: 'bge-m3' });
