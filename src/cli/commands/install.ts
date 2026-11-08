@@ -10,6 +10,7 @@ import { VERSION } from '../../shared/version.js';
 import { renderPluginDir } from '../../install/plugin-files.js';
 import { detectHosts, installClaudeCode, installCodex, defaultRun, type RunFn } from '../../install/hosts.js';
 import { doctorCommand } from './doctor.js';
+import { codexHooksByMemhive, updateState } from '../../shared/optout.js';
 import { daemonCommand } from './daemon.js';
 
 declare const __dirname: string;
@@ -77,7 +78,11 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
 
   if (hosts.has('claude-code')) for (const l of installClaudeCode(marketplaceRoot, run)) io.stdout(`  claude-code: ${l}\n`);
   let codexOk = true;
-  if (hosts.has('codex')) { const r = installCodex(marketplaceRoot, env.CODEX_HOME ?? path.join(homedir(), '.codex'), run); codexOk = r.ok; for (const l of r.log) io.stdout(`  codex: ${l}\n`); }
+  if (hosts.has('codex')) {
+    const r = installCodex(marketplaceRoot, env.CODEX_HOME ?? path.join(homedir(), '.codex'), run); codexOk = r.ok; for (const l of r.log) io.stdout(`  codex: ${l}\n`);
+    // Once memhive turned the hooks on, a reinstall (which finds them on) must not forget that.
+    if (r.hooksWereOn !== undefined) updateState(home, { codexHooksByMemhive: codexHooksByMemhive(home) === true || !r.hooksWereOn });
+  }
 
   io.stdout('\nChecking setup…\n');
   await doctorCommand([], io, { home, env, ping: !flags['no-ping'], bundle });

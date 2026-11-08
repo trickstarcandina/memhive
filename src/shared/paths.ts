@@ -21,6 +21,8 @@ export function resolvePaths(home = process.env.MEMHIVE_HOME ?? path.join(homedi
 // Names memhive writes in its home and logs dir; a dir holding anything else is not ours to tighten.
 const OWN_ENTRY = /^(?:memhive\.db(?:-wal|-shm|-journal)?|settings\.json|credentials\.json|state\.json|daemon\.(?:json|lock(?:\.break)?)|logs|marketplace|[\w-]+\.log(?:\.1|\.rotate)?)$|\.tmp$/;
 
+export const isOwnEntry = (name: string): boolean => OWN_ENTRY.test(name);
+
 const warnedDirs = new Set<string>();
 let warnSink = (msg: string): void => { process.stderr.write(msg); };
 /** Hooks must stay silent on stderr, so they route this warning to their log file. */

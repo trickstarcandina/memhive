@@ -36,7 +36,8 @@ export function parseDuration(s: string): number | null {
 }
 
 // state.json holds runtime state the CLI writes for the daemon (pause), kept out of settings.json on purpose.
-interface State { pausedUntil?: string }
+// codexHooksByMemhive: install turned on Codex's [features] hooks (true), found it on (false); absent: unknown (0.1 install).
+interface State { pausedUntil?: string; codexHooksByMemhive?: boolean }
 const INDEFINITE = 'indefinite';
 function readState(home: string): State {
   const p = resolvePaths(home).state;
@@ -52,10 +53,19 @@ export function pausedUntil(home: string, now = Date.now()): number | null {
   return Number.isFinite(t) && t > now ? t : null;
 }
 export function writePause(home: string, until: number | null): void {
+  updateState(home, { pausedUntil: until === null ? undefined : until === Infinity ? INDEFINITE : new Date(until).toISOString() });
+}
+/** Codex hooks ownership recorded at install; undefined when unknown. */
+export function codexHooksByMemhive(home: string): boolean | undefined {
+  try { const v = readState(home).codexHooksByMemhive; return typeof v === 'boolean' ? v : undefined; } catch { return undefined; }
+}
+/** Merges patch into state.json; an undefined value removes the key. */
+export function updateState(home: string, patch: Partial<State>): void {
   ensureHomeDir(home);
   let st: State = {};
   try { st = readState(home); } catch { /* unreadable: start fresh */ }
-  if (until === null) delete st.pausedUntil; else st.pausedUntil = until === Infinity ? INDEFINITE : new Date(until).toISOString();
+  st = { ...st, ...patch };
+  for (const k of Object.keys(st) as Array<keyof State>) if (st[k] === undefined) delete st[k];
   writeFileAtomic(resolvePaths(home).state, JSON.stringify(st, null, 2) + '\n', 0o600);
 }
 /** Re-reads state.json at most once per ttl: every hook event asks, the file is read every few seconds. */

@@ -7,7 +7,10 @@ const spec = (usage: string, value: string[] = [], bool: string[] = []): Command
 
 export const COMMANDS: Record<string, CommandSpec> = {
   install: spec('usage: memhive install [--yes] [--host claude-code,codex] [--provider anthropic|openai-compat] [--no-ping]\n', ['host', 'provider'], ['yes', 'no-ping']),
-  uninstall: spec('usage: memhive uninstall\n'),
+  uninstall: spec(`usage: memhive uninstall [--purge [--yes]]   (removes the plugin from Claude Code and Codex; your memory stays)
+  --purge  also delete the memhive home (database, logs, settings.json and credentials.json with API keys) after a confirmation
+  --yes    with --purge: do not ask
+`, [], ['purge', 'yes']),
   doctor: spec(`usage: memhive doctor [--no-ping] [--json]   (checks setup; exit 1 when any check fails)
   --no-ping  skip the provider and embedder calls
   --json     {"version", "home", "problems", "checks": [{"status": "ok|warn|fail|info", "check", "message", "hint"?}]}
@@ -55,7 +58,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
 
 export const USAGE = `memhive ${VERSION}
 usage: memhive <command>   (memhive <command> --help for its flags)
-  install | uninstall | doctor [--json] | stats [--project key] [--json]
+  install | uninstall [--purge] | doctor [--json] | stats [--project key] [--json]
   hook <claude-code|codex> <event>
   daemon <run|start|stop|status>
   mcp

@@ -3,6 +3,7 @@ import { writeFileAtomic } from '../shared/atomic.js';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { parse } from 'smol-toml';
 import { hasTomlTable, setTomlBooleanChecked } from './toml.js';
 
 export type RunFn = (cmd: string, args: string[]) => { status: number | null; stdout: string; stderr: string; error?: Error };
@@ -48,14 +49,17 @@ function writeCodexConfig(link: string, content: string): void {
   writeFileAtomic(cfg, content, mode);
 }
 
-export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): { log: string[]; ok: boolean } {
+/** hooksWereOn: [features] hooks was already true before this install (so memhive did not turn it on). */
+export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): { log: string[]; ok: boolean; hooksWereOn?: boolean } {
   const log: string[] = [];
   const cfg = path.join(codexHome, 'config.toml');
   const manual = () => log.push(`Do it by hand: codex plugin marketplace add ${marketplaceRoot} ; codex plugin add ${PLUGIN_ID} ; then in ${cfg} set [features] hooks = true and [plugins."${PLUGIN_ID}"] enabled = true`);
   run('codex', ['plugin', 'marketplace', 'remove', MARKETPLACE_NAME]);
   if (!tryRun(run, 'codex', ['plugin', 'marketplace', 'add', marketplaceRoot], log) || !tryRun(run, 'codex', ['plugin', 'add', PLUGIN_ID], log)) { manual(); return { log, ok: false }; }
+  let hooksWereOn = false;
   try {
     let content = existsSync(cfg) ? readFileSync(cfg, 'utf8') : '';
+    try { hooksWereOn = (parse(content) as { features?: { hooks?: unknown } }).features?.hooks === true; } catch { /* setTomlBooleanChecked reports it */ }
     content = setTomlBooleanChecked(content, '[features]', 'hooks', true);
     content = setTomlBooleanChecked(content, `[plugins."${PLUGIN_ID}"]`, 'enabled', true);
     mkdirSync(codexHome, { recursive: true });
@@ -65,18 +69,24 @@ export function installCodex(marketplaceRoot: string, codexHome: string, run: Ru
   }
   log.push(`updated ${cfg}: [features] hooks = true, [plugins."${PLUGIN_ID}"] enabled = true`);
   log.push('Restart Codex and trust the memhive hooks when prompted.');
-  return { log, ok: true };
+  return { log, ok: true, hooksWereOn };
 }
-export function uninstallCodex(codexHome: string, run: RunFn = defaultRun): string[] {
+/** resetHooks: memhive turned [features] hooks on (set it back to false); false: it was on before; undefined: unknown, left alone. */
+export function uninstallCodex(codexHome: string, run: RunFn = defaultRun, resetHooks?: boolean): string[] {
   const log: string[] = [];
   const cfg = path.join(codexHome, 'config.toml');
   const header = `[plugins."${PLUGIN_ID}"]`;
   if (existsSync(cfg)) {
-    const src = readFileSync(cfg, 'utf8');
+    let src = readFileSync(cfg, 'utf8');
     if (hasTomlTable(src, header)) {
-      try { writeCodexConfig(cfg, setTomlBooleanChecked(src, header, 'enabled', false)); log.push(`disabled ${PLUGIN_ID} in ${cfg}`); }
+      try { src = setTomlBooleanChecked(src, header, 'enabled', false); writeCodexConfig(cfg, src); log.push(`disabled ${PLUGIN_ID} in ${cfg}`); }
       catch (e) { log.push(`FAILED to edit ${cfg}: ${(e as Error).message}; set enabled = false under ${header} by hand`); }
     }
+    if (resetHooks === true && hasTomlTable(src, '[features]')) {
+      try { writeCodexConfig(cfg, setTomlBooleanChecked(src, '[features]', 'hooks', false)); log.push(`set [features] hooks = false in ${cfg} (memhive had turned it on)`); }
+      catch (e) { log.push(`FAILED to reset [features] hooks in ${cfg}: ${(e as Error).message}`); }
+    } else if (resetHooks === false) log.push(`left [features] hooks = true in ${cfg}: it was on before memhive`);
+    else if (hasTomlTable(src, '[features]')) log.push(`left [features] hooks in ${cfg} as it is: memhive did not record whether it turned it on (installed before 0.2); other plugins may need it`);
   }
   tryRun(run, 'codex', ['plugin', 'remove', PLUGIN_ID], log);
   tryRun(run, 'codex', ['plugin', 'marketplace', 'remove', MARKETPLACE_NAME], log);
