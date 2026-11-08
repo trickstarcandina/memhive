@@ -38,8 +38,12 @@ export interface Store {
   searchObservationsFts(query: string, f: SearchFilters): SearchHit[];
   searchObservationsVector(vec: number[], f: SearchFilters): SearchHit[];
   timeline(anchorId: string, before: number, after: number): Observation[];
-  listMissingEmbedding(limit: number): Observation[];
+  /** Rows without a vector, or (with `model`) with a vector from another model; newest first, `exclude` left out. */
+  listMissingEmbedding(limit: number, model?: string, exclude?: Iterable<string>): Observation[];
   setObservationEmbedding(id: string, vec: number[], model: string): void;
+  setObservationEmbeddings(rows: Array<{ id: string; vec: number[]; model: string }>): void;   // one transaction
+  /** Drops every stored vector and marks all rows as needing an embedding (model or dims change, `embed --rebuild`). */
+  resetEmbeddings(): void;
   getObservationEmbeddings(ids: string[]): Map<string, number[]>;   // only ids that have a vector
   insertSummaries(s: Summary[]): void;
   listRecentSummaries(projectId: string, limit: number): Summary[];

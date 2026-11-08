@@ -85,15 +85,16 @@ describe('embed command', () => {
     const ctx = createDaemonContext(home, { ...baseEnv, MEMHIVE_EMBED_BASE_URL: base, MEMHIVE_EMBED_MODEL: 'bge', MEMHIVE_EMBED_DIMS: '2' });
     const list = seed(ctx, cwd, ['one', 'two', 'three']);
     const h = await startDaemon(ctx, { port: 0 });
-    const r = io();
-    expect(await embedCommand([], r.io, { home })).toBe(0);
-    expect(r.out.join('')).toBe('embedded 3 observations\n');
+    await ctx.observer.backfill();   // the daemon starts a backfill on its own
     expect(ctx.store.listMissingEmbedding(10)).toHaveLength(0);
     expect(ctx.store.getObservations([list[0].id])[0].embeddingModel).toBe('bge');
+    const r = io();
+    expect(await embedCommand([], r.io, { home })).toBe(0);
+    expect(r.out.join('')).toBe('embedded 0 observations\n');
     const again = io();
     expect(await embedCommand(['--rebuild'], again.io, { home })).toBe(0);
-    expect(again.out.join('')).toContain('Restart the daemon');
-    expect(again.out.join('')).toContain('embedded 0 observations');
+    expect(again.out.join('')).toContain('Dropping every stored vector');
+    expect(again.out.join('')).toContain('embedded 3 observations');
     await h.close();
   });
   it('reports 0 when no embedder is configured', async () => {

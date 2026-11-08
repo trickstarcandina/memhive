@@ -130,7 +130,11 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     return ok({ project: store.getProject(project.id) });
   }
 
-  if (method === 'POST' && path === '/v1/embed') return ok({ embedded: await ctx.observer.embedMissing(Number((body as any)?.limit ?? 200) || 200) });
+  if (method === 'POST' && path === '/v1/embed') {
+    const b = (body ?? {}) as { limit?: unknown; rebuild?: unknown };
+    if (b.rebuild === true) { store.resetEmbeddings(); ctx.observer.clearEmbedFailures(); }
+    return ok({ embedded: await ctx.observer.embedMissing(Math.min(Math.max(Number(b.limit ?? 200) || 200, 1), 1000)) });
+  }
 
   return err(404, 'not_found', `no route ${method} ${path}`);
 }

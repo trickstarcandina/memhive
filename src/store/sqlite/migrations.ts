@@ -60,4 +60,9 @@ export const SQLITE_MIGRATIONS: string[] = [
   CREATE TABLE sync_quarantine (id TEXT NOT NULL, tbl TEXT NOT NULL, project_id TEXT NOT NULL, seq INTEGER NOT NULL, reason TEXT NOT NULL, raw TEXT NOT NULL, created_at TEXT NOT NULL);
   CREATE INDEX sync_quarantine_project ON sync_quarantine(project_id);
   `,
+  // 6: the embedding backfill finds its rows by index, both the NULL ones and those of a stale model, already in
+  // created_at order. One index on both columns serves both queries (a partial NULL-only index could not do the second).
+  `
+  CREATE INDEX IF NOT EXISTS observations_missing_embedding ON observations(embedding_model, created_at);
+  `,
 ];

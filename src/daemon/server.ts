@@ -38,7 +38,7 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   ensureHomeDir(home);
   const settings = loadSettings(home, env);
   const logger = createLogger(home, 'daemon', env);
-  const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, warn: (m, d) => logger.warn(m, d) });
+  const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, model: settings.embed?.model ?? null, warn: (m, d) => logger.warn(m, d) });
   store.migrate();
   // Degraded sqlite-vec drops every vector, so do not pay for embedding calls; rows stay NULL for a later backfill.
   const embedder = store.vectorsDegraded ? null : createEmbedder(settings);
@@ -153,8 +153,9 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
   touch();
   ctx.logger.info('daemon started', { port: info.port });
 
-  runMaintenance(ctx);
-  const embedTimer = setInterval(() => { runMaintenance(ctx); void ctx.observer.embedMissing().catch(() => {}); }, 10 * 60 * 1000); embedTimer.unref?.();
+  const tick = () => { runMaintenance(ctx); void ctx.observer.backfill(); };
+  tick();
+  const embedTimer = setInterval(tick, 10 * 60 * 1000); embedTimer.unref?.();
 
   const close = () => closing ??= (async () => {
     if (idleTimer) clearTimeout(idleTimer); clearInterval(embedTimer);

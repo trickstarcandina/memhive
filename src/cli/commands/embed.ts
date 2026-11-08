@@ -10,9 +10,14 @@ export async function embedCommand(args: string[], io: CliIo, opts: { home?: str
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
   const client = new DaemonClient(info);
-  if (flags.rebuild) io.stdout('Restart the daemon after changing MEMHIVE_EMBED_DIMS; the vector index is rebuilt on start. Backfilling now…\n');
+  // A dims or model change already resets vectors when the daemon starts; --rebuild forces it (for example after the
+  // embedding server swapped weights under the same model name).
+  if (flags.rebuild) io.stdout('Dropping every stored vector and embedding all observations again…\n');
   let total = 0;
-  for (;;) { const r = await client.request<{ embedded: number }>('POST', '/v1/embed', { limit: 200 }, 120000); total += r.embedded; if (r.embedded < 200) break; }
+  for (let first = true; ; first = false) {
+    const r = await client.request<{ embedded: number }>('POST', '/v1/embed', { limit: 200, ...(first && flags.rebuild ? { rebuild: true } : {}) }, 120000);
+    total += r.embedded; if (r.embedded < 200) break;
+  }
   io.stdout(`embedded ${total} observations\n`);
   return 0;
 }

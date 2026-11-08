@@ -28,12 +28,13 @@ function filterSql(f: SearchFilters, alias: string): { sql: string; params: unkn
 export class SqliteStore implements Store {
   private db: Database.Database;
   private dims: number | null;
+  private model: string | null;
 
   private vecOff = false;
   /** True when dims were configured but sqlite-vec failed to load (vectors cannot be stored or searched). */
   get vectorsDegraded(): boolean { return this.vecOff; }
 
-  constructor(file: string, opts: { dims: number | null; warn?: (msg: string, data?: object) => void; loadVec?: (db: Database.Database) => void }) {
+  constructor(file: string, opts: { dims: number | null; model?: string | null; warn?: (msg: string, data?: object) => void; loadVec?: (db: Database.Database) => void }) {
     // Owner-only before SQLite opens it: SQLite creates -wal/-shm with the db file's mode.
     const onDisk = file !== ':memory:' && !file.startsWith('file:');
     if (onDisk) { fs.closeSync(fs.openSync(file, 'a', 0o600)); fs.chmodSync(file, 0o600); }
@@ -41,7 +42,9 @@ export class SqliteStore implements Store {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('foreign_keys = ON');
-    this.dims = opts.dims;
+    // In WAL mode NORMAL only fsyncs at checkpoints: a power cut can lose the last commits but never corrupts the file.
+    this.db.pragma('synchronous = NORMAL');
+    this.dims = opts.dims; this.model = opts.model ?? null;
     if (onDisk) for (const f of [`${file}-wal`, `${file}-shm`]) { try { fs.chmodSync(f, 0o600); } catch { /* not created yet */ } }
     if (this.dims) {
       try { (opts.loadVec ?? ((d) => sqliteVec.load(d)))(this.db); }
@@ -65,13 +68,29 @@ export class SqliteStore implements Store {
 
   private ensureVecTable(): void {
     if (!this.dims) return;
-    const cur = this.db.prepare(`SELECT v FROM vec_meta WHERE k = 'dims'`).get() as Row | undefined;
-    if (cur && Number(cur.v) === this.dims) return;
+    const meta = (k: string) => (this.db.prepare('SELECT v FROM vec_meta WHERE k = ?').get(k) as Row | undefined)?.v as string | undefined;
+    const dims = meta('dims'); const model = meta('model');
+    // Same dims, other model: the vectors live in another space and would make vector search return noise.
+    // A table from before the model was recorded is judged by the models its rows say they were embedded with.
+    const otherModel = this.model !== null && (model !== undefined ? model !== this.model
+      : !!this.db.prepare('SELECT 1 FROM observations WHERE embedding_model IS NOT NULL AND embedding_model != ? LIMIT 1').get(this.model));
+    if (dims !== undefined && Number(dims) === this.dims && !otherModel) {
+      if (this.model !== null && model === undefined) this.setMeta('model', this.model);
+      return;
+    }
+    this.resetEmbeddings();
+  }
+  private setMeta(k: string, v: string): void { this.db.prepare('INSERT INTO vec_meta(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, v); }
+
+  resetEmbeddings(): void {
     this.db.transaction(() => {
-      this.db.exec('DROP TABLE IF EXISTS vec_observations');
-      this.db.exec(`CREATE VIRTUAL TABLE vec_observations USING vec0(id TEXT PRIMARY KEY, project_id TEXT PARTITION KEY, embedding float[${this.dims}])`);
-      this.db.exec('UPDATE observations SET embedding_model = NULL');
-      this.db.prepare(`INSERT INTO vec_meta(k, v) VALUES ('dims', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`).run(String(this.dims));
+      if (this.dims) {
+        this.db.exec('DROP TABLE IF EXISTS vec_observations');
+        this.db.exec(`CREATE VIRTUAL TABLE vec_observations USING vec0(id TEXT PRIMARY KEY, project_id TEXT PARTITION KEY, embedding float[${this.dims}])`);
+        this.setMeta('dims', String(this.dims));
+        if (this.model !== null) this.setMeta('model', this.model);
+      }
+      this.db.exec('UPDATE observations SET embedding_model = NULL WHERE embedding_model IS NOT NULL');
     })();
   }
 
@@ -170,20 +189,32 @@ export class SqliteStore implements Store {
     const next = this.db.prepare('SELECT * FROM observations WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC LIMIT ?').all(anchor.session_id, anchor.created_at, anchor.created_at, anchor.id, after) as Row[];
     return [...prev.reverse(), anchor, ...next].map(rowToObservation);
   }
-  listMissingEmbedding(limit: number): Observation[] {
-    return (this.db.prepare('SELECT * FROM observations WHERE embedding_model IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit) as Row[]).map(rowToObservation);
+  listMissingEmbedding(limit: number, model?: string, exclude: Iterable<string> = []): Observation[] {
+    const ex = [...exclude].slice(0, 1000);   // shortcut: only rows that failed 3 times land here; past 1000 the rest are simply retried
+    const not = ex.length ? ` AND id NOT IN (${ex.map(() => '?').join(',')})` : '';
+    // Two indexed queries instead of one `IS NOT ?` scan: NULL first (partial index), then rows of another model.
+    const rows = this.db.prepare(`SELECT * FROM observations WHERE embedding_model IS NULL${not} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(...ex, limit) as Row[];
+    if (model !== undefined && rows.length < limit) rows.push(...this.db.prepare(`SELECT * FROM observations WHERE (embedding_model < ? OR embedding_model > ?)${not} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(model, model, ...ex, limit - rows.length) as Row[]);
+    return rows.map(rowToObservation);
   }
-  setObservationEmbedding(id: string, vec: number[], model: string): void {
-    if (this.vecOff) return; // leave unembedded so a later run with sqlite-vec working backfills
+  setObservationEmbedding(id: string, vec: number[], model: string): void { this.setObservationEmbeddings([{ id, vec, model }]); }
+  setObservationEmbeddings(rows: Array<{ id: string; vec: number[]; model: string }>): void {
+    if (this.vecOff || rows.length === 0) return; // leave unembedded so a later run with sqlite-vec working backfills
+    const proj = this.db.prepare('SELECT project_id FROM observations WHERE id = ?');
+    const del = this.dims ? this.db.prepare('DELETE FROM vec_observations WHERE id = ?') : null;
+    const ins = this.dims ? this.db.prepare('INSERT INTO vec_observations(id, project_id, embedding) VALUES (?, ?, ?)') : null;
+    const upd = this.db.prepare('UPDATE observations SET embedding_model = ? WHERE id = ?');
     this.db.transaction(() => {
-      if (this.dims) {
-        if (vec.length !== this.dims) throw new Error(`embedding dims ${vec.length} != ${this.dims}`);
-        const o = this.db.prepare('SELECT project_id FROM observations WHERE id = ?').get(id) as Row | undefined;
-        if (!o) return;
-        this.db.prepare('DELETE FROM vec_observations WHERE id = ?').run(id);
-        this.db.prepare('INSERT INTO vec_observations(id, project_id, embedding) VALUES (?, ?, ?)').run(id, o.project_id, Buffer.from(new Float32Array(vec).buffer));
+      for (const { id, vec, model } of rows) {
+        if (this.dims) {
+          if (vec.length !== this.dims) throw new Error(`embedding dims ${vec.length} != ${this.dims}`);
+          const o = proj.get(id) as Row | undefined;
+          if (!o) continue;
+          del!.run(id);
+          ins!.run(id, o.project_id, Buffer.from(new Float32Array(vec).buffer));
+        }
+        upd.run(model, id);
       }
-      this.db.prepare('UPDATE observations SET embedding_model = ? WHERE id = ?').run(model, id);
     })();
   }
 

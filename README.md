@@ -111,7 +111,7 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 | --- | --- |
 | `memhive install` / `memhive uninstall` | Wire memhive into Claude Code and Codex, or remove it. Your memory is kept. |
 | `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations from the terminal. |
-| `memhive embed [--missing\|--rebuild]` | Compute embeddings for observations. `--rebuild` after changing `MEMHIVE_EMBED_DIMS`. |
+| `memhive embed [--missing\|--rebuild]` | Compute embeddings for observations now. The daemon also backfills on its own (one batch per second while rows are missing) and drops every vector when `embed.model` or `embed.dims` changes. `--rebuild` drops every vector and embeds everything again. |
 | `memhive doctor` | Check settings, provider and embedder credentials, and daemon health. Reports whether each key is set; it never prints keys. |
 | `memhive daemon run\|start\|stop\|status` | Control the background daemon. |
 | `memhive hook <claude-code\|codex> <event>` | Hook entry point; called by the host, not by you. |

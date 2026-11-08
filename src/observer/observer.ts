@@ -16,6 +16,7 @@ interface SessionState { buffer: SessionBuffer; timer: NodeJS.Timeout | null; in
 const IDLE_DROP_MS = 30 * 60 * 1000;
 // After a 401/403 the observer stays paused until settings give a new provider, or this long has passed (then one new try).
 const AUTH_RETRY_MS = 15 * 60 * 1000;
+const EMBED_MAX_FAILURES = 3;
 
 export const embeddingText = (o: Pick<Observation, 'title' | 'subtitle' | 'facts' | 'narrative'>) => [o.title, o.subtitle, ...o.facts, o.narrative].filter(Boolean).join('\n');
 
@@ -157,22 +158,64 @@ export class Observer {
     return { id: newId(), projectId: ctx.projectId, sessionId: ctx.sessionId, userId: ctx.userId, ...d, title: r(d.title), subtitle: r(d.subtitle), narrative: r(d.narrative), facts: d.facts.map(r), concepts: d.concepts.map(r), filesRead: d.filesRead.map(r), filesModified: d.filesModified.map(r), createdAt: new Date().toISOString(), embeddingModel: null, origin: 'local', syncedAt: null };
   }
 
-  private async embed(rows: Observation[]): Promise<number> {
+  // Ids whose embedding failed, with the count; after EMBED_MAX_FAILURES the backfill skips them for the daemon's lifetime.
+  private embedFailures = new Map<string, number>();
+  private skippedIds(): string[] { return [...this.embedFailures].filter(([, n]) => n >= EMBED_MAX_FAILURES).map(([id]) => id); }
+  clearEmbedFailures(): void { this.embedFailures.clear(); }
+
+  private async embed(rows: Observation[]): Promise<{ done: number; failed: number }> {
     const { embedder, store, logger } = this.deps;
-    if (!embedder || rows.length === 0) return 0;
-    let done = 0;
-    for (let i = 0; i < rows.length; i += 16) {
-      const batch = rows.slice(i, i + 16);
+    if (!embedder || rows.length === 0) return { done: 0, failed: 0 };
+    let done = 0; let failed = 0;
+    const one = async (batch: Observation[]): Promise<boolean> => {
       try {
         const vecs = await embedder.embed(batch.map(embeddingText));
-        batch.forEach((o, k) => store.setObservationEmbedding(o.id, vecs[k], embedder.model));
-        done += batch.length;
-      } catch (e) { logger.warn('embedding failed, left for backfill', { error: String(e) }); }
+        store.setObservationEmbeddings(batch.map((o, k) => ({ id: o.id, vec: vecs[k], model: embedder.model })));
+        for (const o of batch) this.embedFailures.delete(o.id);
+        done += batch.length; return true;
+      } catch (e) {
+        if (batch.length === 1) { failed++; this.embedFailures.set(batch[0].id, (this.embedFailures.get(batch[0].id) ?? 0) + 1); }
+        logger.warn('embedding failed, left for backfill', { error: String(e), rows: batch.length });
+        return false;
+      }
+    };
+    for (let i = 0; i < rows.length; i += 16) {
+      const batch = rows.slice(i, i + 16);
+      // Retry a failed batch row by row, so only the rows that fail on their own count towards being skipped.
+      if (!(await one(batch)) && batch.length > 1) for (const o of batch) await one([o]);
     }
-    return done;
+    return { done, failed };
   }
 
-  async embedMissing(limit = 200): Promise<number> { return this.embed(this.deps.store.listMissingEmbedding(limit)); }
+  private missing(limit: number): Observation[] {
+    return this.deps.embedder ? this.deps.store.listMissingEmbedding(limit, this.deps.embedder.model, this.skippedIds()) : [];
+  }
+  async embedMissing(limit = 200): Promise<number> { return (await this.embed(this.missing(limit))).done; }
+
+  private backfilling: Promise<void> | null = null;
+  /**
+   * Embeds missing rows back to back, at most one batch per `minIntervalMs`, until none are left or a batch fails
+   * (an unreachable embedder then waits for the next trigger instead of being hammered).
+   */
+  backfill(opts: { batch?: number; minIntervalMs?: number } = {}): Promise<void> {
+    if (!this.deps.embedder) return Promise.resolve();
+    const batch = opts.batch ?? 64; const gap = opts.minIntervalMs ?? 1000;
+    return this.backfilling ??= (async () => {
+      try {
+        while (!this.closed) {
+          const t0 = Date.now();
+          const rows = this.missing(batch);
+          if (rows.length === 0) return;
+          const r = await this.embed(rows);
+          if (r.failed || rows.length < batch) return;
+          const wait = gap - (Date.now() - t0);
+          if (wait > 0) await new Promise((res) => { const t = setTimeout(res, wait); t.unref?.(); });
+        }
+      } catch (e) { this.deps.logger.warn('embedding backfill stopped', { error: String(e) }); }
+      finally { this.backfilling = null; }
+    })();
+  }
+  private closed = false;
 
   private handleProviderError(e: unknown, stage: string): void {
     const kind = e instanceof ProviderError ? e.kind : 'other';
