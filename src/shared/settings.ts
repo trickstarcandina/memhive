@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolvePaths } from './paths.js';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { ensureHomeDir, resolvePaths } from './paths.js';
 import { safeJsonParse } from './json.js';
 
 export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: string; baseUrl?: string; apiKey?: string }
@@ -47,7 +47,7 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
 
 export function saveSettings(home: string, settings: Settings): void {
   const p = resolvePaths(home);
-  mkdirSync(home, { recursive: true });
+  ensureHomeDir(home);
   writeFileSync(p.settings, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 });
   chmodSync(p.settings, 0o600); // writeFileSync mode applies only on create
 }

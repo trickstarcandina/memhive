@@ -16,7 +16,7 @@ export function renderPluginDir(opts: { templateRoot: string; marketplaceRoot: s
       if (statSync(p).isDirectory()) { walk(p); continue; }
       if (!/\.(json|md)$/.test(name)) continue;
       const src = readFileSync(p, 'utf8');
-      // JSON string values: escape backslashes/quotes; args are separate array items so spaces in paths need no shell quoting.
+      // JSON string values: escape backslashes/quotes. *_SH vars are shell-quoted (Codex runs shell strings); plain vars are raw.
       const out = src.replace(/\{\{(NODE_SH|BUNDLE_SH|NODE|BUNDLE|VERSION)\}\}/g, (_, k: string) => (name.endsWith('.json') ? JSON.stringify(vars[k]).slice(1, -1) : vars[k]));
       if (out !== src) writeFileSync(p, out);
     }

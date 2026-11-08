@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { DaemonClient } from '../daemon/client.js';
+import { DaemonClient, DaemonError } from '../daemon/client.js';
 import { ensureDaemon } from '../daemon/ensure.js';
 import { shortId } from '../shared/ids.js';
 import { resolvePaths } from '../shared/paths.js';
@@ -9,11 +9,29 @@ import { VERSION } from '../shared/version.js';
 import { OBSERVATION_TYPES, type Observation } from '../store/types.js';
 import { formatFull, formatIndex } from './format.js';
 
-const id = z.string().max(64).regex(/^[0-9a-f-]+$/i);
+// Accepts the `#abcd1234` form the context footer and index print.
+const id = z.preprocess((v) => (typeof v === 'string' ? v.replace(/^#/, '') : v), z.string().max(64).regex(/^[0-9a-f-]+$/i));
 
-export function createMcpServer(deps: { client: DaemonClient; cwd: string }): McpServer {
+/** Re-resolves the daemon (it may have idle-exited and restarted with a new port/token). */
+export type Reconnect = () => Promise<DaemonClient | null>;
+
+export function createMcpServer(deps: { client: DaemonClient; cwd: string; reconnect?: Reconnect }): McpServer {
   const server = new McpServer({ name: 'memhub', version: VERSION });
-  const projectKey = async () => (await deps.client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(deps.cwd)}`)).project.key;
+  let current = deps.client;
+  // One retry after re-ensuring the daemon on a connection failure or 401; timeouts and other daemon errors pass through.
+  const rpc = {
+    async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+      try { return await current.request<T>(method, path, body); }
+      catch (e) {
+        const stale = e instanceof DaemonError ? e.status === 401 : (e as Error)?.name !== 'AbortError';
+        const next = stale && deps.reconnect ? await deps.reconnect() : null;
+        if (!next) throw e;
+        current = next;
+        return current.request<T>(method, path, body);
+      }
+    },
+  };
+  const projectKey = async () => (await rpc.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(deps.cwd)}`)).project.key;
   const textResult = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 
   server.registerTool('search', {
@@ -24,7 +42,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
     if (a.type) q.set('type', a.type);
     if (a.user) q.set('user', a.user);
     if (a.since) q.set('since', a.since);
-    const r = await deps.client.request<{ observations: Observation[] }>('GET', `/v1/search?${q}`);
+    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/search?${q}`);
     return textResult(formatIndex(r.observations));
   });
 
@@ -32,7 +50,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
     description: 'Step 2 of 3. Show observations recorded before and after an anchor observation (same session), as an index.',
     inputSchema: { anchor_id: id, before: z.number().int().min(0).max(50).default(5), after: z.number().int().min(0).max(50).default(5) },
   }, async (a) => {
-    const r = await deps.client.request<{ observations: Observation[] }>('GET', `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}`);
+    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}`);
     return textResult(formatIndex(r.observations));
   });
 
@@ -40,7 +58,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
     description: 'Step 3 of 3. Fetch full details for selected observation ids (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
     inputSchema: { ids: z.array(id).min(1).max(50) },
   }, async (a) => {
-    const r = await deps.client.request<{ observations: Observation[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}`);
+    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}`);
     return textResult(formatFull(r.observations));
   });
 
@@ -48,7 +66,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
     description: 'Save a note for future sessions of this project (a decision, a gotcha, a convention).',
     inputSchema: { text: z.string().min(1).max(20000), title: z.string().max(2000).optional(), type: z.enum(OBSERVATION_TYPES).default('discovery') },
   }, async (a) => {
-    const r = await deps.client.request<{ observation: Observation }>('POST', '/v1/memories', { projectKey: await projectKey(), text: a.text, title: a.title, type: a.type });
+    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/memories', { projectKey: await projectKey(), text: a.text, title: a.title, type: a.type });
     return textResult(`Saved #${shortId(r.observation.id)} · ${r.observation.type} · ${r.observation.title.replace(/\s+/g, ' ')}`);
   });
 
@@ -59,7 +77,8 @@ export async function runMcp(): Promise<number> {
   const home = resolvePaths().home;
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { process.stderr.write('memhub: daemon could not be started\n'); return 1; }
-  const server = createMcpServer({ client: new DaemonClient(info), cwd: process.env.MEMHUB_CWD ?? process.cwd() });
+  const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000 }); return i ? new DaemonClient(i) : null; };
+  const server = createMcpServer({ client: new DaemonClient(info), cwd: process.env.MEMHUB_CWD ?? process.cwd(), reconnect });
   await server.connect(new StdioServerTransport());
   await new Promise(() => {}); // stdio transport keeps the process alive until the host closes it
   return 0;

@@ -1,3 +1,4 @@
+import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -14,4 +15,10 @@ export function resolvePaths(home = process.env.MEMHUB_HOME ?? path.join(homedir
     marketplace: path.join(home, 'marketplace'),
     plugin: path.join(home, 'marketplace', 'plugin'),
   };
+}
+
+/** Creates a data dir readable only by the owner (0o700); tightens an existing one. */
+export function ensureHomeDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
 }

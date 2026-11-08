@@ -1,6 +1,6 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, renameSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { resolvePaths } from './paths.js';
+import { ensureHomeDir, resolvePaths } from './paths.js';
 
 export interface Logger { info(msg: string, data?: object): void; warn(msg: string, data?: object): void; error(msg: string, data?: object): void; debug(msg: string, data?: object): void }
 
@@ -9,9 +9,10 @@ export function createLogger(home: string, name: string, env: NodeJS.ProcessEnv 
   const file = path.join(dir, `${name}.log`);
   const maxBytes = opts.maxBytes ?? 5 * 1024 * 1024;
   const debug = env.MEMHUB_DEBUG === '1' || env.MEMHUB_DEBUG === 'true';
+  let dirReady = false;
   const write = (level: string, msg: string, data?: object) => {
     try {
-      mkdirSync(dir, { recursive: true });
+      if (!dirReady) { ensureHomeDir(dir); dirReady = true; }
       try { if (statSync(file).size > maxBytes) renameSync(file, `${file}.1`); } catch { /* no file yet */ }
       appendFileSync(file, JSON.stringify({ ...(data ?? {}), t: new Date().toISOString(), level, msg }) + '\n');
     } catch { /* logging must never throw */ }

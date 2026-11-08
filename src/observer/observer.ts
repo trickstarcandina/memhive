@@ -12,7 +12,8 @@ export interface SessionCtx { sessionId: string; projectId: string; projectName:
 export interface ObserverOptions { flushCount: number; idleMs: number; maxAgeMs: number; maxEvents: number; maxTokens: number }
 const DEFAULTS: ObserverOptions = { flushCount: 8, idleMs: 5000, maxAgeMs: 300000, maxEvents: 128, maxTokens: 2048 };
 
-interface SessionState { buffer: SessionBuffer; timer: NodeJS.Timeout | null; inflight: Promise<void> | null; turnObservations: Observation[]; ctx: SessionCtx }
+interface SessionState { buffer: SessionBuffer; timer: NodeJS.Timeout | null; inflight: Promise<void> | null; turnObservations: Observation[]; ctx: SessionCtx; touchedAt: number }
+const IDLE_DROP_MS = 30 * 60 * 1000;
 
 export const embeddingText = (o: Pick<Observation, 'title' | 'subtitle' | 'facts' | 'narrative'>) => [o.title, o.subtitle, ...o.facts, o.narrative].filter(Boolean).join('\n');
 
@@ -20,6 +21,7 @@ export class Observer {
   private sessions = new Map<string, SessionState>();
   private opts: ObserverOptions;
   private _authFailed = false;
+  private summarizedPrompt = new Map<string, string>();
   constructor(private deps: { store: Store; provider: LlmProvider; embedder: Embedder | null; logger: Logger }, opts: Partial<ObserverOptions> = {}) {
     this.opts = { ...DEFAULTS, ...opts };
   }
@@ -28,8 +30,11 @@ export class Observer {
   get authFailed(): boolean { return this._authFailed; }
 
   private state(ctx: SessionCtx): SessionState {
+    const now = Date.now();
+    for (const [id, o] of this.sessions) if (id !== ctx.sessionId && now - o.touchedAt > IDLE_DROP_MS && !o.inflight) { if (o.timer) clearTimeout(o.timer); this.sessions.delete(id); }
     let s = this.sessions.get(ctx.sessionId);
-    if (!s) { s = { buffer: new SessionBuffer(this.opts.maxEvents, this.opts.maxAgeMs), timer: null, inflight: null, turnObservations: [], ctx }; this.sessions.set(ctx.sessionId, s); }
+    if (!s) { s = { buffer: new SessionBuffer(this.opts.maxEvents, this.opts.maxAgeMs), timer: null, inflight: null, turnObservations: [], ctx, touchedAt: now }; this.sessions.set(ctx.sessionId, s); }
+    s.touchedAt = now;
     return s;
   }
 
@@ -59,8 +64,16 @@ export class Observer {
     }
   }
 
+  /** Session end: summarize only if the last Stop did not already cover the latest prompt. */
+  async onSessionEnd(ctx: SessionCtx): Promise<void> {
+    try { await this.onStop(ctx); } finally { this.summarizedPrompt.delete(ctx.sessionId); }
+  }
+
   private async summarize(s: SessionState, ctx: SessionCtx): Promise<void> {
-    const prompt = this.deps.store.latestPrompt(ctx.sessionId)?.text ?? null;
+    const latest = this.deps.store.latestPrompt(ctx.sessionId);
+    if (latest && this.summarizedPrompt.get(ctx.sessionId) === latest.id) return;
+    if (latest) this.summarizedPrompt.set(ctx.sessionId, latest.id);
+    const prompt = latest?.text ?? null;
     if (s.turnObservations.length === 0 && (prompt ?? '').length < 20) return;
     if (this._authFailed) return;
     try {

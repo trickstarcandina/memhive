@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import type { Observation, Project, Prompt, SearchFilters, SearchHit, Session, Store, Summary } from '../types.js';
@@ -26,13 +27,19 @@ export class SqliteStore implements Store {
   private db: Database.Database;
   private dims: number | null;
 
-  constructor(file: string, opts: { dims: number | null }) {
+  private vecOff = false;
+
+  constructor(file: string, opts: { dims: number | null; warn?: (msg: string, data?: object) => void; loadVec?: (db: Database.Database) => void }) {
     this.db = new Database(file);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('foreign_keys = ON');
     this.dims = opts.dims;
-    if (this.dims) sqliteVec.load(this.db);
+    try { if (fs.existsSync(file)) fs.chmodSync(file, 0o600); } catch { /* best effort */ }
+    if (this.dims) {
+      try { (opts.loadVec ?? ((d) => sqliteVec.load(d)))(this.db); }
+      catch (e) { opts.warn?.('sqlite-vec failed to load; vector search disabled (FTS only)', { error: String(e) }); this.dims = null; this.vecOff = true; }
+    }
   }
 
   migrate(): void {
@@ -90,8 +97,8 @@ export class SqliteStore implements Store {
   }
 
   insertObservations(obs: Observation[]): void {
-    const stmt = this.db.prepare(`INSERT OR IGNORE INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, origin, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const stmt = this.db.prepare(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, origin, synced_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`);
     this.db.transaction(() => { for (const o of obs) stmt.run(o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, j(o.facts), o.narrative, j(o.concepts), j(o.filesRead), j(o.filesModified), o.createdAt, o.embeddingModel, o.origin, o.syncedAt); })();
   }
   getObservations(ids: string[]): Observation[] {
@@ -107,10 +114,10 @@ export class SqliteStore implements Store {
     return rows.length === 1 ? rows[0].id : null;
   }
   listRecentObservations(projectId: string, limit: number): Observation[] {
-    return (this.db.prepare('SELECT * FROM observations WHERE project_id = ? ORDER BY created_at DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToObservation);
+    return (this.db.prepare('SELECT * FROM observations WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToObservation);
   }
   listSessionObservations(sessionId: string, limit: number): Observation[] {
-    return (this.db.prepare('SELECT * FROM observations WHERE session_id = ? ORDER BY created_at DESC LIMIT ?').all(sessionId, limit) as Row[]).map(rowToObservation);
+    return (this.db.prepare('SELECT * FROM observations WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(sessionId, limit) as Row[]).map(rowToObservation);
   }
   searchObservationsFts(query: string, f: SearchFilters): SearchHit[] {
     const q = toFtsQuery(query); if (!q) return [];
@@ -137,9 +144,10 @@ export class SqliteStore implements Store {
     return [...prev.reverse(), anchor, ...next].map(rowToObservation);
   }
   listMissingEmbedding(limit: number): Observation[] {
-    return (this.db.prepare('SELECT * FROM observations WHERE embedding_model IS NULL ORDER BY created_at DESC LIMIT ?').all(limit) as Row[]).map(rowToObservation);
+    return (this.db.prepare('SELECT * FROM observations WHERE embedding_model IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit) as Row[]).map(rowToObservation);
   }
   setObservationEmbedding(id: string, vec: number[], model: string): void {
+    if (this.vecOff) return; // leave unembedded so a later run with sqlite-vec working backfills
     this.db.transaction(() => {
       if (this.dims) {
         if (vec.length !== this.dims) throw new Error(`embedding dims ${vec.length} != ${this.dims}`);
@@ -153,11 +161,11 @@ export class SqliteStore implements Store {
   }
 
   insertSummaries(list: Summary[]): void {
-    const stmt = this.db.prepare(`INSERT OR IGNORE INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at, origin, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const stmt = this.db.prepare(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at, origin, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`);
     this.db.transaction(() => { for (const s of list) stmt.run(s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt, s.origin, s.syncedAt); })();
   }
   listRecentSummaries(projectId: string, limit: number): Summary[] {
-    return (this.db.prepare('SELECT * FROM summaries WHERE project_id = ? ORDER BY created_at DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToSummary);
+    return (this.db.prepare('SELECT * FROM summaries WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToSummary);
   }
   searchSummariesFts(query: string, f: SearchFilters): SearchHit[] {
     const q = toFtsQuery(query); if (!q) return [];

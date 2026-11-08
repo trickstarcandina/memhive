@@ -11,7 +11,7 @@ Memory is layered so you spend tokens only on what you open.
 2. `timeline(anchor_id, before?, after?)` — shows what happened around one id in the same session. Use it when an index row needs context.
 3. `get_observations(ids)` — full details, batched. Only for ids you selected.
 
-Ids are 8-character prefixes like `#01933f2a`; pass them without the `#`.
+Short ids are the last 8 characters of the full id, like `#01933f2a`; the `#` is optional.
 
 Use `save_memory(text, title?, type?)` to record a decision, a gotcha or a convention for future sessions.
 

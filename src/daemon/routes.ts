@@ -6,7 +6,7 @@ import { newId } from '../shared/ids.js';
 import { OBSERVATION_TYPES, type Observation, type ObservationType, type SearchFilters } from '../store/types.js';
 import { projectKeyFor } from '../shared/project-key.js';
 import { embeddingText } from '../observer/observer.js';
-import { redactSecrets, sanitizePrompt } from '../hooks/sanitize.js';
+import { redactSecrets, stripPrivate } from '../hooks/sanitize.js';
 
 const ok = (body: unknown, status = 200) => ({ status, body });
 const err = (status: number, code: string, message: string) => ({ status, body: { error: { code, message } } });
@@ -55,7 +55,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
       case 'prompt': ctx.observer.onPrompt(sctx, ev.prompt ?? ''); break;
       case 'tool': if (ev.tool) ctx.observer.onTool(sctx, { ...ev.tool, at: ev.at }); break;
       case 'stop': ctx.observer.onStop(sctx).catch(warn); break;
-      case 'session-end': ctx.observer.onStop(sctx).then(() => store.endSession(sctx.sessionId, ev.at)).catch(warn); break;
+      case 'session-end': ctx.observer.onSessionEnd(sctx).then(() => store.endSession(sctx.sessionId, ev.at)).catch(warn); break;
       case 'session-start': break;
     }
     return ok({}, 202);
@@ -78,7 +78,7 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
 
   if (method === 'POST' && path === '/v1/memories') {
     const b = (body ?? {}) as { projectKey?: string; text?: string; title?: string; type?: string };
-    const clean = (v: string) => redactSecrets(sanitizePrompt(v));
+    const clean = (v: string) => redactSecrets(stripPrivate(v)).trim();
     const text = typeof b.text === 'string' ? clean(b.text) : '';
     const title = typeof b.title === 'string' ? clean(b.title) : '';
     if (!b.projectKey || !text) return err(400, 'bad_memory', 'projectKey and text required');

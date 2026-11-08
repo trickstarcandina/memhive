@@ -1,5 +1,6 @@
 // Matches an opening <private ...> tag (group 1 undefined) or a closing </private> tag (group 1 set).
-const TAG = /<\s*(\/\s*)?private\b[^>]*>/gi;
+// A bare `<private` with no `>` swallows to end of string (fail closed).
+const TAG = /<\s*(\/\s*)?private\b[^>]*(?:>|$)/gi;
 const DATA_IMAGE = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi;
 const MAX_DEPTH = 20;
 const TAIL = 100;
@@ -23,7 +24,7 @@ export function stripPrivate(text: string): string {
 }
 
 export function sanitizePrompt(text: string): string {
-  return stripPrivate(text).trim();
+  return truncate(redactSecrets(stripPrivate(text)).trim(), 16000);
 }
 
 const SECRET_PATTERNS: RegExp[] = [

@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createJsonServer } from './http.js';
@@ -7,7 +7,7 @@ import { handleRoute } from './routes.js';
 import { writeDaemonInfo, removeDaemonInfo, readDaemonInfo, type DaemonInfo } from './info.js';
 import { DaemonClient } from './client.js';
 import type { DaemonContext } from './context.js';
-import { resolvePaths } from '../shared/paths.js';
+import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
 import { loadSettings } from '../shared/settings.js';
 import { createLogger } from '../shared/logger.js';
 import { SqliteStore } from '../store/sqlite/store.js';
@@ -25,10 +25,10 @@ function tokenOk(got: string | string[] | undefined, want: string): boolean {
 }
 
 export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = process.env): DaemonContext {
-  mkdirSync(home, { recursive: true });
+  ensureHomeDir(home);
   const settings = loadSettings(home, env);
   const logger = createLogger(home, 'daemon', env);
-  const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null });
+  const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, warn: (m, d) => logger.warn(m, d) });
   store.migrate();
   const embedder = createEmbedder(settings);
   let provider: LlmProvider;
@@ -39,9 +39,10 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   const ctx: DaemonContext = {
     home, store, observer, embedder, settings, logger, userId, sync: null,
     resolveSession(ev: HookEvent) {
-      const { key, name } = projectKeyFor(ev.cwd);
-      const project = store.getOrCreateProject(key, name);
       let session = store.getSessionByHost(ev.host, ev.hostSessionId);
+      // Existing session: reuse its project (no git spawns per event, no split on cwd change).
+      let project = session ? store.getProject(session.projectId) : null;
+      if (!project) { const { key, name } = projectKeyFor(ev.cwd); project = store.getOrCreateProject(key, name); }
       if (!session) { session = { id: newId(), projectId: project.id, userId, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null }; store.upsertSession(session); }
       const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId };
       return { ctx: sctx, project };
