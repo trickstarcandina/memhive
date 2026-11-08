@@ -58,6 +58,10 @@ jobs:
 
   postgres:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # an explicit bash adds -o pipefail, so `npm run test:coverage | tee` fails the step when a test fails
+        shell: bash
     env:
       VITEST_SHUFFLE: ${{ inputs.nightly && '1' || '' }}
     services:
