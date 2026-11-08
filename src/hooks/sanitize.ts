@@ -73,7 +73,8 @@ const PREFIXED_PATTERNS: RegExp[] = [
 // and a bounded `<...>` group (`Map<string, number>`) stays inside the token so it is judged and redacted whole.
 // `pass` needs a word end so `passed`/`passing` are not keys; `auth` skips `author*`/`authority`/`authent*`
 // but keeps `authorization`. Ambiguous names like `auth: foo` are redacted: a false positive is cheaper than a leak.
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
+// A JSON-escaped quote (`\"`, a JSON document inside a JSON string) also opens a quoted value.
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url)[\w.-]{0,40})(\\?["']?\s{0,5}([:=])\s{0,5})(?:(\\"(?:[^"\\\n]|\\[^"\n])*(?:\\"|(?=["\n])|$))|("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
 // After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env/log secret
@@ -152,8 +153,8 @@ export function redactSecrets(text: string): string {
   let out = text;
   for (const re of SECRET_PATTERNS) out = out.replace(re, '<redacted>');
   for (const re of PREFIXED_PATTERNS) out = out.replace(re, '$1<redacted>');
-  return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
-    const q = dq ? '"' : sq ? "'" : '';
+  return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, edq: string | undefined, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
+    const q = edq ? '\\"' : dq ? '"' : sq ? "'" : '';
     if (q) return `${name}${pre}${q}<redacted>${q}`;
     if (!bare || REFERENCE.test(bare)) return m;
     if (str[offset + m.length] === '(') return m; // call, e.g. getToken()

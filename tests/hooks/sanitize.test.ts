@@ -258,6 +258,8 @@ const LEAK_FIXTURES: [string, string, string[]][] = [
   ['signing_key=signKey1234', 'signKey1234', ['signing_key=']],
   ['encryption-key: encKey12345', 'encKey12345', ['encryption-key: ']],
   ['authToken: authTok123456', 'authTok123456', ['authToken: ']],
+  ['{"value": "MNEMONIC=\\"abandon ability\\""}', 'abandon', ['{"value": "MNEMONIC=\\"']],
+  ['{\\"user\\": \\"app\\", \\"password\\": \\"hunter2xyz\\"}', 'hunter2xyz', ['\\"user\\": \\"app\\"']],
 ];
 
 describe('redactSecrets coverage (H1)', () => {
@@ -287,7 +289,7 @@ describe('redactSecrets coverage (H1)', () => {
     for (const [i] of LEAK_FIXTURES) expect(redactSecrets(redactSecrets(i))).toBe(redactSecrets(i));
   });
   it('stays linear on 256 KB inputs aimed at the new rules', () => {
-    for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', ' -u a', 'a.', 'pass', 'auth: ']) {
+    for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', 'token=\\"a', 'token=\\"\\\\', ' -u a', 'a.', 'pass', 'auth: ']) {
       const s = unit.repeat(Math.ceil(256 * 1024 / unit.length));
       const t = performance.now();
       redactSecrets(s);
