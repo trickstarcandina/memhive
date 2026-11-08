@@ -63,7 +63,15 @@ export class SyncEngine implements SyncHooks {
     return result;
   }
 
+  // One push per project at a time: a debounced push and syncNow would otherwise list and send the same rows twice.
+  private running = new Map<string, Promise<PushResult | null>>();
   async push(project: Project, opts: { force?: boolean } = {}): Promise<PushResult | null> {
+    const run = (this.running.get(project.id) ?? Promise.resolve(null)).catch(() => null).then(() => this.pushOnce(project, opts));
+    this.running.set(project.id, run);
+    try { return await run; } finally { if (this.running.get(project.id) === run) this.running.delete(project.id); }
+  }
+
+  private async pushOnce(project: Project, opts: { force?: boolean }): Promise<PushResult | null> {
     const total: PushResult = { accepted: { sessions: 0, observations: 0, summaries: 0 }, rejected: [] };
     const off = this.backoff.get(project.id);
     if (off && !opts.force && Date.now() < off.until) return null;

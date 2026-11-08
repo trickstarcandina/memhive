@@ -102,6 +102,16 @@ describe('hub config cache', () => {
   });
 });
 
+describe('push concurrency', () => {
+  it('a debounced push and a manual sync running together send the rows once', async () => {
+    const t = await setup({ dims: null });
+    addObs(t, 3, null);
+    const [a, b] = await Promise.all([t.engine.push(t.project), t.engine.push(t.project, { force: true })]);
+    expect(a!.accepted.observations + b!.accepted.observations).toBe(3);
+    expect(t.pushes()).toBe(1);
+  });
+});
+
 describe('push failure handling', () => {
   const failPush = (status: number) => (inner: typeof fetch): typeof fetch => async (url, init) =>
     String(url).endsWith('/v1/sync/push') ? new Response(JSON.stringify({ error: { code: 'x', message: 'x' } }), { status }) : inner(url, init);
