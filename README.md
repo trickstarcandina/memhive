@@ -110,7 +110,7 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 | Command | Purpose |
 | --- | --- |
 | `memhive install` / `memhive uninstall` | Wire memhive into Claude Code and Codex, or remove it. Your memory is kept. |
-| `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations from the terminal. |
+| `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]` | Search observations and session summaries from the terminal. |
 | `memhive embed [--missing\|--rebuild]` | Compute embeddings for observations now. The daemon also backfills on its own (one batch per second while rows are missing) and drops every vector when `embed.model` or `embed.dims` changes. `--rebuild` drops every vector and embeds everything again. |
 | `memhive doctor` | Check settings, provider and embedder credentials, and daemon health. Reports whether each key is set; it never prints keys. |
 | `memhive daemon run\|start\|stop\|status` | Control the background daemon. |
@@ -121,6 +121,7 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 | `memhive login <hub-url> [--key-stdin]` | Store an API key for a hub. Prompts without echo; `--key-stdin` reads the key from stdin. |
 | `memhive link <hub-url>` / `memhive unlink` | Start or stop syncing the current project with a hub you are logged in to. |
 | `memhive sync` | Push and pull the current project now. |
+| `memhive pause [30m\|1h\|2d]` / `memhive resume` | Stop recording for a while (no duration: until `resume`). See [Opting out](#opting-out). |
 | `memhive version` | Print the version. |
 
 ## Configuration
