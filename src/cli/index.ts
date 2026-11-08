@@ -1,0 +1,44 @@
+import { VERSION } from '../shared/version.js';
+
+declare const require: any;
+declare const module: any;
+
+export interface CliIo { stdout: (s: string) => void; stderr: (s: string) => void }
+const defaultIo: CliIo = { stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s) };
+
+const USAGE = `memhub ${VERSION}
+usage: memhub <command>
+  install | uninstall | doctor
+  hook <claude-code|codex> <event>
+  daemon <run|start|stop|status>
+  mcp
+  search <query> [--type t] [--limit n]
+  embed [--missing|--rebuild]
+  version
+`;
+
+export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<number> {
+  const { stdout, stderr } = { ...defaultIo, ...io };
+  const [cmd, ...rest] = argv;
+  switch (cmd) {
+    case undefined: case 'help': case '--help': case '-h': stdout(USAGE); return 0;
+    case 'version': case '--version': case '-v': stdout(`${VERSION}\n`); return 0;
+    case 'hook': return (await import('../hooks/hook-command.js')).runHook(rest);
+    case 'daemon': return (await import('./commands/daemon.js')).daemonCommand(rest, { stdout, stderr });
+    case 'mcp': return (await import('../mcp/server.js')).runMcp();
+    case 'search': return (await import('./commands/search.js')).searchCommand(rest, { stdout, stderr });
+    case 'embed': return (await import('./commands/embed.js')).embedCommand(rest, { stdout, stderr });
+    case 'doctor': return (await import('./commands/doctor.js')).doctorCommand(rest, { stdout, stderr });
+    case 'install': return (await import('./commands/install.js')).installCommand(rest, { stdout, stderr });
+    case 'uninstall': return (await import('./commands/uninstall.js')).uninstallCommand(rest, { stdout, stderr });
+    default: stderr(`memhub: unknown command "${cmd}"\n${USAGE}`); return 1;
+  }
+}
+
+const isEntry = typeof require !== 'undefined' && require.main === module;
+if (isEntry || process.env.MEMHUB_FORCE_MAIN === '1') {
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (err) => {
+    process.stderr.write(`memhub: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.exitCode = 1;
+  });
+}
