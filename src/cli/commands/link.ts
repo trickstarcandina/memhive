@@ -10,7 +10,7 @@ export async function linkCommand(args: string[], io: CliIo, opts: { home?: stri
   const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
   let hubUrl: string | null = null;
   if (!opts.unlink) {
-    if (!args[0]) { io.stderr('usage: memhive link <hub-url>\n'); return 1; }
+    if (!args[0]) { io.stderr('usage: memhive link <hub-url>\n'); return 2; }
     try { hubUrl = normalizeHubUrl(args[0]); } catch (e) { io.stderr(`memhive link: ${e instanceof Error ? e.message : e}\n`); return 1; }
     if (!loadCredentials(home).hubs[hubUrl]) { io.stderr(`not logged in to ${hubUrl}; run: memhive login ${hubUrl}\n`); return 1; }
   }

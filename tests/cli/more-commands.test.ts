@@ -71,9 +71,9 @@ describe('search with data', () => {
     expect(r.out.join('').trim().split('\n')).toHaveLength(3);   // header, separator, one row
     await h.close();
   });
-  it('search without a query prints usage and exits 1', async () => {
+  it('search without a query prints usage and exits 2', async () => {
     const r = io();
-    expect(await searchCommand([], r.io, { home: mkHome() })).toBe(1);
+    expect(await searchCommand([], r.io, { home: mkHome() })).toBe(2);
     expect(r.err.join('')).toContain('usage: memhive search');
   });
 });

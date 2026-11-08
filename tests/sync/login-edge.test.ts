@@ -52,7 +52,7 @@ describe('login edge cases', () => {
 
   it('missing url prints usage', async () => {
     const c = cap();
-    expect(await loginCommand([], c.io, { home: mkHome() })).toBe(1);
+    expect(await loginCommand([], c.io, { home: mkHome() })).toBe(2);
     expect(c.o.err).toContain('usage: memhive login');
   });
 

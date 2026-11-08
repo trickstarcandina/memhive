@@ -27,8 +27,8 @@ async function promptKey(): Promise<string> {
 
 export async function loginCommand(args: string[], io: CliIo, opts: { home?: string; readKey?: () => Promise<string> } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home;
-  const { positional, flags } = parseArgs(args);
-  if (!positional[0]) { io.stderr('usage: memhive login <hub-url> [--key-stdin]\n'); return 1; }
+  const { positional, flags } = parseArgs(args, 'login');
+  if (!positional[0]) { io.stderr('usage: memhive login <hub-url> [--key-stdin]\n'); return 2; }
   let hubUrl: string; try { hubUrl = normalizeHubUrl(positional[0]); } catch (e) { io.stderr(`memhive login: ${e instanceof Error ? e.message : e}\n`); return 1; }
   let key: string;
   try { key = opts.readKey ? await opts.readKey() : flags['key-stdin'] || !process.stdin.isTTY ? await readStdin() : await promptKey(); }

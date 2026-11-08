@@ -17,7 +17,7 @@ function writeSecret(file: string, content: string): void {
 
 /** opts.signal stops the hub and returns 0 (tests); without it the hub runs until SIGTERM/SIGINT. */
 export async function serveCommand(args: string[], io: CliIo, env: NodeJS.ProcessEnv = process.env, opts: { signal?: AbortSignal } = {}): Promise<number> {
-  const { flags } = parseArgs(args);
+  const { flags } = parseArgs(args, 'serve');
   if (flags['reset-vectors']) env = { ...env, MEMHIVE_RESET_VECTORS: '1' };
   let store; try { store = createHubStore(env); } catch (e) { io.stderr(`memhive serve: ${e instanceof Error ? e.message : e}\n`); return 1; }
   const cfg = hubConfigFromEnv(env);

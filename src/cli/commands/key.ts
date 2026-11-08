@@ -6,12 +6,12 @@ import { printJson, withHubStore } from './hub-admin.js';
 const USAGE = 'usage: memhive key <create --user <name> [--label <text>] | list | revoke <id> | rotate <id|user>> [--json]\n';
 
 export async function keyCommand(args: string[], io: CliIo, env: NodeJS.ProcessEnv = process.env): Promise<number> {
-  const { positional, flags } = parseArgs(args);
+  const { positional, flags } = parseArgs(args, 'key');
   const sub = positional[0]; const json = !!flags.json;
-  if (!['create', 'list', 'revoke', 'rotate'].includes(sub)) { io.stderr(USAGE); return 1; }
+  if (!['create', 'list', 'revoke', 'rotate'].includes(sub)) { io.stderr(USAGE); return 2; }
   return withHubStore('key', io, env, async (store) => {
     if (sub === 'create') {
-      const user = typeof flags.user === 'string' ? flags.user : ''; if (!user) { io.stderr('usage: memhive key create --user <name> [--label <text>] [--json]\n'); return 1; }
+      const user = typeof flags.user === 'string' ? flags.user : ''; if (!user) { io.stderr('usage: memhive key create --user <name> [--label <text>] [--json]\n'); return 2; }
       await store.createUser(user);
       const k = generateApiKey(); const row = await store.createApiKey(user, typeof flags.label === 'string' ? flags.label : 'default', k.hash);
       if (json) printJson(io, { ...row, key: k.raw }); else io.stdout(`Created key ${row.id} for ${user}. Key (shown once):\n  ${k.raw}\n`);
@@ -23,7 +23,7 @@ export async function keyCommand(args: string[], io: CliIo, env: NodeJS.ProcessE
       else for (const k of keys) io.stdout(`${k.id}  ${k.userName.padEnd(16)}  ${k.label.padEnd(16)}  ${k.createdAt}${k.revokedAt ? '  REVOKED' : ''}\n`);
       return 0;
     }
-    const target = positional[1]; if (!target) { io.stderr(sub === 'revoke' ? 'usage: memhive key revoke <id> [--json]\n' : 'usage: memhive key rotate <id|user> [--json]\n'); return 1; }
+    const target = positional[1]; if (!target) { io.stderr(sub === 'revoke' ? 'usage: memhive key revoke <id> [--json]\n' : 'usage: memhive key rotate <id|user> [--json]\n'); return 2; }
     if (sub === 'revoke') {
       const done = await store.revokeApiKey(target);
       if (json) printJson(io, { id: target, revoked: done }); else io.stdout(done ? `revoked ${target}\n` : `no active key ${target}\n`);

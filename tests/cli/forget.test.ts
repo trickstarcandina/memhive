@@ -61,7 +61,7 @@ describe('memhive forget', () => {
       expect(ctx.store.getObservations(['0190abcd-0000-7000-8000-000000000001'])).toHaveLength(1);
 
       r = io();
-      expect(await forgetCommand([], r.io, { home, cwd })).toBe(1);
+      expect(await forgetCommand([], r.io, { home, cwd })).toBe(2);
       expect(r.err.join('')).toContain('usage: memhive forget');
     } finally { await h.close(); }
   });

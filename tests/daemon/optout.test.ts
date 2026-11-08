@@ -94,7 +94,7 @@ describe('opt-out', () => {
     expect((await feed(ctx, mk())).excluded).toBe(true);
     expect(((await handleRoute(ctx, 'GET', url('/v1/status'), undefined)).body as { paused_until: string }).paused_until).toBe(new Date(until).toISOString());
     expect(await pauseCommand([], io, { home })).toBe(0); expect(pausedUntil(home)).toBe(Infinity);
-    expect(await pauseCommand(['soon'], io, { home })).toBe(1);
+    expect(await pauseCommand(['soon'], io, { home })).toBe(2);
     expect(await pauseCommand([], io, { home, resume: true })).toBe(0); expect(pausedUntil(home)).toBeNull();
     expect(out.join('')).toContain('memhive resumed');
     ctx.store.close();

@@ -13,7 +13,7 @@ export async function pauseCommand(args: string[], io: CliIo, opts: { home?: str
   }
   const [d] = args;
   const ms = d === undefined ? Infinity : parseDuration(d);
-  if (ms === null) { io.stderr('usage: memhive pause [duration like 30m, 1h, 2d]\n'); return 1; }
+  if (ms === null) { io.stderr('usage: memhive pause [duration like 30m, 1h, 2d]\n'); return 2; }
   const until = ms === Infinity ? Infinity : Date.now() + ms;
   writePause(home, until);
   io.stdout(until === Infinity ? 'memhive paused until `memhive resume`\n' : `memhive paused until ${new Date(until).toISOString()}\n`);

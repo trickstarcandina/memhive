@@ -24,7 +24,7 @@ export type AskFn = (question: string, def: string) => Promise<string>;
 
 export async function installCommand(args: string[], io: CliIo, opts: { home?: string; env?: NodeJS.ProcessEnv; run?: RunFn; root?: string; ask?: AskFn } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const env = opts.env ?? process.env; const run = opts.run ?? defaultRun;
-  const { flags } = parseArgs(args);
+  const { flags } = parseArgs(args, 'install');
   // Flags are checked before any prompt, so a typo never costs a round of questions.
   const badHost = flags.host !== undefined && (typeof flags.host !== 'string' || !validHosts(flags.host));
   if (badHost) { io.stderr(`memhive: unknown --host "${flags.host === true ? '' : flags.host}" (use claude-code, codex or both comma-separated)\n`); return 2; }

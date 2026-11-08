@@ -13,10 +13,8 @@ const show = (r: ForgetRow) => `  #${shortId(r.id)} · ${r.type} · ${r.title.re
 
 export async function forgetCommand(args: string[], io: CliIo, opts: { home?: string; cwd?: string; input?: Readable } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
-  const { positional, flags } = parseArgs(args);
-  // --yes and --force take no value: parseArgs would swallow the id after them.
-  for (const f of ['yes', 'force']) if (typeof flags[f] === 'string') { positional.push(flags[f] as string); flags[f] = true; }
-  if (!positional.length) { io.stderr(USAGE); return 1; }
+  const { positional, flags } = parseArgs(args, 'forget');
+  if (!positional.length) { io.stderr(USAGE); return 2; }
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
   const client = new DaemonClient(info);

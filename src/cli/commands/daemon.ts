@@ -49,7 +49,7 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
     await new DaemonClient(info!).request('POST', '/v1/shutdown').catch(() => {});
     io.stdout('memhive daemon stopping\n'); return 0;
   }
-  io.stderr(`memhive daemon: unknown subcommand "${sub}" (run|start|stop|status)\n`); return 1;
+  io.stderr(`memhive daemon: unknown subcommand "${sub}" (run|start|stop|status)\n`); return 2;
 }
 
 const readText = (file: string): string => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };

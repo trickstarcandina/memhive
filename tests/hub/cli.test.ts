@@ -15,7 +15,7 @@ it('serve exits 1 with a clear error when DATABASE_URL is unset or unreachable, 
 });
 it('key create/list/revoke on a sqlite file, and --help is side-effect free', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'mh-key-')); const env = { DATABASE_URL: `sqlite:${path.join(dir, 'h.db')}` };
-  let c = cap(); expect(await keyCommand(['create'], c.io, env)).toBe(1); expect(c.o.err).toMatch(/usage/);
+  let c = cap(); expect(await keyCommand(['create'], c.io, env)).toBe(2); expect(c.o.err).toMatch(/usage/);
   c = cap(); expect(await keyCommand(['create', '--user', 'carol'], c.io, env)).toBe(0);
   const id = /Created key (\S+) for carol/.exec(c.o.out)![1]; expect(c.o.out).toMatch(/mh_[A-Za-z0-9_-]{43}/);
   c = cap(); await keyCommand(['list'], c.io, env); expect(c.o.out).toContain('carol'); expect(c.o.out).not.toMatch(/mh_/);

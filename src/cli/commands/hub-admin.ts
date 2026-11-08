@@ -13,9 +13,9 @@ export async function withHubStore(cmd: string, io: CliIo, env: NodeJS.ProcessEn
 export const printJson = (io: CliIo, v: unknown) => io.stdout(JSON.stringify(v, null, 2) + '\n');
 
 export async function userCommand(args: string[], io: CliIo, env: NodeJS.ProcessEnv = process.env): Promise<number> {
-  const { positional, flags } = parseArgs(args); const sub = positional[0]; const json = !!flags.json;
-  if (sub !== 'list' && sub !== 'remove') { io.stderr('usage: memhive user <list | remove <name>> [--json]\n'); return 1; }
-  if (sub === 'remove' && !positional[1]) { io.stderr('usage: memhive user remove <name> [--json]\n'); return 1; }
+  const { positional, flags } = parseArgs(args, 'user'); const sub = positional[0]; const json = !!flags.json;
+  if (sub !== 'list' && sub !== 'remove') { io.stderr('usage: memhive user <list | remove <name>> [--json]\n'); return 2; }
+  if (sub === 'remove' && !positional[1]) { io.stderr('usage: memhive user remove <name> [--json]\n'); return 2; }
   return withHubStore('user', io, env, async (store) => {
     if (sub === 'list') {
       const users = await store.listUsers();
@@ -32,8 +32,8 @@ export async function userCommand(args: string[], io: CliIo, env: NodeJS.Process
 }
 
 export async function projectCommand(args: string[], io: CliIo, env: NodeJS.ProcessEnv = process.env): Promise<number> {
-  const { positional, flags } = parseArgs(args);
-  if (positional[0] !== 'list') { io.stderr('usage: memhive project list [--json]\n'); return 1; }
+  const { positional, flags } = parseArgs(args, 'project');
+  if (positional[0] !== 'list') { io.stderr('usage: memhive project list [--json]\n'); return 2; }
   return withHubStore('project', io, env, async (store) => {
     const projects = await store.listProjects();
     if (flags.json) printJson(io, projects);

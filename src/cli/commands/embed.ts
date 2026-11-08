@@ -7,7 +7,7 @@ import { DaemonClient } from '../../daemon/client.js';
 
 export async function embedCommand(args: string[], io: CliIo, opts: { home?: string } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home;
-  const { flags } = parseArgs(args);
+  const { flags } = parseArgs(args, 'embed');
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
   if (!info) { io.stderr(daemonUnavailableMessage(home)); return 1; }
   const client = new DaemonClient(info);
