@@ -1,23 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { redactSecrets, sanitizeToolPayload, stripPrivate, type PrivateState } from '../../src/hooks/sanitize.js';
+import { mulberry32, int, pick, chars, ALNUM, type Rng } from '../helpers/prng.js';
 
-// Seeded so a failure reproduces; the failing case is printed in the assertion message.
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-type Rng = () => number;
-const int = (r: Rng, lo: number, hi: number) => lo + Math.floor(r() * (hi - lo + 1));
-const pick = <T>(r: Rng, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
-const chars = (r: Rng, set: string, n: number) => Array.from({ length: n }, () => pick(r, [...set])).join('');
-const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const HEX = '0123456789abcdef';
 const UPNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const B64URL = ALNUM + '-_';
