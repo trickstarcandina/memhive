@@ -25,9 +25,19 @@ afterAll(async () => { await client.close(); await h.close(); });
 const text = (r: any) => r.content[0].text as string;
 
 describe('mcp', () => {
-  it('lists the four tools', async () => {
+  it('lists the tools', async () => {
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_observations', 'save_memory', 'search', 'timeline']);
+    expect(names).toEqual(['get_observations', 'pin', 'save_memory', 'search', 'timeline', 'unpin']);
+  });
+  it('pin and unpin by short id; a pinned row is marked in the session-start context', async () => {
+    const saved = text(await client.callTool({ name: 'save_memory', arguments: { text: 'Deploys go through the staging gate', title: 'Staging gate' } }));
+    const id8 = saved.match(/#([0-9a-f]{8})/)![1];
+    expect(text(await client.callTool({ name: 'pin', arguments: { id: `#${id8}` } }))).toContain(`Pinned #${id8}`);
+    const dc = new DaemonClient(h.info);
+    const ctxText = (await dc.request<{ context: string }>('POST', '/v1/sessions/start', { host: 'claude-code', hostEvent: 'SessionStart', hostSessionId: 'pin-1', cwd: home, event: 'session-start', at: new Date().toISOString() })).context;
+    expect(ctxText).toMatch(new RegExp(`#${id8} · discovery · pinned · Staging gate`));
+    expect(text(await client.callTool({ name: 'unpin', arguments: { id: id8 } }))).toContain(`Unpinned #${id8}`);
+    expect(await client.callTool({ name: 'pin', arguments: { id: 'deadbeef' } })).toMatchObject({ isError: true });
   });
   it('save_memory then search, timeline and get_observations round trip', async () => {
     const saved = text(await client.callTool({ name: 'save_memory', arguments: { text: 'Use pnpm, not npm, in this repo', title: 'Package manager' } }));

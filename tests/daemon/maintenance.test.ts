@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SqliteStore } from '../../src/store/sqlite/store.js';
 import { runMaintenance } from '../../src/daemon/maintenance.js';
 import { newId } from '../../src/shared/ids.js';
-import { sess } from '../store/store-contract.js';
+import { obs, sess } from '../store/store-contract.js';
 
 const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never;
 const DAY = 864e5;
@@ -24,6 +24,33 @@ describe('maintenance: prompts', () => {
     expect(texts(live.id)).toEqual(['p3', 'p4', 'p5', 'p6', 'p7']);
     expect(texts(old.id)).toEqual([]); expect(texts(recent.id)).toEqual(['p1']);
     expect(store.latestPrompt(live.id)!.text).toBe('p7');
+    store.close();
+  });
+});
+
+describe('maintenance: retention', () => {
+  it('expires by type (else default), never pinned rows, and only rows nothing in a hub still needs', () => {
+    const store = new SqliteStore(':memory:', { dims: 2, model: 'm' }); store.migrate();
+    const now = Date.now(); const ago = (d: number) => new Date(now - d * DAY).toISOString();
+    const local = store.getOrCreateProject('local', 'l'); const linked = store.getOrCreateProject('linked', 'k'); store.setProjectHub(linked.id, 'https://hub');
+    const a = sess(local.id); const b = sess(linked.id); store.upsertSession(a); store.upsertSession(b);
+    const mk = (p: string, s: string, title: string, type: any, days: number, extra: object = {}) => ({ ...obs({ projectId: p, sessionId: s, title, type, createdAt: ago(days) }), ...extra });
+    const rows = [
+      mk(local.id, a.id, 'old-discovery', 'discovery', 200), mk(local.id, a.id, 'young-discovery', 'discovery', 100),
+      mk(local.id, a.id, 'old-decision', 'decision', 400), mk(local.id, a.id, 'pinned', 'discovery', 400),
+      mk(local.id, a.id, 'seen-lately', 'discovery', 400, { lastSeenAt: ago(1) }),
+      mk(linked.id, b.id, 'linked-unsynced', 'discovery', 400), mk(linked.id, b.id, 'linked-synced', 'discovery', 400, { syncedAt: ago(399) }),
+    ];
+    store.insertObservations(rows);
+    store.setObservationEmbedding(rows[0].id, [1, 0], 'm');
+    (store as any).db.prepare('UPDATE observations SET last_seen_at = ? WHERE title = ?').run(ago(1), 'seen-lately');
+    expect(store.setPinned(rows[3].id, true)).toBe(true); expect(store.setPinned('nope', true)).toBe(false);
+    runMaintenance({ store, logger, settings: { retentionDays: { default: 365, discovery: 180 } } }, now);
+    const left = store.listRecentObservations(local.id, 20).concat(store.listRecentObservations(linked.id, 20)).map((o) => o.title).sort();
+    expect(left).toEqual(['linked-unsynced', 'pinned', 'seen-lately', 'young-discovery']);
+    expect(store.getObservationEmbeddings([rows[0].id]).size).toBe(0);
+    runMaintenance({ store, logger, settings: { retentionDays: { default: null } } }, now + 1000 * DAY);
+    expect(store.countObservations(local.id)).toBe(3);   // default null keeps everything
     store.close();
   });
 });

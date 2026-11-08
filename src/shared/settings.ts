@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { ensureHomeDir, resolvePaths } from './paths.js';
 import { safeJsonParse } from './json.js';
+import { OBSERVATION_TYPES, type ObservationType } from '../store/types.js';
 
 export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: string; baseUrl?: string; apiKey?: string }
 export interface EmbedSettings { baseUrl: string; apiKey?: string; model: string; dims: number }
@@ -10,7 +11,10 @@ export interface Settings {
   llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number; context: ContextSettings;
   /** Project keys or globs (`*` one segment, `**` any) never recorded; also matched against the repo's root path. */
   excludeProjects: string[];
+  /** Days to keep observations, per type, else `default`; null keeps forever. Pinned rows are always kept. */
+  retentionDays: RetentionDays;
 }
+export type RetentionDays = { default: number | null } & Partial<Record<ObservationType, number | null>>;
 
 export const DEFAULT_MODELS: Record<LlmSettings['provider'], string> = { anthropic: 'claude-haiku-5-5', 'openai-compat': 'qwen2.5:7b' };
 
@@ -20,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   contextTokens: 2000,
   context: { scope: 'team' },
   excludeProjects: [],
+  retentionDays: { default: null, discovery: 180 },
 };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -63,7 +68,12 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
     : isScope(fc.scope) ? fc.scope : fc.includeOtherUsers === false ? 'mine' : 'team';
   const list = (v: unknown): string[] | undefined => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim()) : undefined;
   const excludeProjects = env.MEMHIVE_EXCLUDE_PROJECTS !== undefined ? env.MEMHIVE_EXCLUDE_PROJECTS.split(',').map((x) => x.trim()).filter(Boolean) : list(file.excludeProjects) ?? [];
-  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { scope }, excludeProjects };
+  const fr = isObj(file.retentionDays) ? (file.retentionDays as Record<string, unknown>) : {};
+  const days = (v: unknown): number | null | undefined => (v === null ? null : posInt(v));
+  const retentionDays: RetentionDays = { ...DEFAULT_SETTINGS.retentionDays };
+  for (const k of ['default', ...OBSERVATION_TYPES] as const) { const d = days(fr[k]); if (d !== undefined) retentionDays[k] = d; }
+  if (env.MEMHIVE_RETENTION_DAYS !== undefined && env.MEMHIVE_RETENTION_DAYS !== '') retentionDays.default = posInt(env.MEMHIVE_RETENTION_DAYS) ?? null;   // 0 or junk: keep forever
+  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { scope }, excludeProjects, retentionDays };
 }
 
 export function saveSettings(home: string, settings: Settings): void {

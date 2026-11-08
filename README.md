@@ -47,7 +47,7 @@ into the next session. Your agent stops re-learning the same codebase every morn
 - **Automatic capture**: hooks record prompts and tool use; an LLM turns them into typed observations
 - **Context at session start**: recent and relevant memory is injected, within a token budget
 - **Hybrid search**: SQLite full-text search plus optional vector search, merged with reciprocal rank fusion
-- **MCP tools**: the agent can `search`, browse a `timeline`, fetch full records and `save_memory` itself
+- **MCP tools**: the agent can `search`, browse a `timeline`, fetch full records, `save_memory` itself and `pin` / `unpin` what must always be in context
 - **Any provider**: Anthropic or any OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM, ...) for the observer and embeddings
 - **Privacy first**: `<private>` blocks and secrets are stripped before anything is stored; raw tool output never touches disk
 - **Team hub**: link a project to a self-hosted hub (Postgres + pgvector) to share memory with your team
@@ -133,7 +133,8 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
   "embed": { "baseUrl": "http://localhost:11434/v1", "model": "bge-m3", "dims": 1024, "apiKey": "optional" },
   "contextTokens": 2000,
   "context": { "scope": "team" },
-  "excludeProjects": ["github.com/acme/secret-*", "/home/me/clients/**"]
+  "excludeProjects": ["github.com/acme/secret-*", "/home/me/clients/**"],
+  "retentionDays": { "default": null, "discovery": 180 }
 }
 ```
 
@@ -155,6 +156,7 @@ Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install`
 | `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block (`contextTokens`). A token counts as 4 characters, or 3 for text that is more than 20 % non-ASCII (CJK, Vietnamese). |
 | `MEMHIVE_CONTEXT_SCOPE` | `team` | `mine` keeps teammates' pulled rows out of the session-start context; MCP search still finds them (`context.scope`). The older `context.includeOtherUsers: false` / `MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS=0` still work as a deprecated alias for `mine`. |
 | `MEMHIVE_EXCLUDE_PROJECTS` | none | Comma-separated project keys or globs that are never recorded (`excludeProjects`). See [Opting out](#opting-out). |
+| `MEMHIVE_RETENTION_DAYS` | unset | Days to keep observations of types without their own entry (`retentionDays.default`; unset or `0`: forever). `retentionDays` also takes one entry per type, and `discovery` defaults to 180. Age counts from the last time a row was recorded again. Pinned rows are never removed, and in a linked project only rows already pushed to the hub are. The daemon applies it at start and every 10 minutes. |
 | `MEMHIVE_DISABLED` | unset | Set to `1` to turn memhive off: hooks exit at once without contacting the daemon, and MCP tools answer "memhive disabled". |
 | `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
 

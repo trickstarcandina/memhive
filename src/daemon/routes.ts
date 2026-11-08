@@ -86,6 +86,14 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     return ok({ observations: await hybridSearch(store, ctx.embedder, q.get('q') ?? '', f) });
   }
 
+  if (method === 'POST' && path === '/v1/observations/pin') {
+    const b = (body ?? {}) as { id?: unknown; pinned?: unknown };
+    if (typeof b.id !== 'string' || typeof b.pinned !== 'boolean') return err(400, 'bad_pin', 'id and pinned (boolean) required');
+    const [id] = resolveIds(ctx, b.id);
+    if (!id || !store.setPinned(id, b.pinned)) return err(404, 'not_found', 'no such observation');
+    return ok({ observation: store.getObservations([id])[0] });
+  }
+
   if (method === 'GET' && path === '/v1/observations') return ok({ observations: store.getObservations(resolveIds(ctx, q.get('ids') ?? '')) });
 
   if (method === 'GET' && path === '/v1/timeline') {

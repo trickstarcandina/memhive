@@ -92,4 +92,12 @@ describe('settings', () => {
     expect(loadSettings(home, {}).excludeProjects).toEqual(['github.com/a/*', 'x']);
     expect(loadSettings(home, { MEMHIVE_EXCLUDE_PROJECTS: ' p/** , q ,' }).excludeProjects).toEqual(['p/**', 'q']);
   });
+  it('retentionDays: default keeps all but discoveries 180 d; file per type; env sets the default', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    expect(loadSettings(home, {}).retentionDays).toEqual({ default: null, discovery: 180 });
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ retentionDays: { default: 365, discovery: null, bugfix: 30, bogus: 1, decision: -2 } }));
+    expect(loadSettings(home, {}).retentionDays).toEqual({ default: 365, discovery: null, bugfix: 30 });
+    expect(loadSettings(home, { MEMHIVE_RETENTION_DAYS: '90' }).retentionDays.default).toBe(90);
+    expect(loadSettings(home, { MEMHIVE_RETENTION_DAYS: '0' }).retentionDays.default).toBeNull();
+  });
 });

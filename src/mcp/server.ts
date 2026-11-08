@@ -75,6 +75,16 @@ export function createMcpServer(deps: { client: DaemonClient | null; cwd: string
     return textResult(`Saved #${shortId(r.observation.id)} · ${r.observation.type} · ${r.observation.title.replace(/\s+/g, ' ')}`);
   });
 
+  // Tools that change one observation by id (pin, unpin; forget joins them) share this shape.
+  const idTool = (name: string, description: string, run: (id: string) => Promise<string>) =>
+    tool(name, { description, inputSchema: { id } }, async (a) => textResult(await run(a.id)));
+  const pin = (pinned: boolean) => async (oid: string) => {
+    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/observations/pin', { id: oid, pinned });
+    return `${pinned ? 'Pinned' : 'Unpinned'} #${shortId(r.observation.id)} · ${r.observation.title.replace(/\s+/g, ' ')}`;
+  };
+  idTool('pin', 'Pin an observation (full id or 8-char short id): it always appears in the session-start context and is never expired by retention.', pin(true));
+  idTool('unpin', 'Unpin an observation so it is ranked and expired like any other.', pin(false));
+
   return server;
 }
 

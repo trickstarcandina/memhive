@@ -81,4 +81,9 @@ export const SQLITE_MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN branch TEXT;
   `,
+  // 10: pinned rows (local only) always make the context and are never removed by retention.
+  `
+  ALTER TABLE observations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX IF NOT EXISTS observations_pinned ON observations(project_id) WHERE pinned = 1;
+  `,
 ];
