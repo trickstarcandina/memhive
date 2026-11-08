@@ -167,6 +167,17 @@ export function storeContract(name: string, open: () => Store): void {
         expect(s.searchObservationsVector([1, 0, 0, 0], { projectId: p2.id, limit: 10 }).map((h) => h.id)).toEqual([o2.id]);
       });
 
+      it('vector search with a selective filter still fills the limit when the matches are far away (G18)', () => {
+        const { p1, a1 } = setup();
+        const near = Array.from({ length: 300 }, () => obs({ projectId: p1.id, sessionId: a1.id, type: 'discovery' }));
+        const far = Array.from({ length: 5 }, () => obs({ projectId: p1.id, sessionId: a1.id, type: 'bugfix' }));
+        s.insertObservations([...near, ...far]);
+        s.setObservationEmbeddings([...near.map((o, i) => ({ id: o.id, vec: [1, i / 1000, 0, 0], model: 'm' })), ...far.map((o) => ({ id: o.id, vec: [0, 0, 0, 1], model: 'm' }))]);
+        const hits = s.searchObservationsVector([1, 0, 0, 0], { projectId: p1.id, type: 'bugfix', limit: 5 });
+        expect(hits.map((h) => h.id).sort()).toEqual(far.map((o) => o.id).sort());
+        expect(s.searchObservationsVector([1, 0, 0, 0], { projectId: p1.id, type: 'refactor', limit: 5 })).toEqual([]);
+      });
+
       it('vector search honours type, userId and since filters', () => {
         const { p1, a1 } = setup();
         const a = obs({ projectId: p1.id, sessionId: a1.id, type: 'bugfix', userId: 'alice', createdAt: '2026-01-01T00:00:00Z' });

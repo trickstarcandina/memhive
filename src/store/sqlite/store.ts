@@ -7,6 +7,7 @@ import { toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
 
 type Row = Record<string, any>;
+const VEC_K_CAP = 2000;
 const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 
@@ -177,12 +178,23 @@ export class SqliteStore implements Store {
   searchObservationsVector(vec: number[], f: SearchFilters): SearchHit[] {
     if (!this.dims || vec.length !== this.dims) return [];
     const buf = Buffer.from(new Float32Array(vec).buffer);
-    const candidates = this.db.prepare(`SELECT id, distance FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = ? ORDER BY distance`).all(buf, f.projectId, Math.max(f.limit * 4, 50)) as Row[];
-    if (candidates.length === 0) return [];
+    const knn = this.db.prepare('SELECT id, distance FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = ? ORDER BY distance');
     const w = filterSql(f, 'o');
-    const ids = candidates.map((c) => c.id);
-    const keep = new Set((this.db.prepare(`SELECT o.id FROM observations o WHERE o.id IN (${ids.map(() => '?').join(',')}) AND ${w.sql}`).all(...ids, ...w.params) as Row[]).map((r) => r.id));
-    return candidates.filter((c) => keep.has(c.id)).slice(0, f.limit).map((c) => ({ id: c.id, score: 1 / (1 + c.distance) }));
+    // vec0 filters only on the partition key, so type/user/since apply after the k-NN. When too few neighbours survive
+    // a selective filter, widen k (x4) until the limit fills, the partition runs out, or k reaches the cap. Simpler than
+    // pre-filtering ids into the vec0 query, and exact up to the cap.
+    for (let k = Math.max(f.limit * 4, 50); ; k = Math.min(k * 4, VEC_K_CAP)) {
+      const candidates = knn.all(buf, f.projectId, k) as Row[];
+      if (candidates.length === 0) return [];
+      const ids = candidates.map((c) => c.id);
+      const keep = new Set<string>();
+      for (let i = 0; i < ids.length; i += 500) {   // stays far below SQLite's bound-parameter limit
+        const part = ids.slice(i, i + 500);
+        for (const r of this.db.prepare(`SELECT o.id FROM observations o WHERE o.id IN (${part.map(() => '?').join(',')}) AND ${w.sql}`).all(...part, ...w.params) as Row[]) keep.add(r.id);
+      }
+      const hits = candidates.filter((c) => keep.has(c.id));
+      if (hits.length >= f.limit || candidates.length < k || k >= VEC_K_CAP) return hits.slice(0, f.limit).map((c) => ({ id: c.id, score: 1 / (1 + c.distance) }));
+    }
   }
   timeline(anchorId: string, before: number, after: number): Observation[] {
     const anchor = this.db.prepare('SELECT * FROM observations WHERE id = ?').get(anchorId) as Row | undefined;
