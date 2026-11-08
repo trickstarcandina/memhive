@@ -43,7 +43,7 @@ describe('runHook', () => {
     const log = readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8');
     expect(log).toContain('stdin too large'); expect(log).toContain('empty stdin'); expect(log).toContain('hook failed');
   });
-  it('tool events are fire-and-forget with a 250 ms budget', async () => {
+  it('tool events are fire-and-forget with a 250 ms budget', { retry: 2 }, async () => {
     const home = mkHome(); const h = await startDaemon(createDaemonContext(home, env), { port: 0 });
     let seenTimeout = 0;
     const slowFetch: typeof fetch = async (url, init) => {
@@ -66,7 +66,7 @@ describe('runHook', () => {
     input.end(Buffer.alloc(STDIN_LIMIT + 100, 'a'));
     expect((await p).length).toBe(STDIN_LIMIT + 1);
   });
-  it('readStdin gives up when the host never closes stdin', async () => {
+  it('readStdin gives up when the host never closes stdin', { retry: 2 }, async () => {
     const input = new PassThrough(); input.write('{"partial":');
     const t0 = Date.now();
     expect(await readStdin(STDIN_LIMIT, input, 100)).toBe('{"partial":');

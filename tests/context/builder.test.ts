@@ -83,10 +83,11 @@ describe('buildContext', () => {
     expect(contextScore(rows[5] as any, {}, now.getTime())).toBeGreaterThan(contextScore({ ...rows[5], pinned: false } as any, {}, now.getTime()) * 2.9);
   });
   it('shows up to 3 facts for the top 5 rows only', () => {
-    const rows = Array.from({ length: 7 }, (_, i) => obs({ projectId: 'p', sessionId: 's', title: `row${i}`, facts: [`fa${i}`, `fb${i}`, `fc${i}`, `fd${i}`], createdAt: at(i) }));
+    const rows = Array.from({ length: 7 }, (_, i) => obs({ projectId: 'p', sessionId: 's', title: `row${i}`, facts: [`qa${i}`, `qb${i}`, `qc${i}`, `qd${i}`], createdAt: at(i) }));
     const c = buildContext({ ...base, observations: rows, budgetTokens: 5000 });
-    expect(c).toContain('  - fa0'); expect(c).toContain('  - fc4'); expect(c).not.toContain('fd0');
-    expect(c).not.toContain('fa5'); expect(c).not.toContain('fa6');
+    // markers start with q, which no hex id can contain
+    expect(c).toContain('  - qa0'); expect(c).toContain('  - qc4'); expect(c).not.toContain('qd0');
+    expect(c).not.toContain('qa5'); expect(c).not.toContain('qa6');
   });
   it('CJK and other non-ASCII text are budgeted at 3 chars per token', () => {
     expect(estimateTokens('a'.repeat(40))).toBe(10);

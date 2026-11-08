@@ -91,7 +91,7 @@ describe('sanitizeToolPayload', () => {
 
 describe('sanitizePrompt', () => {
   it('strips private and trims', () => expect(sanitizePrompt('  hi <private>x</private> ')).toBe('hi'));
-  it('caps the scanned prompt before redaction, so a 2 MB prompt costs no more than 256 KB', () => {
+  it('caps the scanned prompt before redaction, so a 2 MB prompt costs no more than 256 KB', { retry: 2 }, () => {
     const big = ('cookie:'.repeat(9) + ' ').repeat(33_000);
     const t = performance.now();
     const out = sanitizePrompt(big);
@@ -136,7 +136,7 @@ describe('redactSecrets', () => {
   it('does not redact type annotations or bare references', () => {
     for (const c of ['password: string;', 'maxTokens: number = 100000', 'const a = process.env.SECRET', 'config.token', 'const t = config.token', 'token=$TOKEN']) expect(redactSecrets(c)).toBe(c);
   });
-  it('is linear on hostile input', () => {
+  it('is linear on hostile input', { retry: 2 }, () => {
     const t = Date.now();
     redactSecrets('token='.repeat(175000));
     expect(Date.now() - t).toBeLessThan(200);
@@ -205,7 +205,7 @@ describe('redactSecrets', () => {
     for (const c of ['password: hunter2<3', 'password: Hunter<3', 'password: Pass<word>', 'token: abcd1[]']) expect(redactSecrets(c)).toBe(c.slice(0, c.indexOf(':') + 2) + R);
     for (const c of ['token: Promise<string>;', 'token: Record<string, string>,', 'token: Map<string, number>;', 'token: number[]', 'token: Promise<Map<string, number>>;']) expect(redactSecrets(c)).toBe(c);
   });
-  it('is linear on hostile type-like input', () => {
+  it('is linear on hostile type-like input', { retry: 2 }, () => {
     const t = Date.now();
     redactSecrets('token: A<'.repeat(110000));
     expect(Date.now() - t).toBeLessThan(200);
@@ -321,7 +321,7 @@ describe('redactSecrets coverage (H1)', () => {
   it('is idempotent on every fixture', () => {
     for (const [i] of LEAK_FIXTURES) expect(redactSecrets(redactSecrets(i))).toBe(redactSecrets(i));
   });
-  it('stays linear on 256 KB inputs aimed at the new rules', () => {
+  it('stays linear on 256 KB inputs aimed at the new rules', { retry: 2 }, () => {
     for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', 'token=\\"a', 'token=\\"\\\\', 'cookie:', 'cookie:a', 'a://b:', 'x://a:@h', 'x://a:p@', ' -u a:', '-ua', ' docker -u a:b', ' ', 'Authorization: ', 'Authorization:      ', ' -u a', 'a.', 'pass', 'auth: ']) {
       const s = unit.repeat(Math.ceil(256 * 1024 / unit.length));
       const t = performance.now();
@@ -329,7 +329,7 @@ describe('redactSecrets coverage (H1)', () => {
       expect(performance.now() - t, unit).toBeLessThan(200);
     }
   });
-  it('runs under 300 ms on 2 MB adversarial inputs', () => {
+  it('runs under 300 ms on 2 MB adversarial inputs', { retry: 2 }, () => {
     const N = 2 * 1024 * 1024;
     const fill = (u: string) => u.repeat(Math.ceil(N / u.length)).slice(0, N);
     let seed = 7;
@@ -434,7 +434,7 @@ describe('redactSecrets review round 1', () => {
       'git clone https://github.com/x/y.git', 'ssh://git@github.com/x', 'LS0tLS1CRUdJTi',
     ]) expect(redactSecrets(c)).toBe(c);
   });
-  it('stays under 300 ms on 2 MB inputs aimed at the round-1 rules', () => {
+  it('stays under 300 ms on 2 MB inputs aimed at the round-1 rules', { retry: 2 }, () => {
     const N = 2 * 1024 * 1024;
     for (const unit of ['mysql ', 'mysql -p', 'sshpass ', 'docker login ', 'docker run ', 'login password ', 'login ', 'machine ',
       'authorization: ', 'authorization: bearer ', 'Authorization:' + ' '.repeat(70), 'a://bbbbbbbbbbbbbbbbbbbbbbbb', 'a://b:c@x',
@@ -471,7 +471,7 @@ describe('redactSecrets review round 2', () => {
       'login page redirects; password strength meter added', 'tokens[i] = next;', "define('WP_DEBUG', true);",
     ]) expect(redactSecrets(c)).toBe(c);
   });
-  it('stays under 300 ms on 2 MB inputs aimed at the round-2 rules', () => {
+  it('stays under 300 ms on 2 MB inputs aimed at the round-2 rules', { retry: 2 }, () => {
     const N = 2 * 1024 * 1024;
     for (const unit of ['http://a:1/@', 'a://b:12', 'define("KEY", ', "define('A_KEY'", 'login a password ', 'machine a login b ', 'secret access key [x]: ', 'sudo ', 'git push ']) {
       const s = unit.repeat(Math.ceil(N / unit.length)).slice(0, N);

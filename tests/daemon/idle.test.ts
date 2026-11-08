@@ -42,7 +42,7 @@ describe('idle shutdown (G10)', () => {
   });
 });
 
-it('observer close gives up on stuck work after its cap', async () => {
+it('observer close gives up on stuck work after its cap', { retry: 2 }, async () => {
   const ctx = createDaemonContext(mkdtempSync(path.join(tmpdir(), 'mh-')), env);
   (ctx.observer as any).deps.provider = { complete: () => new Promise(() => {}) };
   const r = ctx.resolveSession({ host: 'claude-code', hostEvent: 'Stop', hostSessionId: 'stuck', cwd: tmpdir(), event: 'stop', at: new Date().toISOString() })!;

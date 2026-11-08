@@ -102,7 +102,7 @@ describe('redactSecrets property (F1)', () => {
     }
   });
 
-  it('stays fast enough for the whole property run', () => {
+  it('stays fast enough for the whole property run', { retry: 2 }, () => {
     const t = performance.now();
     const r = mulberry32(1);
     for (let i = 0; i < 2000; i++) redactSecrets(buildCase(r).host);

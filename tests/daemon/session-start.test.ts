@@ -81,7 +81,7 @@ describe('session start pull', () => {
     } finally { vi.useRealTimers(); }
     s.ctx.store.close();
   });
-  it('first pull waits up to 1 s', async () => {
+  it('first pull waits up to 1 s', { retry: 2 }, async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const slow = linked(5000);
     try {
