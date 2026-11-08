@@ -1,0 +1,71 @@
+# Publishes to npmjs when a GitHub release is published (not on tag push): the release
+# can sit as a draft first, so publishing is a deliberate click.
+#
+# npmjs uses Trusted Publishing (OIDC): no NPM_TOKEN, no long-lived secret. That needs
+# `id-token: write` and npm >= 11.5.1, hence Node 24 in the publish job (Node 22 ships npm 10).
+# One-time setup on npmjs.com: package page -> Settings -> Trusted Publisher -> GitHub Actions,
+# owner `trickstarcandina`, repo `memhive`, workflow filename `publish.yml`.
+# The filename must match exactly; renaming this file breaks publishing.
+name: publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg17
+        env: { POSTGRES_PASSWORD: memhive, POSTGRES_DB: memhive }
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # A tag that disagrees with package.json would publish a different version than the release names.
+      - name: tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p 'require("./package.json").version')"
+          if [ "$TAG" != "$PKG" ]; then echo "tag $GITHUB_REF_NAME does not match package.json $PKG"; exit 1; fi
+
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+        env: { TEST_DATABASE_URL: 'postgres://postgres@localhost:5432/memhive', PGPASSWORD: memhive }
+
+      # A known hole in a runtime dependency ships to every user and cannot be fixed in a published version.
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm audit signatures
+
+  npmjs:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for npm Trusted Publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # No cache in the job that can publish: the cache is shared with other jobs.
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      # prepublishOnly builds dist/. No NODE_AUTH_TOKEN: OIDC authenticates, and npm attaches provenance.
+      - run: npm publish --access public
