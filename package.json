@@ -1,6 +1,6 @@
 {
   "name": "memhive",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Long-term memory for coding agents. Personal by default, shareable through a team hub.",
   "license": "MIT",
   "repository": {
