@@ -28,6 +28,8 @@ export class SqliteStore implements Store {
   private dims: number | null;
 
   private vecOff = false;
+  /** True when dims were configured but sqlite-vec failed to load (vectors cannot be stored or searched). */
+  get vectorsDegraded(): boolean { return this.vecOff; }
 
   constructor(file: string, opts: { dims: number | null; warn?: (msg: string, data?: object) => void; loadVec?: (db: Database.Database) => void }) {
     this.db = new Database(file);

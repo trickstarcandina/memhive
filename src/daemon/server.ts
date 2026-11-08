@@ -32,7 +32,8 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   const logger = createLogger(home, 'daemon', env);
   const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, warn: (m, d) => logger.warn(m, d) });
   store.migrate();
-  const embedder = createEmbedder(settings);
+  // Degraded sqlite-vec drops every vector, so do not pay for embedding calls; rows stay NULL for a later backfill.
+  const embedder = store.vectorsDegraded ? null : createEmbedder(settings);
   let provider: LlmProvider;
   try { provider = createProvider(settings); }
   catch (e) { logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) }); provider = { complete: async () => { throw e; } }; }
