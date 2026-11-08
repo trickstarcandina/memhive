@@ -14,6 +14,14 @@ export interface SyncState { projectId: string; pullCursor: number; hubEpoch: st
 export type SyncStatePatch = Partial<Pick<SyncState, 'backoffUntil' | 'backoffMs' | 'strikes' | 'lastError' | 'lastErrorAt' | 'lastPushAt' | 'lastPullAt'>>;
 export type SyncTable = 'sessions' | 'observations' | 'summaries';
 /** A pulled row that could not be stored; raw is the row as received (JSON, without its vector). */
+export const TOMBSTONE_TABLES = ['observation', 'summary', 'session'] as const;
+export type TombstoneTable = typeof TOMBSTONE_TABLES[number];
+/** A forgotten row: queued for push (synced_at NULL) and remembered so a later pull of the same id is ignored. */
+export interface Tombstone { id: string; tbl: TombstoneTable; deletedAt: string }
+/** syncedAt null (default): the tombstone is queued for push; a time: remembered only (pulled tombstone, forced local removal).
+ * projectId: only rows of that project are deleted, and ids with no row are still remembered under it. */
+export interface DeleteOpts { syncedAt?: string | null; projectId?: string }
+export interface ObservationPatch { title?: string; narrative?: string; facts?: string[]; pinned?: boolean }
 export interface QuarantineRow { id: string; tbl: SyncTable; seq: number; reason: string; raw: string; createdAt?: string }
 export interface Store {
   migrate(): void;
@@ -36,6 +44,15 @@ export interface Store {
   findDuplicate(o: Pick<Observation, 'projectId' | 'type' | 'title'>, vec: number[] | null, since: string): string | null;
   bumpSeen(id: string, at: string): void;                  // seen_count + 1, last_seen_at = at
   setPinned(id: string, pinned: boolean): boolean;          // false: no such observation
+  /** Local edit (not synced): text changes refresh FTS and drop the vector so the backfill re-embeds. false: no such row. */
+  updateObservation(id: string, patch: ObservationPatch): boolean;
+  /** Each returns the number of rows deleted and writes a tombstone per deleted row (see DeleteOpts). */
+  deleteObservations(ids: string[], opts?: DeleteOpts): number;
+  deleteSummaries(ids: string[], opts?: DeleteOpts): number;
+  deleteSession(id: string, opts?: DeleteOpts): number;     // also its observations, summaries and prompts (remembered, not pushed)
+  forgottenIds(ids: string[]): Set<string>;                 // the ids that have a tombstone, any table
+  listPendingTombstones(projectId: string, limit: number): Tombstone[];
+  markTombstonesSynced(ids: string[], at: string): void;
   /**
    * Deletes unpinned rows of each type last seen before its cutoff, only where nothing is lost for the team: rows
    * already synced, or rows of projects with no hub. Returns the count.
