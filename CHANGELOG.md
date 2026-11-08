@@ -44,7 +44,7 @@ After upgrading, re-run `memhive install`.
 ### Changed
 
 - The hub validates push bodies with zod schemas and field caps. An over-cap row is rejected on its own (`invalid_row` with the field), so the rest of the body lands.
-- Session working directories and git branches stay on the machine: clients stop sending `cwd`, and the hub stops storing and relaying it.
+- Session working directories and git branches stay on the machine: clients send `cwd` empty (protocol 1 hubs require the field), and the hub stops storing and relaying it.
 - Rows pulled from a hub show only their title in the context, and their file lists give no boost.
 - Session start no longer waits for the hub pull.
 - Sync backoff state survives a restart, and 404 or a bare 4xx (no hub error body) back off too, with a bounded give-up.

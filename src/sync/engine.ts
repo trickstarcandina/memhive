@@ -72,10 +72,11 @@ const clipSum = (m: Summary): Summary => ({
   completed: m.completed.slice(0, MAX_LONG),
   nextSteps: m.nextSteps.slice(0, MAX_LONG),
 });
-// cwd stays local: it is a path on this machine, the hub neither needs nor keeps it.
-// cwd and branch stay on this machine: both can name clients, tickets or home directories.
-const clipSess = ({ cwd: _cwd, branch: _branch, ...x }: Session): Omit<Session, 'cwd' | 'branch'> => ({
+// cwd and branch stay on this machine: both can name clients, tickets or home directories. cwd goes out empty, not
+// absent: a protocol 1 hub (0.1.x) rejects a session without a string cwd, and with it every row under that session.
+const clipSess = ({ cwd: _cwd, branch: _branch, ...x }: Session): Omit<Session, 'branch'> => ({
   ...x,
+  cwd: '',
   host: x.host.slice(0, MAX_SHORT),
   hostSessionId: x.hostSessionId.slice(0, MAX_SHORT),
 });

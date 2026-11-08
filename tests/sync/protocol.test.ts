@@ -92,19 +92,31 @@ describe('hub protocol', () => {
     expect(t.warns.filter((w) => w.includes('older than this client'))).toHaveLength(1);
     expect(t.engine.hubErrors()).toEqual([]);
   });
-  it('push bodies never carry cwd, branch or local bookkeeping', async () => {
+  it('push bodies never carry the local cwd, branch or local bookkeeping', async () => {
     const t = setup({ ...base, protocol: 1 });
     const [o] = t.store.listRecentObservations(t.project.id, 1);
     t.store.setPinned(o.id, true);
     t.store.bumpSeen(o.id, new Date().toISOString());
     await t.engine.push(t.project);
     expect(t.bodies[0].sessions).toHaveLength(1);
-    expect(t.bodies[0].sessions[0]).not.toHaveProperty('cwd');
+    expect(t.bodies[0].sessions[0].cwd).toBe(''); // present but empty: protocol 1 hubs require the field
     expect(t.bodies[0].sessions[0]).not.toHaveProperty('branch');
     expect(JSON.stringify(t.bodies)).not.toContain('acme-ticket');
     for (const k of ['pinned', 'seenCount', 'lastSeenAt']) expect(t.bodies[0].observations[0]).not.toHaveProperty(k);
     expect(t.store.getSession(t.bodies[0].sessions[0].id)!.branch).toBe('acme-ticket-42');
     expect(JSON.stringify(t.bodies)).not.toContain('secret-client');
     expect(t.store.getSession(t.bodies[0].sessions[0].id)!.cwd).toBe('/home/alice/secret-client/app'); // kept locally
+  });
+  it('a push passes the 0.1.2 hub session check (protocol 1 hubs require a string cwd)', async () => {
+    // Copied from the 0.1.2 hub (src/hub/routes.ts, /v1/sync/push): a session failing it was rejected as invalid_row,
+    // and every observation under it as unknown_session.
+    const isStr = (v: unknown) => typeof v === 'string';
+    const isIso = (v: unknown) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
+    const t = setup({ ...base, protocol: 1 });
+    await t.engine.push(t.project);
+    const [s] = t.bodies[0].sessions;
+    expect(
+      [s.host, s.hostSessionId, s.cwd].every(isStr) && isIso(s.startedAt) && (s.endedAt == null || isIso(s.endedAt))
+    ).toBe(true);
   });
 });

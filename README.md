@@ -332,7 +332,7 @@ Hub-side search is full-text only, because the hub runs no embedder. Client sear
 
 ### Protocol version
 
-`GET /v1/config` reports the hub's protocol version: `2` since memhive 0.2 (push and pull carry tombstones). A client refuses to sync with a hub whose protocol is newer than its own, so upgrade clients after the hub. A 0.2 client keeps syncing rows with a protocol 1 hub (0.1.x), but holds its tombstones until the hub is upgraded. `memhive doctor` shows each linked hub's protocol. [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) documents the wire format.
+`GET /v1/config` reports the hub's protocol version: `2` since memhive 0.2 (push and pull carry tombstones). A client refuses to sync with a hub whose protocol is newer than its own, so upgrade clients after the hub. A 0.2 client keeps syncing sessions, observations and summaries with a protocol 1 hub (0.1.x): sessions go out with an empty `cwd`, which those hubs require. Forgotten rows (tombstones) stay queued until the hub is upgraded. `memhive doctor` shows each linked hub's protocol. [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) documents the wire format.
 
 ## Upgrading
 
