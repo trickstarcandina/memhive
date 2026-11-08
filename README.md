@@ -31,7 +31,9 @@ Claude Code and Codex remember past sessions: personal by default, shared throug
 <a href="https://github.com/trickstarcandina/memhive/releases"><b>Releases</b></a> ·
 <a href="#configuration"><b>Configuration</b></a> ·
 <a href="#team-hub"><b>Team hub</b></a> ·
-<a href="#troubleshooting"><b>Troubleshooting</b></a>
+<a href="#troubleshooting"><b>Troubleshooting</b></a> ·
+<a href="./docs/ARCHITECTURE.md"><b>Architecture</b></a> ·
+<a href="./CHANGELOG.md"><b>Changelog</b></a>
 </p>
 
 </div>
@@ -73,6 +75,14 @@ memhive doctor
 memhive search "auth middleware"
 ```
 
+### First session checklist
+
+1. Work through one session in a git repo and end it normally. The observer writes observations while you work and a summary at stop.
+2. Run `memhive search <a word from that session>` in the same repo. It should list what was recorded.
+3. Start a second session. It opens with a context block built from the first.
+
+If search finds nothing, look in `~/.memhive/logs/daemon.log` for `observations stored` lines. Errors from the LLM provider (wrong key, wrong model, unreachable endpoint) show up there too, and `memhive doctor` checks the credentials.
+
 ## How it works
 
 ```mermaid
@@ -106,27 +116,49 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 | `memhive daemon run\|start\|stop\|status` | Control the background daemon. |
 | `memhive hook <claude-code\|codex> <event>` | Hook entry point; called by the host, not by you. |
 | `memhive mcp` | MCP server over stdio; called by the host. |
+| `memhive serve` | Run the team hub. Configured by environment variables; see [Team hub](#team-hub). |
+| `memhive key create --user <name> [--label <text>]\|list\|revoke <id>` | Manage hub API keys. Run it where the hub's `DATABASE_URL` is set. |
+| `memhive login <hub-url> [--key-stdin]` | Store an API key for a hub. Prompts without echo; `--key-stdin` reads the key from stdin. |
+| `memhive link <hub-url>` / `memhive unlink` | Start or stop syncing the current project with a hub you are logged in to. |
+| `memhive sync` | Push and pull the current project now. |
 | `memhive version` | Print the version. |
 
 ## Configuration
 
-Settings live in `~/.memhive/settings.json` (mode 0600). Environment variables override the file and use the same names as the settings keys shown here.
+Settings live in `~/.memhive/settings.json` (mode 0600), which `memhive install` writes. Environment variables override the file. Their names differ from the file's keys, which are nested:
+
+```json
+{
+  "llm": { "provider": "openai-compat", "model": "qwen2.5:7b", "baseUrl": "http://localhost:11434/v1", "apiKey": "optional" },
+  "embed": { "baseUrl": "http://localhost:11434/v1", "model": "bge-m3", "dims": 1024, "apiKey": "optional" },
+  "contextTokens": 2000
+}
+```
+
+`llm.apiKey` holds the key for either provider. `llm.model` applies only to the provider saved next to it: switching provider through `MEMHIVE_LLM_PROVIDER` falls back to that provider's default model. `embed` needs `baseUrl`, `model` and `dims`; leave it out (or `null`) for full-text search only.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `MEMHIVE_HOME` | `~/.memhive` | Data directory (database, settings, daemon info, logs). |
 | `MEMHIVE_LLM_PROVIDER` | `anthropic` | Observer provider: `anthropic` or `openai-compat`. |
-| `MEMHIVE_ANTHROPIC_API_KEY` | none | Anthropic API key (provider `anthropic`). Required there. |
-| `MEMHIVE_ANTHROPIC_MODEL` | `claude-haiku-5-5` | Anthropic model alias. |
-| `MEMHIVE_LLM_BASE_URL` | none | OpenAI-compatible endpoint, e.g. `http://localhost:11434/v1`. Required for `openai-compat`. |
-| `MEMHIVE_LLM_API_KEY` | none | Key for the OpenAI-compatible endpoint, if it needs one. |
-| `MEMHIVE_LLM_MODEL` | `claude-haiku-5-5` | Model name for the OpenAI-compatible endpoint. Set it: the default is an Anthropic model. |
-| `MEMHIVE_EMBED_BASE_URL` | none | OpenAI-compatible embeddings endpoint (Ollama, OpenAI, OpenRouter, ...). |
-| `MEMHIVE_EMBED_API_KEY` | none | Key for the embeddings endpoint, if needed. |
-| `MEMHIVE_EMBED_MODEL` | none | Embedding model name. |
-| `MEMHIVE_EMBED_DIMS` | unset | Vector size. Setting it enables vector search; unset means FTS-only search. |
-| `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block (about 4 characters per token). |
+| `MEMHIVE_ANTHROPIC_API_KEY` | none | Anthropic API key (provider `anthropic`, `llm.apiKey`). Required there. |
+| `MEMHIVE_ANTHROPIC_MODEL` | `claude-haiku-5-5` | Anthropic model alias (`llm.model`). |
+| `MEMHIVE_LLM_BASE_URL` | none | OpenAI-compatible endpoint, e.g. `http://localhost:11434/v1` (`llm.baseUrl`). Required for `openai-compat`. |
+| `MEMHIVE_LLM_API_KEY` | none | Key for the OpenAI-compatible endpoint, if it needs one (`llm.apiKey`). |
+| `MEMHIVE_LLM_MODEL` | `qwen2.5:7b` | Model name for the OpenAI-compatible endpoint (`llm.model`). |
+| `MEMHIVE_EMBED_BASE_URL` | none | OpenAI-compatible embeddings endpoint (Ollama, OpenAI, OpenRouter, ...) (`embed.baseUrl`). |
+| `MEMHIVE_EMBED_API_KEY` | none | Key for the embeddings endpoint, if needed (`embed.apiKey`). |
+| `MEMHIVE_EMBED_MODEL` | none | Embedding model name (`embed.model`). |
+| `MEMHIVE_EMBED_DIMS` | unset | Vector size (`embed.dims`). Setting it enables vector search; unset means FTS-only search. |
+| `MEMHIVE_CONTEXT_TOKENS` | `2000` | Token budget for the injected context block, about 4 characters per token (`contextTokens`). |
 | `MEMHIVE_DEBUG` | unset | Set to `1` or `true` for debug lines in the logs. |
+
+### Project identity
+
+Memory is grouped by project. The key is the repo's `origin` remote, normalized: scheme, user and `.git` are dropped and the result is lowercased, so `git@github.com:Acme/App.git` and `https://github.com/acme/app` are the same project. Every clone of a repo, on any machine, shares one memory, which is what lets a team hub merge it.
+
+- A directory with no git `origin` gets a local key, `path:` plus a hash of its absolute path. It cannot be shared, and moving the directory starts a new memory.
+- Every package of a monorepo shares the repo's memory, and a fork with its own `origin` gets its own.
 
 ## Privacy
 
@@ -134,6 +166,8 @@ Settings live in `~/.memhive/settings.json` (mode 0600). Environment variables o
 - **Secrets are redacted before anything is stored.** Keys and tokens in the usual formats (for example `sk-`, `ghp_`, `AKIA`, `Bearer`, and `password=`/`token=` assignments) are replaced with `<redacted>` in tool payloads, in generated observations and in `save_memory` notes.
 - **Images are never stored.** Base64 image data and image content blocks are replaced with a placeholder.
 - **Tool events are not written to disk.** Tool inputs and outputs live only in the daemon's memory buffer, capped at 128 events per session and 16 000 characters per field. Only the observations derived from them are saved.
+- **Tool calls are sent to your LLM provider.** To write observations, the daemon sends the prompt (up to 2 000 characters) and each tool call's input and output (up to 4 000 characters each, after the stripping and redaction above) to the observer you configured. With a hosted provider, that is your code and command output leaving the machine. Use a local model through `openai-compat` to keep it on the machine.
+- **Cost.** The observer makes one LLM call per flush (8 tool calls, 5 s of idle, or stop) of at most about 17 000 input tokens (8 calls of up to 8 000 characters, at about 4 characters per token) and usually much less, plus one small summary call per turn. Multiply by your provider's price for the model; a small model such as the default keeps it low, and a local model costs nothing.
 - **Everything stays local** in the default setup. The only outbound calls are to the LLM and embedding endpoints you configure.
 
 ## Team hub
@@ -206,13 +240,35 @@ memhive link https://hub.example.com
 
 ### What syncs
 
-Observations, summaries and session records of linked projects are pushed to the hub. Prompts and raw tool output never leave the machine, and `<private>` blocks and redacted secrets are removed before anything is stored.
+Observations, summaries and session records (session metadata) of linked projects are pushed to the hub. Prompts and raw tool output never leave the machine, and `<private>` blocks and redacted secrets are removed before anything is stored.
 
 ### Embedding model must match
 
 Clients that embed must use the same embedding model and vector size as the hub. Set `MEMHIVE_EMBED_MODEL` and `MEMHIVE_EMBED_DIMS` on the hub to the `embed` model and dims in each client's `~/.memhive/settings.json`. The hub rejects a pushed row whose embedding model differs from its own, or whose vector length differs from `MEMHIVE_EMBED_DIMS`, with `422 embedding_model_mismatch`. Rows without a vector are accepted. `memhive login` warns when the local settings differ from the hub's.
 
 Hub-side search is full-text only, because the hub runs no embedder. Client search stays hybrid over local rows, including rows pulled from the hub.
+
+## Upgrading
+
+```sh
+npm install -g memhive@latest
+memhive install
+```
+
+Re-run `memhive install` after every upgrade. It rewrites the plugin files with the paths of the new build and stops the running daemon, so the next hook starts the new one.
+
+The hooks call the Node binary that ran `memhive install`, by absolute path. With a Node version manager (nvm, fnm, asdf, Volta), re-run `memhive install` after switching or removing that Node version, or the hooks keep using the old one.
+
+## Uninstall and data removal
+
+```sh
+memhive uninstall
+npm uninstall -g memhive
+```
+
+`memhive uninstall` stops the daemon, removes the plugin from Claude Code and Codex (in Codex it also sets the plugin to `enabled = false` in `config.toml`), and deletes the rendered plugin files in `~/.memhive/marketplace`. It leaves `[features] hooks = true` in Codex's `config.toml`, because other plugins may need it.
+
+Your data stays in `~/.memhive`: the memory database (`memhive.db`), logs, `settings.json` with your LLM and embedding API keys, and `credentials.json` with your hub keys. Delete the folder to remove all of it. Revoke the hub key on the hub (`memhive key revoke <id>`) and rotate the provider keys if the machine is not yours to keep. Rows already pushed to a hub stay on the hub.
 
 ## Troubleshooting
 
@@ -225,22 +281,26 @@ Hub-side search is full-text only, because the hub runs no embedder. Client sear
 ```sh
 git clone https://github.com/trickstarcandina/memhive.git
 cd memhive
-npm install
+npm ci
 npm run typecheck
 npm test          # unit and integration tests
 npm run build     # bundles dist/memhive.cjs
 ```
 
 The Postgres hub tests run when `TEST_DATABASE_URL` points to a pgvector database whose name contains `test`.
+[CONTRIBUTING.md](./CONTRIBUTING.md) has the full setup, the commit convention and the release steps;
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) explains the components and the hub protocol.
 
 Releases are published to npm by the [`publish` workflow](./.github/workflows/publish.yml) with
 [provenance](https://docs.npmjs.com/generating-provenance-statements): bump `version` in `package.json`
-and `src/shared/version.ts`, push, then publish a GitHub release tagged `v<version>`.
+(the only place it is written), add the release to [CHANGELOG.md](./CHANGELOG.md), push, then publish a
+GitHub release tagged `v<version>`.
 
 ## Security
 
 Please report vulnerabilities privately through
 [GitHub security advisories](https://github.com/trickstarcandina/memhive/security/advisories/new), not in public issues.
+See [SECURITY.md](./SECURITY.md) for supported versions and scope.
 
 ## License
 
