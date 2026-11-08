@@ -138,6 +138,25 @@ describe('redactSecrets', () => {
     expect(redactSecrets('password: Pass<word, more>')).toBe('password: ' + R);
     expect(redactSecrets('password: Pass<word, more>;')).toBe('password: ' + R + ';');
   });
+  it('redacts digit-free values in log, flow-map, object-literal and pipe context', () => {
+    const cases: [string, string][] = [
+      ['user: admin, password: changeme, db: prod', 'user: admin, password: ' + R + ', db: prod'],
+      ['Connecting with user=bob, password: letmein, host=x', 'Connecting with user=bob, password: ' + R + ', host=x'],
+      ['{user: admin, password: CorrectHorseBattery, host: x}', '{user: admin, password: ' + R + ', host: x}'],
+      ['f({user: admin, password: CorrectHorseBattery, host: x})', 'f({user: admin, password: ' + R + ', host: x})'],
+      ['(user: admin, password: CorrectHorseBattery, host: x)', '(user: admin, password: ' + R + ', host: x)'],
+      ['(password: changeme)', '(password: ' + R + ')'],
+      ['f(a, token: letmein)', 'f(a, token: ' + R + ')'],
+      ['password: changeme | base64', 'password: ' + R + ' | base64'],
+      ['password: Hunter | base64', 'password: ' + R + ' | base64'],
+      ['secret: foo[];', 'secret: ' + R + ';'],
+      ['f(token: ref<Foo>)', 'f(token: ' + R + ')'],
+    ];
+    for (const [i, o] of cases) expect(redactSecrets(i)).toBe(o);
+  });
+  it('keeps PascalCase types in a real parameter list', () => {
+    for (const c of ['function f(a: string, b: Map<string, number>, token: Token)', 'f(a?: Foo, token: Token = t)', 'f(token: Ref<Foo>)', 'secret: Foo | null;']) expect(redactSecrets(c)).toBe(c);
+  });
   it('redacts a secret hidden in the type arguments of a generic', () => {
     for (const c of ['password: Map<hunter2secret99>', 'token: Promise<sk-ant-xxxxxxxx>', 'token: Promise<sk-ant-' + 'a'.repeat(30) + '>', 'password: Map<hunterpass>', 'f(token: Ref<abc=def>)', 'token: Map<a:b>;']) {
       const out = redactSecrets(c);

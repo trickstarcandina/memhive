@@ -46,35 +46,76 @@ const SECRET_PATTERNS: RegExp[] = [
 const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
-// After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env secret
-// (a false positive is cheaper than a leaked secret): a primitive keyword, a digit-free array (`Foo[]`),
-// a `|` union of those, a well-known generic (`Map<string, number>`), an identifier in a union (`Foo | null`),
-// or - inside a parameter list (`f(a, token: Token)`) - a digit-free identifier or generic.
+// After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env/log secret
+// (a false positive is cheaper than a leaked secret): a primitive keyword, a PascalCase array (`Foo[]`),
+// a `|` union of those, a well-known generic (`Map<string, number>`), a PascalCase identifier followed by
+// `| Type` (`Foo | null`), or - inside a real parameter list (`f(a, token: Token)`) - a PascalCase identifier or generic.
 const TS_PRIMITIVE = /^(?:string|number|boolean|any|unknown|object|null|undefined|never|void|bigint|symbol)(?:\[\])*$/;
-const TS_ARRAY = /^[A-Za-z_$][A-Za-z_$.]*(?:\[\])+$/;
-const TS_IDENT = /^[A-Za-z_$][A-Za-z_$.]*$/;
+const TS_ARRAY = /^[A-Z][A-Za-z_$.]*(?:\[\])+$/;
+const TS_NAME = /^[A-Z][A-Za-z_$.]*$/;
 // Disjoint delimiters keep this linear; one level of nesting (`Promise<Map<a, b>>`) is enough.
-const TS_GENERIC = /^[A-Za-z_$][A-Za-z_$.]*<[^<>\n]*(?:<[^<>\n]*>[^<>\n]*)*>(?:\[\])*$/;
+const TS_GENERIC = /^[A-Z][A-Za-z_$.]*<[^<>\n]*(?:<[^<>\n]*>[^<>\n]*)*>(?:\[\])*$/;
 const KNOWN_GENERIC = /^(?:Array|ReadonlyArray|Map|ReadonlyMap|Set|ReadonlySet|WeakMap|WeakSet|Record|Promise|Partial|Required|Readonly|Pick|Omit|Exclude|Extract|NonNullable|ReturnType|Awaited|Iterable|AsyncIterable)</;
 const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
 const PARAM_FOLLOW = /^[ \t]*[,=)]/;
-const PARAM_BEFORE = /[(,][ \t]*[\w$]*$/;
+const UNION_FOLLOW = /^[ \t]*\|[ \t]*([A-Za-z_$][\w$.]*)/;
+// An earlier parameter: `a`, `a?` or `a: Type...` whose type starts with a primitive or PascalCase name, no default.
+const PARAM_PIECE = /^\s*[\w$]+\??\s*(?::\s*([A-Za-z_$][\w$.]*)[^=]*)?$/;
+
+const isTypeName = (n: string) => TS_PRIMITIVE.test(n) || TS_NAME.test(n);
+
+// True only when the key sits in a parameter list: the innermost unclosed bracket before it is `(`
+// (not `{`/`[`, which are object/array literals) and every earlier entry reads as a typed parameter,
+// so `(user: admin, password: Hunter)` and `{a: b, token: Tok, c: d}` stay value context.
+function inParamList(before: string): boolean {
+  let depth = 0;
+  let open = -1;
+  for (let i = before.length - 1; i >= 0 && open < 0; i--) {
+    const c = before[i];
+    if (')]}>'.includes(c)) depth++;
+    else if ('([{<'.includes(c)) {
+      if (depth > 0) depth--;
+      else if (c === '(') open = i;
+      else return false;
+    }
+  }
+  if (open < 0) return false;
+  const head = before.slice(open + 1).replace(/[ \t]*[\w$]*$/, '');
+  if (head === '') return true;
+  if (!head.endsWith(',')) return false;
+  const pieces: string[] = [];
+  let cur = '';
+  depth = 0;
+  for (const c of head.slice(0, -1)) {
+    if ('<([{'.includes(c)) depth++;
+    else if ('>)]}'.includes(c)) depth--;
+    if (c === ',' && depth === 0) { pieces.push(cur); cur = ''; } else cur += c;
+  }
+  pieces.push(cur);
+  return pieces.every((p) => {
+    const m = PARAM_PIECE.exec(p);
+    return m !== null && (m[1] === undefined || isTypeName(m[1]));
+  });
+}
 
 // Type arguments must read as type names: digit-free, only `.` `[]` `|` `&` `,` spaces and nested `<>` between
 // names, and each name a primitive or PascalCase. `Map<hunter2secret99>` and `Promise<sk-...>` are values.
 const TYPE_ARGS = /^[A-Za-z_$.[\]|&,<> ]*$/;
 function typeArgsOk(bare: string): boolean {
   const args = bare.slice(bare.indexOf('<') + 1, bare.lastIndexOf('>'));
-  return TYPE_ARGS.test(args) && args.split(/[^A-Za-z_$.]+/).filter(Boolean).every((n) => TS_PRIMITIVE.test(n) || /^[A-Z]/.test(n));
+  return TYPE_ARGS.test(args) && args.split(/[^A-Za-z_$.]+/).filter(Boolean).every(isTypeName);
 }
 
 function looksLikeType(bare: string, follow: string, before: string): boolean {
   if (!TYPE_FOLLOW.test(follow)) return false;
-  const inParams = PARAM_BEFORE.test(before) && PARAM_FOLLOW.test(follow);
-  if (bare.includes('<')) return TS_GENERIC.test(bare) && typeArgsOk(bare) && (KNOWN_GENERIC.test(bare) || inParams);
+  const inParams = () => PARAM_FOLLOW.test(follow) && inParamList(before);
+  if (bare.includes('<')) return TS_GENERIC.test(bare) && typeArgsOk(bare) && (KNOWN_GENERIC.test(bare) || inParams());
   const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_ARRAY.test(p);
   if (bare.includes('|')) return bare.split('|').every(typeLike);
-  return typeLike(bare) || (TS_IDENT.test(bare) && (inParams || /^[ \t]*\|/.test(follow)));
+  if (typeLike(bare)) return true;
+  if (!TS_NAME.test(bare)) return false;
+  const union = UNION_FOLLOW.exec(follow);
+  return union ? isTypeName(union[1]) : inParams();
 }
 
 export function redactSecrets(text: string): string {
