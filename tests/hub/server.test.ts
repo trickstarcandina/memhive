@@ -121,7 +121,7 @@ describe('hub push hardening', () => {
     const mine = hobs({ projectId: 'x', sessionId: sid, title: 'bob-on-alice-session' });
     const r = await push(bobKey, { sessions: [{ ...s, cwd: '/bob', endedAt: '2030-01-01T00:00:00.000Z' }], observations: [{ ...o, title: 'hijacked' }, mine] });
     expect(r.json.accepted).toEqual({ sessions: 0, observations: 0, summaries: 0 });
-    expect(r.json.rejected.map((x: any) => x.reason)).toEqual(['unknown_session', 'unknown_session']);
+    expect(r.json.rejected).toEqual([{ id: sid, reason: 'not_owner' }, { id: o.id, reason: 'unknown_session' }, { id: mine.id, reason: 'unknown_session' }]);
     expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', cwd: '/alice', endedAt: null });
     expect((await store.getObservations([o.id]))[0]).toMatchObject({ userId: 'alice', title: 'alice-obs' });
   });

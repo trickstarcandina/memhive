@@ -37,6 +37,9 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
       sessions.push({ ...s, projectId: project.id, userId: auth.userName, syncedAt: null });
     }
     const sIds = await store.upsertSessions(sessions);
+    // An unchanged session is either identical (fine) or owned by another user/project (the upsert skipped it): report the latter.
+    const changed = new Set(sIds);
+    for (const x of await store.getSessions(sessions.filter((s) => !changed.has(s.id)).map((s) => s.id))) if (x.userId !== auth.userName || x.projectId !== project.id) rejected.push({ id: x.id, reason: 'not_owner' });
     const obsIn: HubObservation[] = []; const sumIn: Summary[] = [];
     for (const o of Array.isArray(b.observations) ? b.observations : []) {
       if (!isUuid(o?.id) || !isUuid(o.sessionId)) { rejected.push({ id: String(o?.id), reason: 'invalid_id' }); continue; }
