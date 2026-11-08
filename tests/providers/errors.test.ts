@@ -109,7 +109,7 @@ describe('provider failure kinds', () => {
   });
 
   // BUG: http error bodies are interpolated into the message (anthropic.ts:17, openai-compat.ts:19), so a server/proxy that echoes the credential leaks it into errors/logs.
-  it.fails('error message does not leak a key echoed by the server error body', async () => {
+  it('error message does not leak a key echoed by the server error body', async () => {
     const echo = json(401, { error: { message: `invalid api key ${KEY}` } });
     const e1 = await caught(new AnthropicProvider({ apiKey: KEY, model: 'm', fetch: echo }).complete(req));
     expect(e1.message).not.toContain(KEY);

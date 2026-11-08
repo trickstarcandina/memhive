@@ -20,4 +20,11 @@ export async function postJson(fetchImpl: typeof fetch, url: string, headers: Re
   } finally { clearTimeout(t); }
 }
 
+/** Error-body excerpt for messages; strips the key in case the server echoes it back. */
+export function errorDetail(json: any, secret?: string): string {
+  let s = JSON.stringify(json?.error ?? json) ?? '';
+  if (secret) s = s.split(secret).join('[redacted]');
+  return s.slice(0, 300);
+}
+
 export function joinUrl(base: string, path: string): string { return base.replace(/\/+$/, '') + '/' + path.replace(/^\/+/, ''); }

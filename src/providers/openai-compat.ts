@@ -1,5 +1,5 @@
 import { ProviderError, type CompleteRequest, type LlmProvider } from './types.js';
-import { classifyStatus, joinUrl, postJson } from './http.js';
+import { classifyStatus, errorDetail, joinUrl, postJson } from './http.js';
 
 export class OpenAICompatProvider implements LlmProvider {
   private fetchImpl: typeof fetch; private timeoutMs: number; private jsonMode = true;
@@ -15,7 +15,7 @@ export class OpenAICompatProvider implements LlmProvider {
       this.jsonMode = false; delete body.response_format;
       ({ status, json } = await postJson(this.fetchImpl, joinUrl(this.opts.baseUrl, 'chat/completions'), headers, body, this.timeoutMs));
     }
-    if (status !== 200) throw new ProviderError(`llm ${status}: ${JSON.stringify(json?.error ?? json).slice(0, 300)}`, classifyStatus(status), status);
+    if (status !== 200) throw new ProviderError(`llm ${status}: ${errorDetail(json, this.opts.apiKey)}`, classifyStatus(status), status);
     const text = json?.choices?.[0]?.message?.content;
     if (typeof text !== 'string' || !text) throw new ProviderError('llm: empty response', 'bad_response', status);
     return text;
