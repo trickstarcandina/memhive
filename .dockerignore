@@ -1,9 +1,14 @@
-node_modules
+# The build stage copies the whole context, so anything secret or bulky stays out here.
+# Patterns are anchored at the context root: **/ is what catches docker/.env.
+**/.env
+**/.env.*
+**/node_modules
 dist
 .git
+.github
+.worktrees
+.superpowers
 docs
 tests
-.superpowers
-.env
 *.db
 *.db-*
