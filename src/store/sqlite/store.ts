@@ -698,7 +698,7 @@ export class SqliteStore implements Store {
   }
   private forget(tbl: TombstoneTable, ids: string[], opts: DeleteOpts = {}): number {
     const at = new Date().toISOString();
-    const pick = this.db.prepare(`SELECT project_id FROM ${TOMB_TABLE[tbl]} WHERE id = ?`);
+    const pick = this.db.prepare(`SELECT project_id, origin FROM ${TOMB_TABLE[tbl]} WHERE id = ?`);
     const tomb = this.db.prepare(
       'INSERT INTO tombstones(id, tbl, project_id, deleted_at, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING'
     );
@@ -714,6 +714,10 @@ export class SqliteStore implements Store {
         const r = pick.get(id) as Row | undefined;
         if (r ? opts.projectId !== undefined && r.project_id !== opts.projectId : opts.projectId === undefined)
           continue;
+        if (r && opts.hubOnly && r.origin !== 'hub') {
+          opts.kept?.push(id);
+          continue;
+        }
         if (r) {
           if (tbl === 'session') {
             // Children are remembered, not pushed: the session tombstone makes the hub (and every puller) drop them too.
@@ -721,7 +725,8 @@ export class SqliteStore implements Store {
               ['observation', 'observations'],
               ['summary', 'summaries'],
             ] as const) {
-              for (const c of this.db.prepare(`SELECT id FROM ${table} WHERE session_id = ?`).all(id) as Row[]) {
+              const only = opts.hubOnly ? " AND origin = 'hub'" : '';
+              for (const c of this.db.prepare(`SELECT id FROM ${table} WHERE session_id = ?${only}`).all(id) as Row[]) {
                 drop(t, c.id);
                 tomb.run(String(c.id).toLowerCase(), t, r.project_id, at, at);
               }
@@ -787,24 +792,31 @@ export class SqliteStore implements Store {
       .run(at, projectId, ...ids);
   }
   deleteExpired(cutoffs: Partial<Record<ObservationType, string>>, maxChunks = 10): number {
-    const pick = this.db.prepare(`SELECT o.id FROM observations o JOIN projects p ON p.id = o.project_id
+    const pick =
+      this.db.prepare(`SELECT o.id, o.project_id, p.hub_url FROM observations o JOIN projects p ON p.id = o.project_id
       WHERE o.type = ? AND o.pinned = 0 AND COALESCE(o.last_seen_at, o.created_at) < ? AND (o.synced_at IS NOT NULL OR p.hub_url IS NULL) LIMIT 500`);
     const del = this.db.prepare('DELETE FROM observations WHERE id = ?');
+    // Remembered, never pushed (local_only): retention is this machine's choice, but a hub reset must not pull the row back in.
+    const tomb = this.db.prepare(
+      "INSERT INTO tombstones(id, tbl, project_id, deleted_at, synced_at, local_only) VALUES (?, 'observation', ?, ?, ?, 1) ON CONFLICT DO NOTHING"
+    );
+    const at = new Date().toISOString();
     const delVec = this.dims ? this.db.prepare('DELETE FROM vec_observations WHERE id = ?') : null;
     let n = 0;
     for (const [type, before] of Object.entries(cutoffs)) {
       // Chunks of 500, one transaction each, at most maxChunks per call: a large backlog is spread over several ticks
       // instead of blocking the daemon at start.
       for (; maxChunks > 0; maxChunks--) {
-        const ids = (pick.all(type, before) as Row[]).map((r) => r.id as string);
-        if (!ids.length) break;
+        const rows = pick.all(type, before) as Row[];
+        if (!rows.length) break;
         this.db.transaction(() => {
-          for (const id of ids) {
-            delVec?.run(id);
-            del.run(id);
+          for (const r of rows) {
+            delVec?.run(r.id);
+            del.run(r.id);
+            if (r.hub_url) tomb.run(String(r.id).toLowerCase(), r.project_id, at, at);
           }
         })();
-        n += ids.length;
+        n += rows.length;
       }
     }
     return n;
@@ -860,14 +872,14 @@ export class SqliteStore implements Store {
     if (!anchor) return [];
     const prev = this.db
       .prepare(
-        'SELECT * FROM observations WHERE session_id = ? AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?'
+        'SELECT * FROM observations WHERE session_id = ? AND project_id = ? AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?'
       )
-      .all(anchor.session_id, anchor.created_at, anchor.created_at, anchor.id, before) as Row[];
+      .all(anchor.session_id, anchor.project_id, anchor.created_at, anchor.created_at, anchor.id, before) as Row[];
     const next = this.db
       .prepare(
-        'SELECT * FROM observations WHERE session_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC LIMIT ?'
+        'SELECT * FROM observations WHERE session_id = ? AND project_id = ? AND (created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at ASC, id ASC LIMIT ?'
       )
-      .all(anchor.session_id, anchor.created_at, anchor.created_at, anchor.id, after) as Row[];
+      .all(anchor.session_id, anchor.project_id, anchor.created_at, anchor.created_at, anchor.id, after) as Row[];
     return [...prev.reverse(), anchor, ...next].map(rowToObservation);
   }
   listMissingEmbedding(limit: number, model?: string, exclude: Iterable<string> = []): Observation[] {
@@ -1041,7 +1053,7 @@ export class SqliteStore implements Store {
         )
         .run(projectId);
       // A restored hub may hold rows forgotten since its backup: send every tombstone again (a foreign one comes back not_owner).
-      this.db.prepare('UPDATE tombstones SET synced_at = NULL WHERE project_id = ?').run(projectId);
+      this.db.prepare('UPDATE tombstones SET synced_at = NULL WHERE project_id = ? AND local_only = 0').run(projectId);
     })();
   }
   getSyncState(projectId: string): SyncState {

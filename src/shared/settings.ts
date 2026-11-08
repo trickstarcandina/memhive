@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { writeFileAtomic } from './atomic.js';
+import { writeFileAtomic } from './fs.js';
 import { ensureHomeDir, resolvePaths } from './paths.js';
 import { safeJsonParse } from './json.js';
 import { OBSERVATION_TYPES, type ObservationType } from '../store/types.js';

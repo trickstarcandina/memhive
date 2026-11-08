@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { writeFileAtomic } from '../shared/fs.js';
 import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
 
@@ -20,10 +21,7 @@ export function readDaemonInfo(home: string): DaemonInfo | null {
 }
 export function writeDaemonInfo(home: string, info: DaemonInfo): void {
   ensureHomeDir(home);
-  const p = resolvePaths(home).daemonInfo;
-  const tmp = `${p}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(info), { mode: 0o600 });
-  renameSync(tmp, p);
+  writeFileAtomic(resolvePaths(home).daemonInfo, JSON.stringify(info), 0o600);
 }
 export function removeDaemonInfo(home: string): void {
   rmSync(resolvePaths(home).daemonInfo, { force: true });

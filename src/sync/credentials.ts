@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { writeFileAtomic } from '../shared/fs.js';
 import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
 
@@ -25,16 +26,7 @@ export function loadCredentials(home: string): Credentials {
 
 export function saveCredentials(home: string, c: Credentials): void {
   ensureHomeDir(home);
-  const p = resolvePaths(home).credentials;
-  const tmp = `${p}.${process.pid}.tmp`;
-  try {
-    writeFileSync(tmp, JSON.stringify(c, null, 2) + '\n', { mode: 0o600 });
-    chmodSync(tmp, 0o600);
-    renameSync(tmp, p);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    throw e;
-  }
+  writeFileAtomic(resolvePaths(home).credentials, JSON.stringify(c, null, 2) + '\n', 0o600);
 }
 
 export function normalizeHubUrl(url: string): string {

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ensureHomeDir, resolvePaths } from './paths.js';
 import { safeJsonParse } from './json.js';
-import { writeFileAtomic } from './atomic.js';
+import { writeFileAtomic } from './fs.js';
 
 const TRUTHY = ['1', 'true', 'yes', 'on'];
 /** MEMHIVE_DISABLED=1: hooks exit at once, MCP tools answer "memhive disabled", the daemon records nothing. */

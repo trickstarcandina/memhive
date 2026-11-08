@@ -1,9 +1,10 @@
-import { closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import type { CliIo } from '../index.js';
 import { parseArgs } from '../args.js';
 import { COMMANDS } from '../help.js';
 import { resolvePaths } from '../../shared/paths.js';
+import { writeFileAtomic } from '../../shared/fs.js';
 import { DaemonError, type DaemonClient } from '../../daemon/client.js';
 import { formatFull } from '../../mcp/format.js';
 import { shortId } from '../../shared/ids.js';
@@ -97,16 +98,10 @@ export async function exportCommand(
         io.stderr(`memhive export: ${file} already exists (--force replaces it)\n`);
         return 1;
       }
-      const tmp = `${file}.${process.pid}.tmp`;
       try {
         if (flags.force !== true) writeNew(file, text);
-        else {
-          rmSync(tmp, { force: true }); // a crash leftover would make wx fail
-          writeNew(tmp, text);
-          renameSync(tmp, file); // replaces a file or symlink, never writes through it
-        }
+        else writeFileAtomic(file, text, 0o600); // replaces a file or symlink, never writes through it; no temp copy left
       } catch (e) {
-        if (flags.force === true) rmSync(tmp, { force: true }); // never leave a copy of the memory behind
         io.stderr(
           `memhive export: cannot write ${file}: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}\n`
         );

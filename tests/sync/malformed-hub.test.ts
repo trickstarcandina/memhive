@@ -169,6 +169,7 @@ describe('malformed hub responses', () => {
       store: t.store,
       sync: t.engine,
       logger: { info() {}, warn() {}, error() {}, debug() {} },
+      excludedCwd: () => false,
     } as unknown as DaemonContext;
     const r = await handleRoute(ctx, 'POST', new URL('http://x/v1/sync'), { cwd: t.home });
     expect(r.status).toBe(200);

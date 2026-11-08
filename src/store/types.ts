@@ -111,10 +111,13 @@ export interface Tombstone {
   deletedAt: string;
 }
 /** syncedAt null (default): the tombstone is queued for push; a time: remembered only (pulled tombstone, forced local removal).
- * projectId: only rows of that project are deleted, and ids with no row are still remembered under it. */
+ * projectId: only rows of that project are deleted, and ids with no row are still remembered under it.
+ * hubOnly (pulled tombstones): rows with origin 'local' are left alone, get no tombstone, and their ids are added to `kept`. */
 export interface DeleteOpts {
   syncedAt?: string | null;
   projectId?: string;
+  hubOnly?: boolean;
+  kept?: string[];
 }
 export interface ObservationPatch {
   title?: string;

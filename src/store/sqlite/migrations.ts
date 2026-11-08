@@ -98,4 +98,9 @@ export const SQLITE_MIGRATIONS: string[] = [
   CREATE TABLE IF NOT EXISTS tombstones (id TEXT NOT NULL, tbl TEXT NOT NULL, project_id TEXT NOT NULL, deleted_at TEXT NOT NULL, synced_at TEXT, PRIMARY KEY (project_id, tbl, id));
   CREATE INDEX IF NOT EXISTS tombstones_unsynced ON tombstones(project_id, synced_at);
   `,
+  // 12: rows removed by retention are remembered (so a hub reset does not pull them back) but never pushed, not even when a
+  // reset requeues every other tombstone: retention is local, it must not delete the row for the team.
+  `
+  ALTER TABLE tombstones ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

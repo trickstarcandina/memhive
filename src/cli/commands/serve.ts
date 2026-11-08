@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { CliIo } from '../index.js';
 import { parseArgs } from '../args.js';
@@ -6,13 +6,11 @@ import { createHubStore, ensureAdminKey, hubConfigFromEnv, startHub } from '../.
 import { HubDimsConflict } from '../../hub/store/types.js';
 import { createLogger } from '../../shared/logger.js';
 import { resolvePaths } from '../../shared/paths.js';
+import { writeFileAtomic } from '../../shared/fs.js';
 
 function writeSecret(file: string, content: string): void {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
-  rmSync(tmp, { force: true }); // a leftover from a crash would make the exclusive create below fail
-  writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' }); // wx: never write through a file or symlink planted at tmp
-  renameSync(tmp, file);
+  writeFileAtomic(file, content, 0o600);
 }
 
 /** opts.signal stops the hub and returns 0 (tests); without it the hub runs until SIGTERM/SIGINT. */

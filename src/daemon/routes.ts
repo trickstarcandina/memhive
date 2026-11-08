@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, realpathSync, rmSync, statSync } from 
 import nodePath from 'node:path';
 import { z } from 'zod';
 import { EXPORT_TABLES, ExportRowSchema } from '../store/export.js';
-import { cleanObservation, cleanSession, cleanSummary, safeText } from '../sync/clean.js';
+import { cleanObservation, cleanSession, cleanSummary, cut, safeText } from '../sync/clean.js';
 import type { DaemonContext } from './context.js';
 import { resolvePaths } from '../shared/paths.js';
 import type { HookEvent } from '../hooks/types.js';
@@ -204,8 +204,9 @@ export async function handleRoute(
       r.kind === 'session'
         ? {
             ...cleanSession(r),
-            cwd: safeText(r.cwd, 1000),
-            branch: r.branch == null ? null : safeText(r.branch, 200),
+            // paths and branch names can carry tokens too: redacted like every other imported text field
+            cwd: safeText(cut(r.cwd, 1000), 1000),
+            branch: r.branch == null ? null : safeText(cut(r.branch, 200), 200),
             ...origin,
           }
         : r.kind === 'observation'
@@ -583,6 +584,7 @@ export async function handleRoute(
 
   if (method === 'POST' && path === '/v1/sync') {
     const cwd = String((body as { cwd?: string } | undefined)?.cwd ?? process.cwd());
+    if (ctx.excludedCwd(cwd)) return err(409, 'excluded', EXCLUDED_MSG); // a sync would pull teammates' rows into it
     const { key, name } = projectKeyFor(cwd);
     const project = store.getOrCreateProject(key, name);
     if (!ctx.sync || !project.hubUrl)
@@ -600,7 +602,10 @@ export async function handleRoute(
         return err(400, 'bad_hub_url', e instanceof Error ? e.message : 'bad hub url');
       }
     }
-    const { key, name } = projectKeyFor(String(b.cwd ?? process.cwd()));
+    const cwd = String(b.cwd ?? process.cwd());
+    // Unlinking stays allowed: it is how a project linked before it was excluded is cut off from the hub.
+    if (hubUrl && ctx.excludedCwd(cwd)) return err(409, 'excluded', EXCLUDED_MSG);
+    const { key, name } = projectKeyFor(cwd);
     const project = store.getOrCreateProject(key, name);
     if (hubUrl && project.hubUrl !== hubUrl) store.resetProjectSync(project.id); // new hub has none of this history
     store.setProjectHub(project.id, hubUrl);

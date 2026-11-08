@@ -24,6 +24,8 @@ import { loadCredentials, saveCredentials } from './credentials.js';
 const BATCH = 200;
 const MAX_ROUNDS = 20; // bounds one push() call (hub allows 60 requests/min/key)
 const MAX_BODY_BYTES = 1.5 * 1024 * 1024; // hub default limit is 2 MB; used when the hub does not report body_limit
+// A hub's body_limit is believed up to this much: a hostile hub must not lift the response cap (4x, so 32 MB) without bound.
+const MAX_HUB_BODY_LIMIT = 8 * 1024 * 1024;
 const BACKOFF_START_MS = 30_000;
 const BACKOFF_MAX_MS = 10 * 60_000;
 const MAX_STRIKES = 5; // 404 / bare-4xx failures in a row before the bounded policy in pushOnce kicks in
@@ -193,7 +195,7 @@ export class SyncEngine implements SyncHooks {
     timeoutMs = 10000
   ): Promise<HubConfigInfo | null> {
     const fits = (c: HubConfigInfo) => {
-      if (c.body_limit && c.body_limit > 0) client.maxBytes = c.body_limit * 4;
+      if (c.body_limit && c.body_limit > 0) client.maxBytes = Math.min(c.body_limit, MAX_HUB_BODY_LIMIT) * 4;
       return c;
     };
     const hit = this.hubCfg.get(hubUrl);
@@ -231,6 +233,7 @@ export class SyncEngine implements SyncHooks {
     return (await this.hubConfig(c, project.hubUrl!, false, 3000))?.protocol ?? null;
   }
   private tombWarned = new Set<string>();
+  private localTombWarned = new Set<string>(); // project ids already warned about hub tombstones for local rows
   private tombKeptWarned = new Set<string>();
   hubErrors(): Array<{ hub: string; error: string }> {
     return [...this.hubCfg]
@@ -348,7 +351,7 @@ export class SyncEngine implements SyncHooks {
         return { ...o, embedding: fits ? v! : null, embeddingModel: fits ? o.embeddingModel : null };
       };
       // Fill the body up to the byte budget; the first row always goes, so an oversized row reaches the 413 path below.
-      const budget = cfg?.body_limit ? Math.floor(cfg.body_limit * 0.75) : MAX_BODY_BYTES;
+      const budget = cfg?.body_limit ? Math.floor(Math.min(cfg.body_limit, MAX_HUB_BODY_LIMIT) * 0.75) : MAX_BODY_BYTES;
       let used = Buffer.byteLength(JSON.stringify({ projectKey: project.key, projectName: project.name, sessions }));
       let taken = sessions.length;
       const fit = <T>(rows: T[]): T[] => {
@@ -681,8 +684,10 @@ export class SyncEngine implements SyncHooks {
       try {
         store.transaction(() => {
           // Tombstones first (the hub checked the owner); then rows forgotten here, by a tombstone or locally, are not stored again.
-          // Scoped to this project, so another project's row with the same id is left alone.
-          const del = { syncedAt: now, projectId: project.id };
+          // Scoped to this project, so another project's row with the same id is left alone. Only rows pulled from the hub go:
+          // the user's own rows are never deleted on a hub's word (a compromised hub could otherwise wipe local memory).
+          const kept: string[] = [];
+          const del = { syncedAt: now, projectId: project.id, hubOnly: true, kept };
           for (const t of tombs)
             pageApplied +=
               t.tbl === 'observation'
@@ -690,6 +695,16 @@ export class SyncEngine implements SyncHooks {
                 : t.tbl === 'summary'
                   ? store.deleteSummaries([t.id], del)
                   : store.deleteSession(t.id, del);
+          if (kept.length && !this.localTombWarned.has(project.id)) {
+            this.localTombWarned.add(project.id);
+            logger.warn(
+              'hub sent tombstones for local rows (created on this machine); kept them, forget them here to remove them',
+              {
+                hub: project.hubUrl,
+                count: kept.length,
+              }
+            );
+          }
           // Per table: a tombstone for a session id must not hide another user's observation that has the same id.
           const ids = (l: Array<{ row: { id: string } }>) => l.map(({ row }) => row.id);
           const dead = {
@@ -722,8 +737,8 @@ export class SyncEngine implements SyncHooks {
           const haveSums = store.hasSummaries(summaries.map(({ row }) => row.id));
           for (const { row: o, raw } of observations) {
             if (haveObs.has(o.id) || dead.o.has(o.id)) continue;
-            if (!store.getSession(o.sessionId)) {
-              hold('observations', raw, 'unknown session');
+            if (store.getSession(o.sessionId)?.projectId !== project.id) {
+              hold('observations', raw, 'unknown session'); // or another project's: timeline and context would mix projects
               continue;
             }
             const row: Observation = {
@@ -762,7 +777,7 @@ export class SyncEngine implements SyncHooks {
           }
           for (const { row: m, raw } of summaries) {
             if (haveSums.has(m.id) || dead.m.has(m.id)) continue;
-            if (!store.getSession(m.sessionId)) {
+            if (store.getSession(m.sessionId)?.projectId !== project.id) {
               hold('summaries', raw, 'unknown session');
               continue;
             }
