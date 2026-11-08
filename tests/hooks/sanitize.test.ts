@@ -8,6 +8,16 @@ describe('stripPrivate', () => {
   it('drops everything after an unclosed private tag', () => {
     expect(stripPrivate('keep <private> secret forever')).toBe('keep ');
   });
+  it('accepts attributes and whitespace inside tags', () => {
+    expect(stripPrivate('a<private x="1">s</private>b')).toBe('ab');
+    expect(stripPrivate('a< private >s</ private >b')).toBe('ab');
+  });
+  it('drops nested blocks entirely, inner text included', () => {
+    expect(stripPrivate('a<private>1<private>2</private>3</private>b')).toBe('ab');
+  });
+  it('removes a stray closing tag', () => {
+    expect(stripPrivate('a</private>b')).toBe('ab');
+  });
 });
 
 describe('sanitizeToolPayload', () => {
@@ -25,8 +35,21 @@ describe('sanitizeToolPayload', () => {
     expect(out.length).toBeLessThan(16200);
     expect(out).toContain('<elided chars=4000>');
   });
+  it('truncates small limits without exceeding max plus marker', () => {
+    const out = sanitizeToolPayload('x'.repeat(200), 50) as string;
+    expect(out.startsWith('x'.repeat(50))).toBe(true);
+    expect(out).toContain('<elided chars=150>');
+    expect(out.length).toBeLessThanOrEqual(70);
+  });
   it('leaves numbers, booleans and null alone', () => {
     expect(sanitizeToolPayload({ n: 1, b: false, z: null })).toEqual({ n: 1, b: false, z: null });
+  });
+  it('replaces values nested deeper than the limit instead of passing them raw', () => {
+    let v: unknown = '<private>SECRET';
+    for (let i = 0; i < 30; i++) v = { n: v };
+    const out = JSON.stringify(sanitizeToolPayload(v));
+    expect(out).not.toContain('SECRET');
+    expect(out).toContain('<elided: max depth>');
   });
 });
 
