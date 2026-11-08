@@ -2,14 +2,17 @@ import { Pool, type PoolClient } from 'pg';
 import { HubDimsMismatch } from './types.js';
 import type { HubApiKey, HubObservation, HubStore, SyncLogEntry, SyncTable } from './types.js';
 import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
-import { hubPgMigrations } from './migrations-pg.js';
+import { assertValidDims, hubPgMigrations } from './migrations-pg.js';
 import { newId } from '../../shared/ids.js';
 
 type Row = Record<string, any>;
 const iso = (v: any): string => (v instanceof Date ? v.toISOString() : String(v));
 const isoOrNull = (v: any): string | null => (v == null ? null : iso(v));
 const arr = (v: any): string[] => (Array.isArray(v) ? v : []);
-const vecParam = (v: number[] | null) => (v ? `[${v.join(',')}]` : null);
+/** Thrown before any write when a vector holds NaN/Infinity. */
+export class HubInvalidVector extends Error {
+  constructor(public rowId: string) { super(`invalid_embedding: row ${rowId} has a non-finite value`); this.name = 'HubInvalidVector'; }
+}
 const parseVec = (v: any): number[] | null => (v == null ? null : typeof v === 'string' ? JSON.parse(v) : Array.isArray(v) ? v : null);
 const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: iso(r.started_at), endedAt: isoOrNull(r.ended_at), syncedAt: null });
 const rowToObs = (r: Row): HubObservation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: arr(r.facts), narrative: r.narrative, concepts: arr(r.concepts), filesRead: arr(r.files_read), filesModified: arr(r.files_modified), createdAt: iso(r.created_at), embeddingModel: r.embedding_model ?? null, origin: 'hub', syncedAt: null, embedding: parseVec(r.embedding) });
@@ -24,19 +27,30 @@ export function toTsQuery(text: string): string {
 
 export class PostgresHubStore implements HubStore {
   private pool: Pool;
-  constructor(databaseUrl: string, private opts: { dims: number | null }) { this.pool = new Pool({ connectionString: databaseUrl, max: 10 }); }
+  constructor(databaseUrl: string, private opts: { dims: number | null }) {
+    assertValidDims(opts.dims);
+    this.pool = new Pool({ connectionString: databaseUrl, max: 10 });
+    // idle-client errors (e.g. server restart) would otherwise crash the process; never log the URL
+    this.pool.on('error', (e) => console.error(`[memhub-hub] postgres pool error: ${e.message}`));
+  }
+  // pgvector takes its text form; the real[] fallback takes a JS array
+  private get vecCast(): string { return this.opts.dims ? '$15::vector' : '$15::real[]'; }
+  private vecParam(v: number[] | null): string | number[] | null { return v && this.opts.dims ? `[${v.join(',')}]` : v; }
   private async q(sql: string, params: unknown[] = []): Promise<Row[]> { return (await this.pool.query(sql, params)).rows; }
 
   async migrate(): Promise<void> {
-    await this.q('CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL)');
-    const applied = new Set((await this.q('SELECT version FROM schema_migrations')).map((r) => Number(r.version)));
-    const migrations = hubPgMigrations(this.opts.dims);
-    for (let i = 0; i < migrations.length; i++) {
-      if (applied.has(i + 1)) continue;
-      const c = await this.pool.connect();
-      try { await c.query('BEGIN'); await c.query(migrations[i]); await c.query('INSERT INTO schema_migrations VALUES ($1, now())', [i + 1]); await c.query('COMMIT'); }
-      catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
-    }
+    const c = await this.pool.connect();
+    try {
+      await c.query('SELECT pg_advisory_lock(7346001)'); // two hubs booting together must not race on DDL
+      await c.query('CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL)');
+      const applied = new Set((await c.query('SELECT version FROM schema_migrations')).rows.map((r) => Number(r.version)));
+      const migrations = hubPgMigrations(this.opts.dims);
+      for (let i = 0; i < migrations.length; i++) {
+        if (applied.has(i + 1)) continue;
+        try { await c.query('BEGIN'); await c.query(migrations[i]); await c.query('INSERT INTO schema_migrations VALUES ($1, now())', [i + 1]); await c.query('COMMIT'); }
+        catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
+      }
+    } finally { await c.query('SELECT pg_advisory_unlock(7346001)').catch(() => {}); c.release(); }
   }
   async close(): Promise<void> { await this.pool.end(); }
 
@@ -45,16 +59,22 @@ export class PostgresHubStore implements HubStore {
     await this.q('INSERT INTO projects(id, key, name, created_at) VALUES ($1, $2, $3, now()) ON CONFLICT (key) DO NOTHING', [newId(), key, name]);
     return (await this.getProjectByKey(key))!;
   }
-  private async tx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
+  // Writes to one project are serialized (lock held to commit). sync_log.seq is assigned at insert, so without this a later
+  // transaction could commit a higher seq before an earlier one commits a lower seq, and a puller advancing its cursor
+  // past the higher seq would skip the lower one forever. Locks are taken in sorted order to avoid deadlocks.
+  private async tx<T>(projectIds: string[], fn: (c: PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
-    try { await c.query('BEGIN'); const out = await fn(c); await c.query('COMMIT'); return out; }
-    catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
+    try {
+      await c.query('BEGIN');
+      for (const id of [...new Set(projectIds)].sort()) await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [id]);
+      const out = await fn(c); await c.query('COMMIT'); return out;
+    } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
   }
   private log(c: PoolClient, projectId: string, table: SyncTable, rowId: string) { return c.query('INSERT INTO sync_log(project_id, tbl, row_id) VALUES ($1, $2, $3)', [projectId, table, rowId]); }
 
   async upsertSessions(rows: Session[]): Promise<string[]> {
     const newEnd = 'GREATEST(sessions.ended_at, EXCLUDED.ended_at)'; // GREATEST ignores NULLs
-    return this.tx(async (c) => {
+    return this.tx(rows.map((r) => r.projectId), async (c) => {
       const changed: string[] = [];
       for (const s of rows) {
         const r = await c.query(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -67,13 +87,14 @@ export class PostgresHubStore implements HubStore {
     });
   }
   async insertObservations(rows: HubObservation[]): Promise<string[]> {
+    for (const o of rows) if (o.embedding && !o.embedding.every(Number.isFinite)) throw new HubInvalidVector(o.id);
     const dims = this.opts.dims; const inserted: string[] = []; const rejected: HubObservation[] = [];
-    await this.tx(async (c) => {
+    await this.tx(rows.map((r) => r.projectId), async (c) => {
       for (const o of rows) {
         if (dims !== null && o.embedding && o.embedding.length !== dims) { rejected.push(o); continue; }
         const r = await c.query(`INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING RETURNING id`,
-          [o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, JSON.stringify(o.facts), o.narrative, JSON.stringify(o.concepts), JSON.stringify(o.filesRead), JSON.stringify(o.filesModified), o.createdAt, o.embeddingModel, vecParam(o.embedding)]);
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,${this.vecCast}) ON CONFLICT (id) DO NOTHING RETURNING id`,
+          [o.id, o.projectId, o.sessionId, o.userId, o.type, o.title, o.subtitle, JSON.stringify(o.facts), o.narrative, JSON.stringify(o.concepts), JSON.stringify(o.filesRead), JSON.stringify(o.filesModified), o.createdAt, o.embeddingModel, this.vecParam(o.embedding)]);
         if (r.rowCount) { inserted.push(o.id); await this.log(c, o.projectId, 'observations', o.id); }
       }
     });
@@ -81,7 +102,7 @@ export class PostgresHubStore implements HubStore {
     return inserted;
   }
   async insertSummaries(rows: Summary[]): Promise<string[]> {
-    return this.tx(async (c) => {
+    return this.tx(rows.map((r) => r.projectId), async (c) => {
       const inserted: string[] = [];
       for (const s of rows) {
         const r = await c.query(`INSERT INTO summaries(id, project_id, session_id, user_id, request, learned, completed, next_steps, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING RETURNING id`, [s.id, s.projectId, s.sessionId, s.userId, s.request, s.learned, s.completed, s.nextSteps, s.createdAt]);
@@ -97,7 +118,7 @@ export class PostgresHubStore implements HubStore {
   async getSessions(ids: string[]): Promise<Session[]> { return ids.length ? (await this.q('SELECT * FROM sessions WHERE id = ANY($1::uuid[])', [ids])).map(rowToSession) : []; }
   async getObservations(ids: string[]): Promise<HubObservation[]> {
     if (!ids.length) return [];
-    const by = new Map((await this.q('SELECT *, embedding::text AS embedding FROM observations WHERE id = ANY($1::uuid[])', [ids])).map((r) => [r.id, rowToObs(r)]));
+    const by = new Map((await this.q('SELECT *, to_json(embedding) AS embedding FROM observations WHERE id = ANY($1::uuid[])', [ids])).map((r) => [r.id, rowToObs(r)]));
     return ids.map((id) => by.get(id)).filter((o): o is HubObservation => !!o);
   }
   async getSummaries(ids: string[]): Promise<Summary[]> { return ids.length ? (await this.q('SELECT * FROM summaries WHERE id = ANY($1::uuid[])', [ids])).map(rowToSummary) : []; }

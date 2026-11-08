@@ -10,7 +10,7 @@ export const hobs = (p: Partial<HubObservation> & { projectId: string; sessionId
 });
 export const hsess = (projectId: string, p: Partial<Session> = {}): Session => ({ id: newId(), projectId, userId: 'alice', host: 'claude-code', hostSessionId: 'h' + Math.random(), cwd: '/w', startedAt: new Date().toISOString(), endedAt: null, syncedAt: null, ...p });
 
-export function hubStoreContract(name: string, open: () => Promise<HubStore>): void {
+export function hubStoreContract(name: string, open: () => Promise<HubStore>, opts: { dims?: number | null } = {}): void {
   describe(`${name} hub store`, () => {
     let s: HubStore;
     beforeEach(async () => { s = await open(); await s.migrate(); });
@@ -80,7 +80,7 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>): v
       expect(await s.listSyncLog(p.id, 0, 10)).toHaveLength(2);
     });
 
-    it('dims mismatch rejects only that row', async () => {
+    it.skipIf(opts.dims === null)('dims mismatch rejects only that row', async () => {
       const p = await s.getOrCreateProject('k', 'n'); const a = hsess(p.id); await s.upsertSessions([a]);
       const bad = hobs({ projectId: p.id, sessionId: a.id, embedding: [1, 2], embeddingModel: 'm' });
       const good = hobs({ projectId: p.id, sessionId: a.id, embedding: [1, 0, 0, 0], embeddingModel: 'm' });
