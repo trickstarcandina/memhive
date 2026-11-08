@@ -41,6 +41,22 @@ describe('sanitizeToolPayload', () => {
     expect(out).toContain('<elided chars=150>');
     expect(out.length).toBeLessThanOrEqual(70);
   });
+  it('carries an open private block across sibling fields and object keys', () => {
+    expect(sanitizeToolPayload(['keep <private>s1', 'inner', 1234, 's2</private> after'])).toEqual(['keep ', '', null, ' after']);
+    // Keys inside the open block are private too.
+    expect(sanitizeToolPayload({ a: 'keep <private>s1', b: 'inner', c: 's2</private> after', d: 'shown' })).toEqual({ a: 'keep ', '': ' after', d: 'shown' });
+    expect(sanitizeToolPayload({ ['x<private>k</private>']: 'v', ['<private>k2']: 'gone', ['</private>z']: 'back' })).toEqual({ x: 'v', '': '', z: 'back' });
+  });
+  it('never splits a surrogate pair when truncating', () => {
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const out = sanitizeToolPayload('ab' + '\u{1F600}'.repeat(300) + 'c', 201) as string;
+    expect(out).toContain('<elided');
+    expect(out).not.toMatch(lone);
+  });
+  it('elides non-base64 data:image urls', () => {
+    expect(sanitizeToolPayload('x data:image/svg+xml,%3Csvg%3E%3C/svg%3E y')).toBe('x <image elided bytes=19> y');
+    expect(sanitizeToolPayload('src="data:image/svg+xml;charset=utf-8,<svg/>"')).toBe('src="<image elided bytes=6>"');
+  });
   it('leaves numbers, booleans and null alone', () => {
     expect(sanitizeToolPayload({ n: 1, b: false, z: null })).toEqual({ n: 1, b: false, z: null });
   });

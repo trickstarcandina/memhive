@@ -1,25 +1,28 @@
 // Matches an opening <private ...> tag (group 1 undefined) or a closing </private> tag (group 1 set).
 // A bare `<private` with no `>` swallows to end of string (fail closed).
 const TAG = /<\s*(\/\s*)?private\b[^>]*(?:>|$)/gi;
-const DATA_IMAGE = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi;
+// Base64 or URL-encoded/raw payload (`data:image/svg+xml,%3Csvg…`); runs to whitespace, a quote or `)`.
+const DATA_IMAGE = /data:image\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*,[^\s"'`)]*/gi;
 const MAX_DEPTH = 20;
 const TAIL = 100;
 const PRE_CAP = 256 * 1024;
 
+/** Open-block depth, carried from string to string so a block split across sibling fields still hides what is between. */
+export interface PrivateState { depth: number }
+
 // Scanner, not regex: nested blocks must not leak their inner text.
-export function stripPrivate(text: string): string {
+export function stripPrivate(text: string, state: PrivateState = { depth: 0 }): string {
   let out = '';
-  let depth = 0;
   let cursor = 0;
   for (const m of text.matchAll(TAG)) {
     const at = m.index;
-    if (depth === 0) out += text.slice(cursor, at);
-    if (m[1] === undefined) depth++;
-    else if (depth > 0) depth--;
+    if (state.depth === 0) out += text.slice(cursor, at);
+    if (m[1] === undefined) state.depth++;
+    else if (state.depth > 0) state.depth--;
     cursor = at + m[0].length;
   }
   // An unclosed opener leaves depth > 0 and drops the rest of the string.
-  if (depth === 0) out += text.slice(cursor);
+  if (state.depth === 0) out += text.slice(cursor);
   return out;
 }
 
@@ -83,11 +86,17 @@ export function redactSecrets(text: string): string {
 const SECRET_KEY = /secret|token|passw(or)?d|api[_-]?key|private[_-]?key|authorization|cookie/i;
 const COUNT_KEY = /(^|_)(count|max|min|limit|len|length)s?$|tokens?_?(count|used)|max_?tokens|(input|output|total)_?tokens/i;
 
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+// Cut points moved off the middle of a surrogate pair, so no lone half is left behind.
+const headEnd = (s: string, i: number) => (i > 0 && isHigh(s.charCodeAt(i - 1)) ? i - 1 : i);
+const tailStart = (s: string, i: number) => (i < s.length && isLow(s.charCodeAt(i)) ? i + 1 : i);
+
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   const tail = max >= 200 ? TAIL : 0;
-  const head = s.slice(0, max - tail);
-  const rest = tail ? s.slice(-tail) : '';
+  const head = s.slice(0, headEnd(s, max - tail));
+  const rest = tail ? s.slice(tailStart(s, s.length - tail)) : '';
   return `${head}\n<elided chars=${s.length - max}>\n${rest}`;
 }
 
@@ -95,29 +104,31 @@ function truncate(s: string, max: number): string {
 function dropPartialTail(s: string): string {
   const stop = Math.max(0, s.length - 1024);
   for (let i = s.length - 1; i >= stop; i--) if (/\s/.test(s[i])) return s.slice(0, i + 1);
-  return s.slice(0, stop);
+  return s.slice(0, headEnd(s, stop));
 }
 
-function sanitizeString(s: string, max: number): string {
-  const noImages = stripPrivate(s).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
+function sanitizeString(s: string, max: number, state: PrivateState): string {
+  const noImages = stripPrivate(s, state).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
   // Hard pre-cap bounds the scan. Redact a slightly wider window first, so a secret straddling the cap
   // is matched whole, then cap and drop the cut trailing token; truncate last so nothing is a fragment.
   if (noImages.length <= PRE_CAP) return truncate(redactSecrets(noImages), max);
-  return truncate(dropPartialTail(redactSecrets(noImages.slice(0, PRE_CAP + 1024)).slice(0, PRE_CAP)), max);
+  return truncate(dropPartialTail(redactSecrets(noImages.slice(0, headEnd(noImages, PRE_CAP + 1024))).slice(0, PRE_CAP)), max);
 }
 
-export function sanitizeToolPayload(value: unknown, maxChars = 16000, depth = 0): unknown {
+/** Pass one `state` to every part of one host payload (input and output) so a private block can span them. */
+export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: PrivateState = { depth: 0 }, depth = 0): unknown {
   // Fail closed: a too-deep value is replaced, never passed through raw.
   if (depth > MAX_DEPTH) return '<elided: max depth>';
-  if (typeof value === 'string') return sanitizeString(value, maxChars);
-  if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((v) => sanitizeToolPayload(v, maxChars, depth + 1));
+  if (typeof value === 'string') return sanitizeString(value, maxChars, state);
+  if (value === null || typeof value !== 'object') return state.depth > 0 && value !== undefined ? null : value;
+  if (Array.isArray(value)) return value.map((v) => sanitizeToolPayload(v, maxChars, state, depth + 1));
   const rec = value as Record<string, unknown>;
   if (rec.type === 'image' || rec.type === 'image_url') return { type: 'image', elided: true };
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(rec)) {
+  for (const [rawKey, v] of Object.entries(rec)) {
+    const k = stripPrivate(rawKey, state);
     const hidden = SECRET_KEY.test(k) && !COUNT_KEY.test(k) && (typeof v === 'string' || typeof v === 'number');
-    out[k] = hidden ? '<redacted>' : sanitizeToolPayload(v, maxChars, depth + 1);
+    out[k] = hidden ? '<redacted>' : sanitizeToolPayload(v, maxChars, state, depth + 1);
   }
   return out;
 }
