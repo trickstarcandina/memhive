@@ -271,8 +271,11 @@ export class SyncEngine implements SyncHooks {
         if (Date.now() > deadline) break;
         continue;
       }
-      if (epoch && knownEpoch !== epoch) store.setHubEpoch(project.id, epoch);   // first seen, or changed again after this call's reset
+      // Changed again after this call's reset: no second reset in one call. The epoch is not stored, so the next pull resets.
+      if (newEpoch) { logger.warn('hub epoch changed again during one pull; resync deferred to the next pull', { hub: project.hubUrl }); break; }
+      if (epoch && knownEpoch === null) store.setHubEpoch(project.id, epoch);   // first seen
       const now = new Date().toISOString();
+      const progressed = page.next_seq > since;
       // Rows are checked one by one: a malformed row is logged once and skipped like a row the store refuses.
       const rows = <T>(list: unknown[], schema: z.ZodType<T>): T[] => list.flatMap((raw) => {
         const r = schema.safeParse(raw); if (r.success) return [r.data];
@@ -306,7 +309,8 @@ export class SyncEngine implements SyncHooks {
         if (page.next_seq > since) { since = page.next_seq; store.setPullCursor(project.id, since); }
       });
       store.updateSyncState(project.id, { lastPullAt: Date.now() });
-      if (!page.has_more || Date.now() > deadline) break;
+      // has_more without a higher next_seq (a buggy hub) would re-request the same page until the deadline.
+      if (!page.has_more || !progressed || Date.now() > deadline) break;
     }
     return applied;
   }
