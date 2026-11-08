@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, existsSync, chmodSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -113,9 +113,16 @@ describe('file modes', () => {
     expect(mode(path.join(home, 'memhub.db'))).toBe(0o600);
   });
   it('tightens an existing loose home', () => {
-    const home = tmp();
+    const home = tmp(); chmodSync(home, 0o755);
+    writeFileSync(path.join(home, 'settings.json'), '{}');
     createDaemonContext(home, {}).store.close();
     expect(mode(home)).toBe(0o700);
+  });
+  it('leaves the mode of a shared directory MEMHUB_HOME points at', () => {
+    const home = tmp(); chmodSync(home, 0o755);
+    writeFileSync(path.join(home, 'notes.txt'), 'not memhub');
+    createDaemonContext(home, {}).store.close();
+    expect(mode(home)).toBe(0o755);
   });
 });
 
