@@ -180,7 +180,7 @@ export class SyncEngine implements SyncHooks {
         return out;
       };
       const hubObs = fit(observations.map((o) => toHub(clipObs(o)))); const sums = fit(summaries);
-      const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: hubObs, summaries: sums };
+      const body: PushBody = { projectKey: project.key, projectName: project.name, sessions, observations: hubObs, summaries: sums, tombstones: [] };
       let result: PushResult;
       try { result = await this.send(client, project, body); }
       catch (e) {

@@ -123,6 +123,43 @@ export function hubStoreContract(name: string, open: () => Promise<HubStore>, op
       expect((search.body as { observations: unknown[] }).observations).toHaveLength(1);   // a malformed since is ignored, not passed to the DB
     });
 
+    it('tombstones: the owner deletes and pull relays it; others get not_owner; forgotten ids are not re-accepted', async () => {
+      const cfg = { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 };
+      const as = (user: string, method: string, path: string, body?: unknown) => handleHubRoute(s, cfg, { keyId: 'k', userName: user }, method, new URL('http://h' + path), body);
+      const a = hsess('x'); const o = hobs({ projectId: 'x', sessionId: a.id, title: 'Forget the ocelot' }); const o2 = hobs({ projectId: 'x', sessionId: a.id });
+      const m: Summary = { id: newId(), projectId: 'x', sessionId: a.id, userId: 'alice', request: 'r', learned: '', completed: '', nextSteps: '', createdAt: new Date().toISOString(), origin: 'local', syncedAt: null };
+      await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', sessions: [a], observations: [o, o2], summaries: [m] });
+      const at = new Date().toISOString();
+      const bob = await as('bob', 'POST', '/v1/sync/push', { projectKey: 'k/t', tombstones: [{ id: o.id, tbl: 'observation', deleted_at: at }] });
+      expect((bob.body as any).rejected).toEqual([{ id: o.id, reason: 'not_owner' }]);
+      const p = (await s.getProjectByKey('k/t'))!;
+      expect(await s.searchObservationsFts('ocelot', { projectId: p.id, limit: 5 })).toHaveLength(1);
+      const r = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', tombstones: [{ id: o.id, tbl: 'observation', deleted_at: at }, { id: m.id, tbl: 'summary', deleted_at: at }, { id: newId(), tbl: 'observation', deleted_at: at }, { id: 'bad', tbl: 'observation', deleted_at: at }] });
+      expect((r.body as any).accepted.tombstones).toBe(3);
+      expect((r.body as any).rejected).toEqual([{ id: 'bad', reason: 'invalid_id' }]);
+      expect(await s.getObservations([o.id])).toEqual([]); expect(await s.getSummaries([m.id])).toEqual([]);
+      expect(await s.searchObservationsFts('ocelot', { projectId: p.id, limit: 5 })).toEqual([]);
+      const pull = (await as('bob', 'GET', '/v1/sync/pull?project_key=k%2Ft&since=0')).body as any;
+      expect(pull.observations.map((x: { id: string }) => x.id)).toEqual([o2.id]);
+      expect(pull.tombstones).toEqual([{ id: o.id, tbl: 'observation', deleted_at: expect.any(String) }, { id: m.id, tbl: 'summary', deleted_at: expect.any(String) }]);
+      const again = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', observations: [o] });
+      expect((again.body as any).rejected).toEqual([{ id: o.id, reason: 'forgotten' }]);
+      // Scoped by project: the same id in another project is not blocked by k/t's tombstone.
+      const b = hsess('x');
+      const other = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/other', sessions: [b], observations: [{ ...o, sessionId: b.id }] });
+      expect((other.body as any)).toMatchObject({ accepted: { observations: 1 }, rejected: [] });
+      const bobOther = await as('bob', 'POST', '/v1/sync/push', { projectKey: 'k/t', tombstones: [{ id: b.id, tbl: 'session', deleted_at: at }] });
+      expect((bobOther.body as any).rejected).toEqual([{ id: b.id, reason: 'not_owner' }]);   // a row of another project
+      const aliceWrong = await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', tombstones: [{ id: b.id, tbl: 'session', deleted_at: at }] });
+      expect((aliceWrong.body as any).rejected).toEqual([{ id: b.id, reason: 'not_owner' }]);   // own row, but pushed under another project key
+      expect(await s.getSessions([b.id])).toHaveLength(1);
+      // A session tombstone takes the session's rows with it.
+      await as('alice', 'POST', '/v1/sync/push', { projectKey: 'k/t', tombstones: [{ id: a.id, tbl: 'session', deleted_at: at }] });
+      expect(await s.getSessions([a.id])).toEqual([]); expect(await s.getObservations([o2.id])).toEqual([]);
+      const tail = (await as('bob', 'GET', `/v1/sync/pull?project_key=k%2Ft&since=${pull.next_seq}`)).body as any;
+      expect(tail.tombstones.map((t: { tbl: string }) => t.tbl)).toEqual(['session']);
+    });
+
     it('rotate, list and remove users, list projects', async () => {
       await s.createUser('alice'); await s.createUser('bob');
       const k = await s.createApiKey('alice', 'laptop', 'h1'); await s.createApiKey('bob', 'desk', 'h2');

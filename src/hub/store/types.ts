@@ -1,4 +1,4 @@
-import type { Observation, Project, SearchFilters, Session, Summary } from '../../store/types.js';
+import type { Observation, Project, SearchFilters, Session, Summary, Tombstone } from '../../store/types.js';
 
 export interface HubObservation extends Observation { embedding: number[] | null }
 export interface HubUserInfo { name: string; createdAt: string; activeKeys: number; observations: number; lastSeen: string | null }   // lastSeen: newest session or observation time the user's clients reported
@@ -6,7 +6,7 @@ export interface HubProjectInfo { key: string; name: string; createdAt: string; 
 export interface HubUserRemoval { revokedKeys: number; observations: number; sessions: number; summaries: number }   // rows counted here stay on the hub
 export interface HubApiKey { id: string; userName: string; label: string; createdAt: string; revokedAt: string | null }
 export type SyncTable = 'sessions' | 'observations' | 'summaries';
-export interface SyncLogEntry { seq: number; table: SyncTable; rowId: string }
+export interface SyncLogEntry { seq: number; table: SyncTable | 'tombstone'; rowId: string }
 /** Thrown by insertObservations after the batch is written when some rows had a vector of the wrong length; those rows are not written. */
 export class HubDimsMismatch extends Error {
   constructor(public rowId: string, public expected: number, public actual: number, public inserted: string[] = [], public rejected: string[] = [rowId]) {
@@ -35,6 +35,13 @@ export interface HubStore {
   insertSummaries(rows: Summary[]): Promise<string[]>;
   listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]>;
   maxSeq(projectId: string): Promise<number>;
+  /**
+   * Deletes each row the user owns in the project (a session with its observations and summaries), records the tombstone
+   * and logs it for pull. A row of someone else is rejected not_owner; a row the hub does not have is accepted and ignored.
+   */
+  applyTombstones(projectId: string, userName: string, rows: Tombstone[]): Promise<{ applied: number; rejected: Array<{ id: string; reason: string }> }>;
+  tombstoned(projectId: string, ids: string[]): Promise<Set<string>>;   // ids the hub deleted in this project: never accepted again
+  getTombstones(ids: string[]): Promise<Tombstone[]>;
   getSessions(ids: string[]): Promise<Session[]>;
   getObservations(ids: string[]): Promise<HubObservation[]>;
   getSummaries(ids: string[]): Promise<Summary[]>;

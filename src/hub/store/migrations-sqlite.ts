@@ -19,4 +19,7 @@ export const HUB_SQLITE_MIGRATIONS: string[] = [
   `CREATE INDEX summaries_project ON summaries(project_id);
   CREATE INDEX sessions_project ON sessions(project_id);`,
   `ALTER TABLE sessions DROP COLUMN cwd;`,
+  // Protocol 2: deleted rows leave a tombstone that pull relays; FTS needs a delete trigger now that rows can go.
+  `CREATE TABLE tombstones (id TEXT NOT NULL, tbl TEXT NOT NULL, project_id TEXT NOT NULL, user_id TEXT NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY (project_id, tbl, id));
+  CREATE TRIGGER observations_ad AFTER DELETE ON observations BEGIN INSERT INTO observations_fts(observations_fts, rowid, title, subtitle, narrative, facts, concepts) VALUES ('delete', old.rowid, old.title, old.subtitle, old.narrative, old.facts, old.concepts); END;`,
 ];

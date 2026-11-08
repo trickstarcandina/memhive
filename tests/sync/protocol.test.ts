@@ -32,10 +32,10 @@ const base = { version: 'x', embedding_model: null, embedding_dims: null, body_l
 
 describe('hub protocol', () => {
   it('a hub with a newer protocol: no push or pull, hub_protocol error in sync output and status', async () => {
-    const t = setup({ ...base, protocol: 2 });
+    const t = setup({ ...base, protocol: 3 });
     const r = await t.engine.syncNow(t.project);
     expect(r.pushed).toBeNull(); expect(r.pulled).toBe(0);
-    expect(r.error).toMatch(/^hub_protocol: .*protocol 2.*upgrade memhive/);
+    expect(r.error).toMatch(/^hub_protocol: .*protocol 3.*upgrade memhive/);
     expect(t.urls.filter((u) => !u.endsWith('/v1/config'))).toEqual([]);
     const ctx = { store: t.store, sync: t.engine, observer: { authFailed: false }, pausedUntil: () => null } as unknown as DaemonContext;
     const st = (await handleRoute(ctx, 'GET', new URL('http://x/v1/status'), undefined)).body as { hubErrors: Array<{ hub: string; error: string }> };

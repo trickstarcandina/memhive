@@ -3,7 +3,7 @@ import { HubDimsMismatch, type HubStore, type HubObservation } from './store/typ
 import type { HubConfig } from './server.js';
 import { OBSERVATION_TYPES, type ObservationType, type SearchFilters, type Session, type Summary } from '../store/types.js';
 import { VERSION } from '../shared/version.js';
-import { HUB_PROTOCOL, PushBodySchema, PushObservationSchema, PushSessionSchema, PushSummarySchema, isIso, type PushResult, type PullResult } from './wire.js';
+import { HUB_PROTOCOL, PushBodySchema, PushObservationSchema, PushSessionSchema, PushSummarySchema, PushTombstoneSchema, isIso, type PushResult, type PullResult } from './wire.js';
 
 export type { PushBody, PushResult, PullResult } from './wire.js';
 export { isIso } from './wire.js';
@@ -42,10 +42,15 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const { projectKey, projectName } = env.data;
     const project = await store.getOrCreateProject(projectKey, projectName || (projectKey.split('/').pop() ?? projectKey));
     const rejected: PushResult['rejected'] = [];
+    // A row the hub deleted (forgotten by its owner) is never taken back, e.g. from the owner's other machine.
+    const ids = (k: string) => rows(k).map((r) => (r as { id?: unknown } | null)?.id).filter((v): v is string => PushTombstoneSchema.shape.id.safeParse(v).success);   // uuids only: Postgres casts them
+    const dead = await store.tombstoned(project.id, [...ids('sessions'), ...ids('observations'), ...ids('summaries')]);
+    const forgotten = (id: string) => { if (!dead.has(id)) return false; rejected.push({ id, reason: 'forgotten' }); return true; };
     // Order matters: observations and summaries reference sessions (foreign keys).
     const sessions: Session[] = [];
     for (const r of rows('sessions')) {
       const p = PushSessionSchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, [], 'invalid_row')); continue; }
+      if (forgotten(p.data.id)) continue;
       const { cwd: _cwd, ...s } = p.data;   // accepted for older clients, never stored (Session.cwd is '' on the hub)
       sessions.push({ ...s, cwd: '', endedAt: s.endedAt ?? null, projectId: project.id, userId: auth.userName, syncedAt: null });
     }
@@ -56,13 +61,14 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const obsIn: HubObservation[] = []; const sumIn: Summary[] = [];
     for (const r of rows('observations')) {
       const p = PushObservationSchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, ['title', 'type'], 'invalid_observation')); continue; }
-      const o = p.data;
+      const o = p.data; if (forgotten(o.id)) continue;
       const hasVec = !!o.embedding && o.embedding.length > 0;
       if ((o.embeddingModel && o.embeddingModel !== cfg.embeddingModel) || (hasVec && (o.embeddingModel !== cfg.embeddingModel || o.embedding!.length !== cfg.embeddingDims))) { rejected.push({ id: o.id, reason: 'embedding_model_mismatch' }); continue; }
       obsIn.push({ ...o, projectId: project.id, userId: auth.userName, origin: 'hub', syncedAt: null, embedding: hasVec ? o.embedding : null, embeddingModel: hasVec ? o.embeddingModel : null });
     }
     for (const r of rows('summaries')) {
       const p = PushSummarySchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, ['request'], 'invalid_summary')); continue; }
+      if (forgotten(p.data.id)) continue;
       sumIn.push({ ...p.data, projectId: project.id, userId: auth.userName, origin: 'hub', syncedAt: null });
     }
     // A row must hang off a session this user owns in this project (avoids FK 500s and attaching rows to someone else's session).
@@ -77,7 +83,14 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
       oIds = e.inserted; for (const id of e.rejected) rejected.push({ id, reason: 'embedding_model_mismatch' });
     }
     const mIds = await store.insertSummaries(sums);
-    const result: PushResult = { accepted: { sessions: sIds.length, observations: oIds.length, summaries: mIds.length }, rejected };
+    // Tombstones last: a row sent in the same body is written first, so its tombstone finds it.
+    const tombs = [];
+    for (const r of rows('tombstones')) {
+      const p = PushTombstoneSchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, [], 'invalid_row')); continue; }
+      tombs.push({ id: p.data.id, tbl: p.data.tbl, deletedAt: p.data.deleted_at });
+    }
+    const t = await store.applyTombstones(project.id, auth.userName, tombs); rejected.push(...t.rejected);
+    const result: PushResult = { accepted: { sessions: sIds.length, observations: oIds.length, summaries: mIds.length, ...(tombs.length ? { tombstones: t.applied } : {}) }, rejected };
     return ok(result);
   }
 
@@ -86,11 +99,11 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const since = intParam(q.get('since'), 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = intParam(q.get('limit'), 500, 1, 1000);
     const project = await store.getProjectByKey(key);
-    const empty: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false, max_seq: 0 };
+    const empty: PullResult = { sessions: [], observations: [], summaries: [], tombstones: [], next_seq: since, has_more: false, max_seq: 0 };
     if (!project) return ok(empty);
     const entries = await store.listSyncLog(project.id, since, limit + 1);
     const vectors = q.get('vectors') !== '0';
-    const result: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false, max_seq: await store.maxSeq(project.id), epoch: project.id };
+    const result: PullResult = { sessions: [], observations: [], summaries: [], tombstones: [], next_seq: since, has_more: false, max_seq: await store.maxSeq(project.id), epoch: project.id };
     // The page stops at the hub's own body limit, so rows that are each fine cannot add up to a response nobody can build or
     // read. The first row always goes (push caps keep one row well below the limit), so the cursor always moves.
     let used = Buffer.byteLength(JSON.stringify(result)) + 64; let taken = 0; let full = false;
@@ -101,12 +114,13 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
       for (const x of await store.getSessions(ids('sessions'))) rows.set('sessions:' + x.id, x);
       for (const x of await store.getObservations(ids('observations'))) { if (!vectors) delete (x as { embedding?: unknown }).embedding; rows.set('observations:' + x.id, x); }
       for (const x of await store.getSummaries(ids('summaries'))) rows.set('summaries:' + x.id, x);
+      for (const x of await store.getTombstones(ids('tombstone'))) rows.set('tombstone:' + x.id, { id: x.id, tbl: x.tbl, deleted_at: x.deletedAt });
       for (const e of chunk) {
         const row = rows.get(`${e.table}:${e.rowId}`);
         if (row) {
           const n = Buffer.byteLength(JSON.stringify(row)) + 1;
           if (taken > 0 && used + n > cfg.bodyLimit) { full = true; break; }
-          (result[e.table] as object[]).push(row); used += n;
+          (result[e.table === 'tombstone' ? 'tombstones' : e.table] as object[]).push(row); used += n;
         }
         taken++; result.next_seq = e.seq;
       }
