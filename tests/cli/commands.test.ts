@@ -67,5 +67,6 @@ describe('commands', () => {
     const r = io();
     expect(await searchCommand(['q', '--limit', 'abc'], r.io, { home: mkdtempSync(path.join(tmpdir(), 'mh-')) })).toBe(2);
     expect(r.err.join('')).toContain('usage');
+    expect(await searchCommand(['q', '--limit'], io().io, { home: mkdtempSync(path.join(tmpdir(), 'mh-')) })).toBe(2);   // bare flag is not 1
   });
 });
