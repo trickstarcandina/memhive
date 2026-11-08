@@ -98,7 +98,8 @@ describe('createHubStore', () => {
   it('throws without DATABASE_URL and on unknown scheme', () => {
     expect(() => createHubStore({})).toThrow(/DATABASE_URL/);
     expect(() => createHubStore({ DATABASE_URL: 'mysql://x' })).toThrow(/postgres|sqlite/);
-    expect(hubConfigFromEnv({ PORT: '8080', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '8' })).toEqual({ port: 8080, embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
+    expect(hubConfigFromEnv({ PORT: '8080', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '8' })).toEqual({ port: 8080, host: '127.0.0.1', embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
+    expect(hubConfigFromEnv({ HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
   });
 });
 
@@ -210,6 +211,36 @@ describe('hub isolated servers', () => {
     const lean = await req('/v1/sync/pull?project_key=k%2Fv&since=0&vectors=0');
     expect(lean.observations).toHaveLength(1); expect(lean.observations[0]).not.toHaveProperty('embedding');
     expect(lean.observations[0].embeddingModel).toBe('bge-m3'); expect(PullResultSchema.safeParse(lean).success).toBe(true);
+    await h.close();
+  });
+  it('hub binds HOST env (default 127.0.0.1)', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null }); await st.migrate();
+    const h = await startHub(st, { ...hubConfigFromEnv({}), port: 0 }, silent);
+    expect(h.host).toBe('127.0.0.1'); expect((await fetch(`http://127.0.0.1:${h.port}/healthz`)).status).toBe(200);
+    await h.close();
+    const st2 = new SqliteHubStore(':memory:', { dims: null }); await st2.migrate();
+    const all = await startHub(st2, { ...hubConfigFromEnv({ HOST: '0.0.0.0' }), port: 0 }, silent);
+    expect(all.host).toBe('0.0.0.0'); await all.close();
+  });
+  it('bad-key flood is throttled before hitting the store', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null }); await st.migrate();
+    await st.createUser('u'); const k = generateApiKey(); await st.createApiKey('u', 'l', k.hash);
+    const late = generateApiKey(); await st.createApiKey('u', 'late', late.hash);
+    let lookups = 0; const auth = st.authenticate.bind(st); st.authenticate = (h: string) => { lookups++; return auth(h); };
+    const h = await startHub(st, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 }, silent);
+    const me = (key: string) => fetch(`http://127.0.0.1:${h.port}/v1/me`, { headers: { authorization: `Bearer ${key}` } });
+    expect((await me(k.raw)).status).toBe(200);
+    const same = generateApiKey().raw; for (let i = 0; i < 5; i++) expect((await me(same)).status).toBe(401);
+    expect(lookups).toBe(2);   // a repeated bad key is answered from the negative cache
+    lookups = 0; const statuses: number[] = [];
+    for (let i = 0; i < 40; i++) statuses.push((await me(generateApiKey().raw)).status);
+    expect(statuses.filter((x) => x === 401)).toHaveLength(25); expect(statuses.slice(25).every((x) => x === 429)).toBe(true);
+    expect(lookups).toBe(25);   // 5 failures were counted already; nothing past the limit reached the store
+    const t = await me(generateApiKey().raw); expect(t.status).toBe(429); expect(Number(t.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect((await t.json() as any).error.code).toBe('rate_limited');
+    expect((await me(k.raw)).status).toBe(200);    // a key seen before keeps working during the flood
+    expect((await me(late.raw)).status).toBe(429);  // trade-off: a key never seen waits out the window
+    expect((await fetch(`http://127.0.0.1:${h.port}/healthz`)).status).toBe(200);
     await h.close();
   });
   it('HubDimsMismatch from the store keeps valid rows and rejects the bad row', async () => {

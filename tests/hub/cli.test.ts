@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { it, expect } from 'vitest';
@@ -41,4 +41,23 @@ it('serve refuses to start on a dims change; --reset-vectors (flag or env) lets 
   expect((await withServe(['--reset-vectors'], { ...env, MEMHIVE_EMBED_DIMS: '8' })).code).toBe(0);
   expect((await withServe([], { ...env, MEMHIVE_EMBED_DIMS: '16', MEMHIVE_RESET_VECTORS: '1' })).code).toBe(0);
   expect((await withServe([], { ...env, MEMHIVE_EMBED_DIMS: '8' })).code).toBe(1);
+});
+it('serve writes the initial admin key to a 0600 file, not stdout', async () => {
+  const env = serveEnv('4'); const file = path.join(env.MEMHIVE_HOME, 'hub-admin-key');
+  let me = 0;
+  const first = await withServe([], env, async (o) => {
+    const port = /listening on 127\.0\.0\.1:(\d+)/.exec(o.out)![1];
+    me = (await fetch(`http://127.0.0.1:${port}/v1/me`, { headers: { authorization: `Bearer ${readFileSync(file, 'utf8').trim()}` } })).status;
+  });
+  expect(first.code).toBe(0); expect(me).toBe(200);
+  expect(statSync(file).mode & 0o777).toBe(0o600); expect(readFileSync(file, 'utf8')).toMatch(/^mh_[A-Za-z0-9_-]{43}\n$/);
+  expect(first.out).toContain(file); expect(first.out).not.toMatch(/mh_/); expect(first.err).toBe('');
+  const second = await withServe([], env); expect(second.out).not.toContain('First start');
+  const other = serveEnv('4'); const custom = path.join(other.MEMHIVE_HOME, 'sub', 'admin.key');
+  const printed = await withServe([], { ...other, MEMHIVE_ADMIN_KEY_FILE: custom, MEMHIVE_PRINT_ADMIN_KEY: '1' });
+  expect(printed.out).toContain(custom); expect(printed.out).toContain(readFileSync(custom, 'utf8').trim());
+  const blocked = serveEnv('4');
+  const fail = await withServe([], { ...blocked, MEMHIVE_ADMIN_KEY_FILE: path.join(blocked.DATABASE_URL.slice(7), 'nested', 'k') });   // parent is a file
+  expect(fail.code).toBe(1); expect(fail.err).toMatch(/cannot write the admin key/);
+  const retry = await withServe([], blocked); expect(retry.out).toContain('First start');   // no key was stored, so the next start makes one
 });

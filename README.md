@@ -148,12 +148,12 @@ The hub is a Node service backed by Postgres with pgvector. The compose stack in
 cd docker
 printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env   # once; never commit .env
 docker compose up -d
-docker compose logs hub
+docker compose exec hub cat /data/hub-admin-key
 ```
 
-On first start the hub creates user `admin` and prints its API key once. The line is in `docker compose logs hub`. Store it somewhere safe; it cannot be shown again.
+On first start the hub creates user `admin` and writes its API key to `$MEMHIVE_HOME/hub-admin-key` (mode 0600; `/data/hub-admin-key` in compose). The log shows only the path, so the key does not end up in `docker compose logs`. Read it once, create personal keys (see below), then revoke the initial key with `memhive key revoke <id>` and delete the file. `MEMHIVE_ADMIN_KEY_FILE` changes the path. `MEMHIVE_PRINT_ADMIN_KEY=1` also prints the key on stdout; use it only where stdout is private, because container logs keep it on the host.
 
-The hub speaks plain HTTP on port 7777. Put it behind a TLS reverse proxy (Caddy, nginx, a cloud load balancer) that serves `https://hub.example.com` and forwards to the hub. Clients refuse any `http://` hub except `localhost`, `127.0.0.1` and `::1`. Compose publishes the hub on `127.0.0.1:7777` only, so the plain HTTP port is not reachable from the network. The proxy must run on the same host. If it runs elsewhere, change the port mapping in `docker/compose.yml` to a reachable address, and keep the hub behind TLS.
+The hub speaks plain HTTP on port 7777. A bare `memhive serve` listens on `127.0.0.1` only; set `HOST=0.0.0.0` (the Docker image does) to listen on all interfaces. Put it behind a TLS reverse proxy (Caddy, nginx, a cloud load balancer) that serves `https://hub.example.com` and forwards to the hub. Clients refuse any `http://` hub except `localhost`, `127.0.0.1` and `::1`. Compose publishes the hub on `127.0.0.1:7777` only, so the plain HTTP port is not reachable from the network. The proxy must run on the same host. If it runs elsewhere, change the port mapping in `docker/compose.yml` to a reachable address, and keep the hub behind TLS.
 
 Hub settings are environment variables:
 
@@ -161,15 +161,18 @@ Hub settings are environment variables:
 | --- | --- | --- |
 | `DATABASE_URL` | none (required) | `postgres://…` or `sqlite:<path>`. Compose sets the Postgres URL. |
 | `PORT` | `7777` | Listen port. |
+| `HOST` | `127.0.0.1` | Listen address. The Docker image sets `0.0.0.0`. |
 | `MEMHIVE_EMBED_MODEL` | none | Embedding model the hub expects. Compose sets `bge-m3`. |
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
 | `MEMHIVE_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. Pull pages are capped to the same size. |
 | `MEMHIVE_RESET_VECTORS` | unset | `1` drops stored vectors when `MEMHIVE_EMBED_DIMS` changed (see below). |
-| `MEMHIVE_HOME` | `~/.memhive` | Directory for hub logs. Compose sets `/data`. |
+| `MEMHIVE_HOME` | `~/.memhive` | Directory for hub logs and the initial admin key. Compose sets `/data`. |
+| `MEMHIVE_ADMIN_KEY_FILE` | `$MEMHIVE_HOME/hub-admin-key` | Where the first start writes the admin key. |
+| `MEMHIVE_PRINT_ADMIN_KEY` | unset | `1` also prints the first admin key on stdout. |
 
 `POSTGRES_PASSWORD` is required: compose refuses to start without it. Compose reads it from `docker/.env` and passes it to the hub as `PGPASSWORD`, outside the connection URL, so any characters work.
 
-The hub limits each key to 60 requests per minute.
+The hub limits each key to 60 requests per minute. After 30 failed authentications in a minute (all keys together), keys the hub has not seen succeed get `429` with `retry-after` until the minute ends, without a database lookup; keys that authenticated before keep working. For per-client limits, rate-limit at the proxy.
 
 ### Add members
 

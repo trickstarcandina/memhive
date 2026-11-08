@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Logger } from '../shared/logger.js';
 import { createJsonServer } from '../daemon/http.js';
@@ -8,10 +9,10 @@ import { SqliteHubStore } from './store/sqlite.js';
 import { PostgresHubStore } from './store/postgres.js';
 import { VERSION } from '../shared/version.js';
 
-export interface HubConfig { port: number; embeddingModel: string | null; embeddingDims: number | null; bodyLimit: number }
+export interface HubConfig { port: number; host?: string; embeddingModel: string | null; embeddingDims: number | null; bodyLimit: number }   // host defaults to loopback
 
 export function hubConfigFromEnv(env: NodeJS.ProcessEnv): HubConfig {
-  return { port: Number(env.PORT ?? 7777) || 7777, embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
+  return { port: Number(env.PORT ?? 7777) || 7777, host: env.HOST || '127.0.0.1', embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
 }
 
 export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
@@ -23,24 +24,48 @@ export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
   throw new Error('DATABASE_URL must start with postgres:// or sqlite:');
 }
 
-export async function ensureAdminKey(store: HubStore): Promise<string | null> {
+/** persist runs before the key is stored: if it throws, no key exists and the next start tries again. */
+export async function ensureAdminKey(store: HubStore, persist: (raw: string) => void = () => {}): Promise<string | null> {
   // Keyed on keys, not users: a crash between createUser and createApiKey must not leave a hub nobody can log in to.
   if ((await store.listApiKeys()).length > 0) return null;
-  await store.createUser('admin');
-  const k = generateApiKey(); await store.createApiKey('admin', 'initial', k.hash);
+  const k = generateApiKey(); persist(k.raw);
+  await store.createUser('admin'); await store.createApiKey('admin', 'initial', k.hash);
   return k.raw;
 }
 
-export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Promise<{ port: number; close(): Promise<void> }> {
+const AUTH_FAIL_LIMIT = 30;   // failed auths per minute, all keys together, before unknown keys get 429 without a DB lookup
+const AUTH_FAIL_WINDOW_MS = 60_000;
+const BAD_KEY_CACHE = 256;   // recently refused key hashes answered 401 without a DB lookup
+const BAD_KEY_TTL_MS = 60_000;
+const GOOD_KEY_CACHE = 1024;
+/** Insertion-ordered map trimmed to max entries: the oldest go first. */
+const remember = <V>(m: Map<string, V>, k: string, v: V, max: number) => { m.delete(k); m.set(k, v); if (m.size > max) m.delete(m.keys().next().value!); };
+const bearer = (headers: Record<string, unknown>) => /^Bearer\s+(mh_[A-Za-z0-9_-]+)$/.exec(String(headers.authorization ?? ''))?.[1] ?? null;
+
+export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Promise<{ port: number; host: string; close(): Promise<void> }> {
   const limiter = new RateLimiter(60, 60_000);
+  // Failed auth is throttled so a flood of bad keys cannot tie up the DB pool. Keys that authenticated before still reach the
+  // store during a flood (so the team keeps working and a revoke still applies); only never-seen keys are turned away.
+  const fails = { start: 0, count: 0 };
+  const bad = new Map<string, number>(); const good = new Map<string, true>();
+  const failed = (hash: string | null, now = Date.now()) => {
+    if (now - fails.start >= AUTH_FAIL_WINDOW_MS) { fails.start = now; fails.count = 0; }
+    fails.count++; if (hash) { good.delete(hash); remember(bad, hash, now + BAD_KEY_TTL_MS, BAD_KEY_CACHE); }
+  };
   // The key is checked before the body is read, so an unknown or revoked key never makes the hub buffer a body.
   const authed = new WeakMap<object, { keyId: string; userName: string }>();
   const authorize = async (url: URL, headers: Record<string, unknown>): Promise<boolean> => {
     if (url.pathname === '/healthz') return true;
-    const m = /^Bearer\s+(mh_[A-Za-z0-9_-]+)$/.exec(String(headers.authorization ?? ''));
-    const auth = m ? await store.authenticate(hashApiKey(m[1])) : null;
-    if (auth) authed.set(headers, auth);
+    const raw = bearer(headers); const hash = raw ? hashApiKey(raw) : null;
+    if (hash && (bad.get(hash) ?? 0) > Date.now()) { failed(null); return false; }
+    const auth = hash ? await store.authenticate(hash) : null;
+    if (auth) { authed.set(headers, auth); remember(good, hash!, true, GOOD_KEY_CACHE); } else failed(hash);
     return !!auth;
+  };
+  const throttled = (url: URL, headers: Record<string, unknown>, now = Date.now()): number => {
+    if (url.pathname === '/healthz' || now - fails.start >= AUTH_FAIL_WINDOW_MS || fails.count < AUTH_FAIL_LIMIT) return 0;
+    const raw = bearer(headers); if (raw && good.has(hashApiKey(raw))) return 0;
+    return Math.max(1, Math.ceil((fails.start + AUTH_FAIL_WINDOW_MS - now) / 1000));
   };
   const server = createJsonServer(async (method, url, body, headers) => {
     if (url.pathname === '/healthz') return { status: 200, body: { ok: true, version: VERSION } };
@@ -49,8 +74,18 @@ export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Pr
     try { return await handleHubRoute(store, cfg, auth, method, url, body); }
     catch (e) { log.error('hub route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
   }, authorize, cfg.bodyLimit, 'missing or invalid API key');
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(cfg.port, '0.0.0.0', resolve); });
+  // The throttle answers before the shared JSON server runs (it has no way to set retry-after), so it never touches the store.
+  const [inner] = server.listeners('request') as Array<(req: IncomingMessage, res: ServerResponse) => void>;
+  server.removeAllListeners('request');
+  server.on('request', (req: IncomingMessage, res: ServerResponse) => {
+    const wait = throttled(new URL(req.url ?? '/', 'http://127.0.0.1'), req.headers);
+    if (!wait) return inner.call(server, req, res);
+    res.writeHead(429, { 'content-type': 'application/json', 'retry-after': String(wait), connection: 'close' });
+    res.end(JSON.stringify({ error: { code: 'rate_limited', message: 'too many failed authentications' } }));
+  });
+  const host = cfg.host ?? '127.0.0.1';
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(cfg.port, host, resolve); });
   const port = (server.address() as AddressInfo).port;
-  log.info('hub listening', { port });
-  return { port, close: async () => { await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections?.(); }); await store.close(); } };
+  log.info('hub listening', { host, port });
+  return { port, host, close: async () => { await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections?.(); }); await store.close(); } };
 }
