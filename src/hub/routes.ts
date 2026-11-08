@@ -25,6 +25,7 @@ function rejection(row: unknown, issues: z.core.$ZodIssue[], kindFields: string[
 }
 // Postgres rejects NUL in text and jsonb; strip it everywhere so a row cannot fail in the DB after passing validation.
 const noNul = <T>(v: T): T => (typeof v === 'string' ? v.replace(/\u0000/g, '') : Array.isArray(v) ? v.map(noNul) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, noNul(x)])) : v) as T;
+const PULL_CHUNK = 50;   // rows fetched per query while filling a page, so a page of large rows is never loaded whole
 const intParam = (v: string | null, def: number, min: number, max: number) => { const n = v === null ? NaN : Number(v); return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), min), max) : def; };
 
 export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { keyId: string; userName: string }, method: string, url: URL, body: unknown): Promise<{ status: number; body: unknown }> {
@@ -88,9 +89,29 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const empty: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false, max_seq: 0 };
     if (!project) return ok(empty);
     const entries = await store.listSyncLog(project.id, since, limit + 1);
-    const page = entries.slice(0, limit);
-    const ids = (t: string) => page.filter((e) => e.table === t).map((e) => e.rowId);
-    const result: PullResult = { sessions: await store.getSessions(ids('sessions')), observations: await store.getObservations(ids('observations')), summaries: await store.getSummaries(ids('summaries')), next_seq: page.length ? page[page.length - 1].seq : since, has_more: entries.length > limit, max_seq: await store.maxSeq(project.id), epoch: project.id };
+    const vectors = q.get('vectors') !== '0';
+    const result: PullResult = { sessions: [], observations: [], summaries: [], next_seq: since, has_more: false, max_seq: await store.maxSeq(project.id), epoch: project.id };
+    // The page stops at the hub's own body limit, so rows that are each fine cannot add up to a response nobody can build or
+    // read. The first row always goes (push caps keep one row well below the limit), so the cursor always moves.
+    let used = Buffer.byteLength(JSON.stringify(result)) + 64; let taken = 0; let full = false;
+    for (let i = 0; i < Math.min(entries.length, limit) && !full; i += PULL_CHUNK) {
+      const chunk = entries.slice(i, Math.min(i + PULL_CHUNK, limit));
+      const ids = (t: string) => chunk.filter((e) => e.table === t).map((e) => e.rowId);
+      const rows = new Map<string, object>();
+      for (const x of await store.getSessions(ids('sessions'))) rows.set('sessions:' + x.id, x);
+      for (const x of await store.getObservations(ids('observations'))) { if (!vectors) delete (x as { embedding?: unknown }).embedding; rows.set('observations:' + x.id, x); }
+      for (const x of await store.getSummaries(ids('summaries'))) rows.set('summaries:' + x.id, x);
+      for (const e of chunk) {
+        const row = rows.get(`${e.table}:${e.rowId}`);
+        if (row) {
+          const n = Buffer.byteLength(JSON.stringify(row)) + 1;
+          if (taken > 0 && used + n > cfg.bodyLimit) { full = true; break; }
+          (result[e.table] as object[]).push(row); used += n;
+        }
+        taken++; result.next_seq = e.seq;
+      }
+    }
+    result.has_more = taken < entries.length;
     return ok(result);
   }
 

@@ -180,6 +180,38 @@ describe('hub isolated servers', () => {
     const h = await startHub(st, { port: 0, embeddingModel: 'bge-m3', embeddingDims: 4, bodyLimit: 2_000_000, ...cfg }, log);
     return { h, key: k.raw, st };
   };
+  it('pull page is capped by bytes, not only rows', async () => {
+    const limit = 40_000; const { h, key, st } = await open({ bodyLimit: limit });
+    const req = (path: string, body?: unknown) => fetch(`http://127.0.0.1:${h.port}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const sid = newId(); const rows = Array.from({ length: 20 }, (_, i) => hobs({ projectId: 'x', sessionId: sid, title: `b${i}`, narrative: 'n'.repeat(5000) }));
+    expect((await req('/v1/sync/push', { projectKey: 'k/bytes', projectName: 'b', sessions: [hsess('x', { id: sid })], observations: [], summaries: [] })).status).toBe(200);
+    for (let i = 0; i < rows.length; i += 5) expect((await req('/v1/sync/push', { projectKey: 'k/bytes', projectName: 'b', sessions: [], observations: rows.slice(i, i + 5), summaries: [] })).status).toBe(200);
+    const seen: string[] = []; let since = 0; let pages = 0;
+    for (;;) {
+      const res = await req(`/v1/sync/pull?project_key=k%2Fbytes&since=${since}&limit=1000`); const text = await res.text();
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+      const j = JSON.parse(text); seen.push(...j.observations.map((o: any) => o.title)); since = j.next_seq; pages++;
+      if (!j.has_more) break;
+    }
+    expect(pages).toBeGreaterThan(2); expect(seen).toEqual(rows.map((r) => r.title));
+    // a row larger than the page budget still goes alone, so the cursor can move past it
+    const p = (await st.getProjectByKey('k/bytes'))!; const huge = hobs({ projectId: p.id, sessionId: sid, title: 'huge', narrative: 'z'.repeat(60_000) });
+    await st.insertObservations([huge]);
+    const one: any = await (await req(`/v1/sync/pull?project_key=k%2Fbytes&since=${since}`)).json();
+    expect(one.observations.map((o: any) => o.title)).toEqual(['huge']); expect(one.has_more).toBe(false); expect(one.next_seq).toBeGreaterThan(since);
+    await h.close();
+  });
+  it('pull vectors=0 omits embeddings', async () => {
+    const { h, key } = await open({});
+    const req = (path: string, body?: unknown) => fetch(`http://127.0.0.1:${h.port}${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json() as Promise<any>);
+    const sid = newId(); const o = hobs({ projectId: 'x', sessionId: sid, embedding: [1, 0, 0, 0], embeddingModel: 'bge-m3' });
+    expect((await req('/v1/sync/push', { projectKey: 'k/v', projectName: 'v', sessions: [hsess('x', { id: sid })], observations: [o], summaries: [] })).accepted.observations).toBe(1);
+    expect((await req('/v1/sync/pull?project_key=k%2Fv&since=0')).observations[0].embedding).toEqual([1, 0, 0, 0]);
+    const lean = await req('/v1/sync/pull?project_key=k%2Fv&since=0&vectors=0');
+    expect(lean.observations).toHaveLength(1); expect(lean.observations[0]).not.toHaveProperty('embedding');
+    expect(lean.observations[0].embeddingModel).toBe('bge-m3'); expect(PullResultSchema.safeParse(lean).success).toBe(true);
+    await h.close();
+  });
   it('HubDimsMismatch from the store keeps valid rows and rejects the bad row', async () => {
     const { h, key } = await open({ embeddingModel: null, embeddingDims: 2, dims: 4 });
     const sid = newId(); const ok = hobs({ projectId: 'x', sessionId: sid, title: 'plain' }); const bad = hobs({ projectId: 'x', sessionId: sid, title: 'vec', embedding: [1, 0] });
