@@ -8,7 +8,9 @@ const TAIL = 100;
 const PRE_CAP = 256 * 1024;
 
 /** Open-block depth, carried from string to string so a block split across sibling fields still hides what is between. */
-export interface PrivateState { depth: number }
+export interface PrivateState {
+  depth: number;
+}
 
 // Scanner, not regex: nested blocks must not leak their inner text.
 export function stripPrivate(text: string, state: PrivateState = { depth: 0 }): string {
@@ -109,7 +111,8 @@ const PREFIXED_PATTERNS: RegExp[] = [
 // `curl -u user:pw`, `-uuser:pw`, `--user=user:pw`. A numeric `uid:gid`, or a `-u` inside a `docker|podman
 // run|exec|create`, `su`, `sudo`, `git push` (upstream), `rsync` or `scp` command segment (group 1 stops at `; & |`, a newline or a nested `curl`), is a user, not
 // a credential.
-const USER_FLAG = /(\b(?:(?:docker|podman)[ \t]+(?:run|exec|create)|su|sudo|git[ \t]+push|rsync|scp)\b(?:(?!curl\b)[^\n;&|])*)|((?:^|\s)(?:-u|--user)(?:[ \t]{1,5}|=)?["']?)(?!-)([^\s"':]+:[^\s"']+)/gm;
+const USER_FLAG =
+  /(\b(?:(?:docker|podman)[ \t]+(?:run|exec|create)|su|sudo|git[ \t]+push|rsync|scp)\b(?:(?!curl\b)[^\n;&|])*)|((?:^|\s)(?:-u|--user)(?:[ \t]{1,5}|=)?["']?)(?!-)([^\s"':]+:[^\s"']+)/gm;
 // Keyword-anchored, no nested quantifiers: scanning stays linear (ReDoS). Quoted values are
 // escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token,
 // and a bounded `<...>` group (`Map<string, number>`) stays inside the token so it is judged and redacted whole.
@@ -120,13 +123,15 @@ const USER_FLAG = /(\b(?:(?:docker|podman)[ \t]+(?:run|exec|create)|su|sudo|git[
 // around the separator stay on one line, so a YAML parent key (`auth:` then a newline) never takes its child.
 // A JSON-escaped quote (`\"`, a JSON document inside a JSON string) opens a value redacted to end of line: the
 // escape depth cannot be known, so guessing where the value closes would fail open.
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|(?<![a-z])auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url|(?<![a-z])secret[ \t]+access[ \t]+key)[\w.-]{0,40})(\\?["']?\]?(?:[ \t]+\[[^\]\n]{0,40}\])?[ \t]{0,5}([:=])[ \t]{0,5})(?:(\\"[^\n]*)|("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
+const SECRET_ASSIGN =
+  /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|(?<![a-z])auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url|(?<![a-z])secret[ \t]+access[ \t]+key)[\w.-]{0,40})(\\?["']?\]?(?:[ \t]+\[[^\]\n]{0,40}\])?[ \t]{0,5}([:=])[ \t]{0,5})(?:(\\"[^\n]*)|("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
 // An auth scheme word whose credential an earlier rule already redacted.
 const SCHEME_WORD = /^(?:bearer|basic|digest|token)$/i;
 // A TS class member or constructor parameter (`private auth: AuthService`) is a declaration, so a PascalCase value is its type.
 const TS_MODIFIER = /\b(?:private|public|protected|readonly|override|declare)[ \t]+(?:readonly[ \t]+)?[\w$]*$/;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
-const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
+const REFERENCE =
+  /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
 // After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env/log secret
 // (a false positive is cheaper than a leaked secret): a primitive keyword, a PascalCase array (`Foo[]`),
 // a `|` union of those, a well-known generic (`Map<string, number>`), a PascalCase identifier followed by
@@ -136,7 +141,8 @@ const TS_ARRAY = /^[A-Z][A-Za-z_$.]*(?:\[\])+$/;
 const TS_NAME = /^[A-Z][A-Za-z_$.]*$/;
 // Disjoint delimiters keep this linear; one level of nesting (`Promise<Map<a, b>>`) is enough.
 const TS_GENERIC = /^[A-Z][A-Za-z_$.]*<[^<>\n]*(?:<[^<>\n]*>[^<>\n]*)*>(?:\[\])*$/;
-const KNOWN_GENERIC = /^(?:Array|ReadonlyArray|Map|ReadonlyMap|Set|ReadonlySet|WeakMap|WeakSet|Record|Promise|Partial|Required|Readonly|Pick|Omit|Exclude|Extract|NonNullable|ReturnType|Awaited|Iterable|AsyncIterable)</;
+const KNOWN_GENERIC =
+  /^(?:Array|ReadonlyArray|Map|ReadonlyMap|Set|ReadonlySet|WeakMap|WeakSet|Record|Promise|Partial|Required|Readonly|Pick|Omit|Exclude|Extract|NonNullable|ReturnType|Awaited|Iterable|AsyncIterable)</;
 const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
 const PARAM_FOLLOW = /^[ \t]*[,=)]/;
 const UNION_FOLLOW = /^[ \t]*\|[ \t]*([A-Za-z_$][\w$.]*)/;
@@ -170,7 +176,10 @@ function inParamList(before: string): boolean {
   for (const c of head.slice(0, -1)) {
     if ('<([{'.includes(c)) depth++;
     else if ('>)]}'.includes(c)) depth--;
-    if (c === ',' && depth === 0) { pieces.push(cur); cur = ''; } else cur += c;
+    if (c === ',' && depth === 0) {
+      pieces.push(cur);
+      cur = '';
+    } else cur += c;
   }
   pieces.push(cur);
   return pieces.every((p) => {
@@ -184,7 +193,13 @@ function inParamList(before: string): boolean {
 const TYPE_ARGS = /^[A-Za-z_$.[\]|&,<> ]*$/;
 function typeArgsOk(bare: string): boolean {
   const args = bare.slice(bare.indexOf('<') + 1, bare.lastIndexOf('>'));
-  return TYPE_ARGS.test(args) && args.split(/[^A-Za-z_$.]+/).filter(Boolean).every(isTypeName);
+  return (
+    TYPE_ARGS.test(args) &&
+    args
+      .split(/[^A-Za-z_$.]+/)
+      .filter(Boolean)
+      .every(isTypeName)
+  );
 }
 
 function looksLikeType(bare: string, follow: string, before: string): boolean {
@@ -204,22 +219,48 @@ export function redactSecrets(text: string): string {
   out = out.replace(SECRET_ANY, '<redacted>');
   if (out.includes('://')) for (const re of URL_PATTERNS) out = out.replace(re, '$1<redacted>');
   for (const re of PREFIXED_PATTERNS) out = out.replace(re, '$1<redacted>');
-  out = out.replace(USER_FLAG, (m, cmd: string | undefined, pre: string, value: string) => (cmd || /^\d+:\d+$/.test(value) ? m : `${pre}<redacted>`));
-  return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, edq: string | undefined, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
-    if (edq) return `${name}${pre}\\"<redacted>`;
-    const q = dq ? '"' : sq ? "'" : '';
-    if (q) return `${name}${pre}${q}<redacted>${q}`;
-    if (!bare || REFERENCE.test(bare)) return m;
-    if (SCHEME_WORD.test(bare) && /^[ \t]+<redacted>/.test(str.slice(offset + m.length, offset + m.length + 80))) return m;
-    if (str[offset + m.length] === '(') return m; // call, e.g. getToken()
-    if (COUNT_KEY.test(str.slice(Math.max(0, offset - 12), offset) + name)) return m;
-    if (sep === ':' && looksLikeType(bare, str.slice(offset + m.length, offset + m.length + 64), str.slice(Math.max(0, offset - 64), offset))) return m;
-    return `${name}${pre}<redacted>`;
-  });
+  out = out.replace(USER_FLAG, (m, cmd: string | undefined, pre: string, value: string) =>
+    cmd || /^\d+:\d+$/.test(value) ? m : `${pre}<redacted>`
+  );
+  return out.replace(
+    SECRET_ASSIGN,
+    (
+      m,
+      name: string,
+      pre: string,
+      sep: string,
+      edq: string | undefined,
+      dq: string | undefined,
+      sq: string | undefined,
+      bare: string | undefined,
+      offset: number,
+      str: string
+    ) => {
+      if (edq) return `${name}${pre}\\"<redacted>`;
+      const q = dq ? '"' : sq ? "'" : '';
+      if (q) return `${name}${pre}${q}<redacted>${q}`;
+      if (!bare || REFERENCE.test(bare)) return m;
+      if (SCHEME_WORD.test(bare) && /^[ \t]+<redacted>/.test(str.slice(offset + m.length, offset + m.length + 80)))
+        return m;
+      if (str[offset + m.length] === '(') return m; // call, e.g. getToken()
+      if (COUNT_KEY.test(str.slice(Math.max(0, offset - 12), offset) + name)) return m;
+      if (
+        sep === ':' &&
+        looksLikeType(
+          bare,
+          str.slice(offset + m.length, offset + m.length + 64),
+          str.slice(Math.max(0, offset - 64), offset)
+        )
+      )
+        return m;
+      return `${name}${pre}<redacted>`;
+    }
+  );
 }
 
 const SECRET_KEY = /secret|token|passw(or)?d|api[_-]?key|private[_-]?key|authorization|cookie/i;
-const COUNT_KEY = /(^|_)(count|max|min|limit|len|length)s?$|tokens?_?(count|used)|max_?tokens|(input|output|total)_?tokens/i;
+const COUNT_KEY =
+  /(^|_)(count|max|min|limit|len|length)s?$|tokens?_?(count|used)|max_?tokens|(input|output|total)_?tokens/i;
 
 const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
 const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
@@ -250,16 +291,29 @@ function redactCapped(s: string): string {
 }
 
 function sanitizeString(s: string, max: number, state: PrivateState): string {
-  const noImages = stripPrivate(s, state).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
+  const noImages = stripPrivate(s, state).replace(
+    DATA_IMAGE,
+    (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`
+  );
   return truncate(redactCapped(noImages), max);
 }
 
 /** Pass one `state` to every part of one host payload (input and output) so a private block can span them. */
-export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: PrivateState = { depth: 0 }, depth = 0, hide = false): unknown {
+export function sanitizeToolPayload(
+  value: unknown,
+  maxChars = 16000,
+  state: PrivateState = { depth: 0 },
+  depth = 0,
+  hide = false
+): unknown {
   // Fail closed: a too-deep value is replaced, never passed through raw.
   if (depth > MAX_DEPTH) return '<elided: max depth>';
-  if (typeof value === 'string') { const s = sanitizeString(value, maxChars, state); return hide ? '<redacted>' : s; }   // array items under a secret key
-  if (value === null || typeof value !== 'object') return state.depth > 0 && value !== undefined ? null : hide && typeof value === 'number' ? '<redacted>' : value;
+  if (typeof value === 'string') {
+    const s = sanitizeString(value, maxChars, state);
+    return hide ? '<redacted>' : s;
+  } // array items under a secret key
+  if (value === null || typeof value !== 'object')
+    return state.depth > 0 && value !== undefined ? null : hide && typeof value === 'number' ? '<redacted>' : value;
   if (Array.isArray(value)) return value.map((v) => sanitizeToolPayload(v, maxChars, state, depth + 1, hide));
   const rec = value as Record<string, unknown>;
   if (rec.type === 'image' || rec.type === 'image_url') return { type: 'image', elided: true };
@@ -270,7 +324,10 @@ export function sanitizeToolPayload(value: unknown, maxChars = 16000, state: Pri
     const secretKey = (x: string) => SECRET_KEY.test(x) && !COUNT_KEY.test(x);
     // Under a secret-named key every string or number leaf is hidden, also inside arrays and objects (`{"password": ["x"]}`).
     const hideV = hide || secretKey(rawKey) || secretKey(k);
-    out[k] = hideV && (typeof v === 'string' || typeof v === 'number') ? '<redacted>' : sanitizeToolPayload(v, maxChars, state, depth + 1, hideV);
+    out[k] =
+      hideV && (typeof v === 'string' || typeof v === 'number')
+        ? '<redacted>'
+        : sanitizeToolPayload(v, maxChars, state, depth + 1, hideV);
   }
   return out;
 }

@@ -6,7 +6,8 @@ describe('ids', () => {
     expect(newId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
   it('shortId differs for back-to-back ids', () => {
-    const a = newId(), b = newId();
+    const a = newId(),
+      b = newId();
     expect(shortId(a)).toHaveLength(8);
     expect(shortId(a)).not.toBe(shortId(b));
   });

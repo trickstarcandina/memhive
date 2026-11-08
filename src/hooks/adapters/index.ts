@@ -1,7 +1,14 @@
 import type { HostAdapter } from '../types.js';
 import { normalizeHookPayload, formatHookContext } from './normalize.js';
 
-const CLAUDE_CODE_EVENTS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SessionEnd']);
+const CLAUDE_CODE_EVENTS = new Set([
+  'SessionStart',
+  'UserPromptSubmit',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'Stop',
+  'SessionEnd',
+]);
 // No PostCompact: Codex ignores its plain stdout and refuses unknown JSON fields; it re-runs SessionStart (source compact) instead.
 const CODEX_EVENTS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
 

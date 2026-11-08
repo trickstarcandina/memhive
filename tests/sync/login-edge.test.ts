@@ -10,7 +10,20 @@ import { loadCredentials, saveCredentials } from '../../src/sync/credentials.js'
 import { waitFor } from '../helpers/wait.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
-const cap = () => { const o = { out: '', err: '' }; return { o, io: { stdout: (s: string) => { o.out += s; }, stderr: (s: string) => { o.err += s; } } }; };
+const cap = () => {
+  const o = { out: '', err: '' };
+  return {
+    o,
+    io: {
+      stdout: (s: string) => {
+        o.out += s;
+      },
+      stderr: (s: string) => {
+        o.err += s;
+      },
+    },
+  };
+};
 const KEY = 'mh_' + 'K'.repeat(43);
 
 let server: http.Server | undefined;
@@ -18,14 +31,20 @@ const origStdin = Object.getOwnPropertyDescriptor(process, 'stdin')!;
 afterEach(async () => {
   Object.defineProperty(process, 'stdin', origStdin);
   vi.restoreAllMocks();
-  if (server) { server.closeAllConnections(); const s = server; server = undefined; await new Promise((r) => s.close(r)); }
+  if (server) {
+    server.closeAllConnections();
+    const s = server;
+    server = undefined;
+    await new Promise((r) => s.close(r));
+  }
 });
 // Hub stub: /v1/me ok; /v1/config returns the given status/body.
 const fakeHub = async (config: { status: number; body?: unknown }): Promise<string> => {
   server = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.url === '/v1/me') return void res.end('{"user":"alice"}');
-    res.statusCode = config.status; res.end(JSON.stringify(config.body ?? {}));
+    res.statusCode = config.status;
+    res.end(JSON.stringify(config.body ?? {}));
   });
   await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
   return `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
@@ -36,7 +55,8 @@ describe('login edge cases', () => {
     const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => stdin });
     Object.defineProperty(process, 'stdin', { value: stdin, configurable: true });
     vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
-    const home = mkHome(); const c = cap();
+    const home = mkHome();
+    const c = cap();
     const p = loginCommand(['https://hub.example.com'], c.io, { home });
     await waitFor(() => stdin.listenerCount('data') > 0, { what: 'key prompt listening' });
     stdin.write('\x03');
@@ -59,7 +79,8 @@ describe('login edge cases', () => {
 
   it('config endpoint failure warns but still logs in and saves the key', async () => {
     const hubUrl = await fakeHub({ status: 500 });
-    const home = mkHome(); const c = cap();
+    const home = mkHome();
+    const c = cap();
     expect(await loginCommand([hubUrl], c.io, { home, readKey: async () => KEY })).toBe(0);
     expect(c.o.out).toContain('logged in to');
     expect(c.o.out).toContain('warning: could not read hub config');
@@ -78,7 +99,8 @@ describe('login edge cases', () => {
   it('a failed save leaves no .tmp file behind', () => {
     const home = mkHome();
     // credentials.json is a non-empty directory, so rename(tmp -> target) fails
-    mkdirSync(path.join(home, 'credentials.json')); writeFileSync(path.join(home, 'credentials.json', 'keep'), 'x');
+    mkdirSync(path.join(home, 'credentials.json'));
+    writeFileSync(path.join(home, 'credentials.json', 'keep'), 'x');
     expect(() => saveCredentials(home, { hubs: { 'https://b': { key: 'k', user: 'u' } } })).toThrow();
     expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });

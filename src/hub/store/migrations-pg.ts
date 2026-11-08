@@ -1,6 +1,7 @@
 /** dims is interpolated into DDL, so it must be a plain integer. */
 export function assertValidDims(dims: number | null): void {
-  if (dims !== null && !(Number.isInteger(dims) && dims >= 1 && dims <= 16000)) throw new Error(`invalid embedding dims: ${String(dims)}`);
+  if (dims !== null && !(Number.isInteger(dims) && dims >= 1 && dims <= 16000))
+    throw new Error(`invalid embedding dims: ${String(dims)}`);
 }
 
 export function hubPgMigrations(dims: number | null): string[] {

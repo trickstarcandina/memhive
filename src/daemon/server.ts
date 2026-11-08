@@ -26,7 +26,8 @@ import { defaultUser, loadCredentials } from '../sync/credentials.js';
 
 function tokenOk(got: string | string[] | undefined, want: string): boolean {
   if (typeof got !== 'string') return false;
-  const a = Buffer.from(got); const b = Buffer.from(want);
+  const a = Buffer.from(got);
+  const b = Buffer.from(want);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
@@ -39,27 +40,66 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   ensureHomeDir(home);
   const settings = loadSettings(home, env);
   const logger = createLogger(home, 'daemon', env);
-  const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, model: settings.embed?.model ?? null, warn: (m, d) => logger.warn(m, d) });
+  const store = new SqliteStore(resolvePaths(home).db, {
+    dims: settings.embed?.dims ?? null,
+    model: settings.embed?.model ?? null,
+    warn: (m, d) => logger.warn(m, d),
+  });
   // DatabaseNewerThanBinary lands here: logged for doctor and the log reader, then the daemon exits with it.
-  try { store.migrate(); } catch (e) { store.close(); logger.error('cannot open the database', { error: e instanceof Error ? e.message : String(e) }); throw e; }
+  try {
+    store.migrate();
+  } catch (e) {
+    store.close();
+    logger.error('cannot open the database', { error: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
   // Degraded sqlite-vec drops every vector, so do not pay for embedding calls; rows stay NULL for a later backfill.
   const embedder = store.vectorsDegraded ? null : createEmbedder(settings);
   let provider: LlmProvider;
-  try { provider = createProvider(settings); }
-  catch (e) { logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) }); provider = { complete: async () => { throw e; } }; }
+  try {
+    provider = createProvider(settings);
+  } catch (e) {
+    logger.error('no usable LLM provider; observations disabled until settings fixed', { error: String(e) });
+    provider = {
+      complete: async () => {
+        throw e;
+      },
+    };
+  }
   // After an auth failure the observer asks for a new provider; one is built only when settings.json changed.
-  const settingsStamp = () => { try { return statSync(resolvePaths(home).settings).mtimeMs; } catch { return 0; } };
+  const settingsStamp = () => {
+    try {
+      return statSync(resolvePaths(home).settings).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
   let stamp = settingsStamp();
   const reloadProvider = (): LlmProvider | null => {
-    const now = settingsStamp(); if (now === stamp) return null;
+    const now = settingsStamp();
+    if (now === stamp) return null;
     stamp = now;
-    try { return createProvider(loadSettings(home, env)); } catch (e) { logger.warn('settings changed but provider still unusable', { error: String(e) }); return null; }
+    try {
+      return createProvider(loadSettings(home, env));
+    } catch (e) {
+      logger.warn('settings changed but provider still unusable', { error: String(e) });
+      return null;
+    }
   };
   const observer = new Observer({ store, provider, embedder, logger, reloadProvider });
   const userId = defaultUser(loadCredentials(home)) ?? 'local';
   // Read per call: a login after the daemon started is picked up. With several hubs, the linked one decides.
-  const userFor = (project: Project): string => { const c = loadCredentials(home); return (project.hubUrl && c.hubs[project.hubUrl]?.user) || defaultUser(c) || 'local'; };
-  const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null, embedModel: settings.embed?.model ?? null });
+  const userFor = (project: Project): string => {
+    const c = loadCredentials(home);
+    return (project.hubUrl && c.hubs[project.hubUrl]?.user) || defaultUser(c) || 'local';
+  };
+  const sync = new SyncEngine({
+    store,
+    home,
+    logger,
+    embedDims: settings.embed?.dims ?? null,
+    embedModel: settings.embed?.model ?? null,
+  });
   observer.onStored = (projectId) => sync.schedulePush(projectId);
   const paused = pauseReader(home);
   const disabled = envDisabled(env);
@@ -67,7 +107,15 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   // Excluded sessions have no row to remember them by; without this every event of one would spawn git again.
   const excludedSessions = new Set<string>();
   const ctx: DaemonContext = {
-    home, store, observer, embedder, settings, logger, userId, sync, userFor,
+    home,
+    store,
+    observer,
+    embedder,
+    settings,
+    logger,
+    userId,
+    sync,
+    userFor,
     pausedUntil: () => (disabled ? Infinity : paused()),
     excludedCwd: (cwd) => excluded(projectKeyFor(cwd)),
     excludedInfo: excluded,
@@ -75,7 +123,11 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
       if (ctx.pausedUntil() !== null) return null;
       const sk = `${ev.host}\0${ev.hostSessionId}`;
       if (excludedSessions.has(sk)) return null;
-      const skip = () => { if (excludedSessions.size >= 10_000) excludedSessions.clear(); excludedSessions.add(sk); return null; };
+      const skip = () => {
+        if (excludedSessions.size >= 10_000) excludedSessions.clear();
+        excludedSessions.add(sk);
+        return null;
+      };
       let session = store.getSessionByHost(ev.host, ev.hostSessionId);
       // Existing session: reuse its project (no git spawns per event, no split on cwd change).
       let project = session ? store.getProject(session.projectId) : null;
@@ -84,20 +136,52 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
       if (!project) {
         const info = projectKeyFor(ev.cwd);
         if (excluded(info)) return skip();
-        project = store.getOrCreateProject(info.key, info.name); branch = info.branch;
+        project = store.getOrCreateProject(info.key, info.name);
+        branch = info.branch;
       }
       const user = session?.userId ?? userFor(project);
-      if (!session) { session = { id: newId(), projectId: project.id, userId: user, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null, branch }; store.upsertSession(session); }
-      const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId: user };
+      if (!session) {
+        session = {
+          id: newId(),
+          projectId: project.id,
+          userId: user,
+          host: ev.host,
+          hostSessionId: ev.hostSessionId,
+          cwd: ev.cwd,
+          startedAt: ev.at,
+          endedAt: null,
+          syncedAt: null,
+          branch,
+        };
+        store.upsertSession(session);
+      }
+      const sctx: SessionCtx = {
+        sessionId: session.id,
+        projectId: project.id,
+        projectName: project.name,
+        userId: user,
+      };
       return { ctx: sctx, project, branch };
     },
   };
   return ctx;
 }
 
-export class DaemonAlreadyRunning extends Error { constructor() { super('another memhive daemon is already running'); this.name = 'DaemonAlreadyRunning'; } }
+export class DaemonAlreadyRunning extends Error {
+  constructor() {
+    super('another memhive daemon is already running');
+    this.name = 'DaemonAlreadyRunning';
+  }
+}
 
-function pidAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Exclusive lock so two racing spawns cannot both own daemon.json. A holder counts as live if its pid is alive and it
 // either answers an authenticated health check or took the lock under 5 s ago (still starting up).
@@ -105,78 +189,150 @@ async function acquireLock(home: string, lockWaitMs: number): Promise<string> {
   const file = path.join(home, 'daemon.lock');
   const waitUntil = Date.now() + lockWaitMs;
   for (let attempt = 0; attempt < 5; attempt++) {
-    try { writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 }); return file; }
-    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
-    let holder = NaN; let mtime = 0;
-    try { holder = Number(readFileSync(file, 'utf8')); mtime = statSync(file).mtimeMs; } catch { continue; }   // vanished: retry
+    try {
+      writeFileSync(file, String(process.pid), { flag: 'wx', mode: 0o600 });
+      return file;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    }
+    let holder = NaN;
+    let mtime = 0;
+    try {
+      holder = Number(readFileSync(file, 'utf8'));
+      mtime = statSync(file).mtimeMs;
+    } catch {
+      continue;
+    } // vanished: retry
     if (pidAlive(holder)) {
       const info = readDaemonInfo(home);
-      if (Date.now() - mtime < 5000 || (info && info.pid === holder && await new DaemonClient(info).health(500))) throw new DaemonAlreadyRunning();
+      if (Date.now() - mtime < 5000 || (info && info.pid === holder && (await new DaemonClient(info).health(500))))
+        throw new DaemonAlreadyRunning();
       // Alive but not answering: often a daemon that is shutting down (its HTTP server closes first, the store last).
       // Wait for it to exit or release the lock; never break the lock under a live memhive daemon.
-      while (Date.now() < waitUntil && pidAlive(holder) && existsSync(file)) await new Promise((r) => setTimeout(r, 100));
-      if (!existsSync(file)) { attempt--; continue; }
+      while (Date.now() < waitUntil && pidAlive(holder) && existsSync(file))
+        await new Promise((r) => setTimeout(r, 100));
+      if (!existsSync(file)) {
+        attempt--;
+        continue;
+      }
       if (pidAlive(holder) && (isOurDaemon(home, holder) || !procKnows(holder))) throw new DaemonAlreadyRunning();
       // Dead now, or /proc shows the pid was reused by another program: the lock is stale.
     }
     // Break the stale lock under a second exclusive lock and only if it is still the file judged stale, so two
     // starters cannot both remove it (the second would delete the first one's fresh lock) and both start.
     const breaker = `${file}.break`;
-    try { writeFileSync(breaker, String(process.pid), { flag: 'wx', mode: 0o600 }); }
-    catch (e) {
+    try {
+      writeFileSync(breaker, String(process.pid), { flag: 'wx', mode: 0o600 });
+    } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-      try { if (Date.now() - statSync(breaker).mtimeMs > 5000) rmSync(breaker, { force: true }); } catch { /* gone */ }   // breaker left by a crash
+      try {
+        if (Date.now() - statSync(breaker).mtimeMs > 5000) rmSync(breaker, { force: true });
+      } catch {
+        /* gone */
+      } // breaker left by a crash
       await new Promise((r) => setTimeout(r, 50));
       continue;
     }
-    try { if (statSync(file).mtimeMs === mtime && Number(readFileSync(file, 'utf8')) === holder) rmSync(file, { force: true }); }
-    catch { /* already gone */ }
-    finally { rmSync(breaker, { force: true }); }
+    try {
+      if (statSync(file).mtimeMs === mtime && Number(readFileSync(file, 'utf8')) === holder)
+        rmSync(file, { force: true });
+    } catch {
+      /* already gone */
+    } finally {
+      rmSync(breaker, { force: true });
+    }
   }
   throw new DaemonAlreadyRunning();
 }
 
-export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idleMs?: number; lockWaitMs?: number } = {}): Promise<{ info: DaemonInfo; close(): Promise<void> }> {
+export async function startDaemon(
+  ctx: DaemonContext,
+  opts: { port?: number; idleMs?: number; lockWaitMs?: number } = {}
+): Promise<{ info: DaemonInfo; close(): Promise<void> }> {
   const lock = await acquireLock(ctx.home, opts.lockWaitMs ?? 15_000);
   const token = randomBytes(24).toString('base64url');
   const idleMs = opts.idleMs ?? 30 * 60 * 1000;
   let idleTimer: NodeJS.Timeout | null = null;
   let closing: Promise<void> | null = null;
-  const touch = () => { if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => closeSafe(), idleMs); idleTimer.unref?.(); };
+  const touch = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => closeSafe(), idleMs);
+    idleTimer.unref?.();
+  };
 
-  const closeSafe = () => { close().catch((e) => ctx.logger.warn('close failed', { error: String(e) })); };
-  const server = createJsonServer(async (method, url, body) => {
-    if (url.pathname === '/healthz') {
-      const nonce = url.searchParams.get('nonce') ?? '';
-      return { status: 200, body: { ok: true, version: VERSION, proof: healthProof(token, nonce, process.pid) } };   // pid is bound in the proof, not disclosed
-    }
-    touch();
-    if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(closeSafe, 10); return { status: 200, body: {} }; }
-    try { return await handleRoute(ctx, method, url, body); }
-    catch (e) { ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) }); return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } }; }
-  }, (url, headers) => hostOk(headers.host, port()) && (url.pathname === '/healthz' || tokenOk(headers['x-memhive-daemon-token'], token)));
+  const closeSafe = () => {
+    close().catch((e) => ctx.logger.warn('close failed', { error: String(e) }));
+  };
+  const server = createJsonServer(
+    async (method, url, body) => {
+      if (url.pathname === '/healthz') {
+        const nonce = url.searchParams.get('nonce') ?? '';
+        return { status: 200, body: { ok: true, version: VERSION, proof: healthProof(token, nonce, process.pid) } }; // pid is bound in the proof, not disclosed
+      }
+      touch();
+      if (method === 'POST' && url.pathname === '/v1/shutdown') {
+        setTimeout(closeSafe, 10);
+        return { status: 200, body: {} };
+      }
+      try {
+        return await handleRoute(ctx, method, url, body);
+      } catch (e) {
+        ctx.logger.error('route failed', { path: url.pathname, error: e instanceof Error ? e.stack : String(e) });
+        return { status: 500, body: { error: { code: 'internal', message: 'internal error' } } };
+      }
+    },
+    (url, headers) =>
+      hostOk(headers.host, port()) && (url.pathname === '/healthz' || tokenOk(headers['x-memhive-daemon-token'], token))
+  );
   const port = () => (server.address() as AddressInfo | null)?.port ?? -1;
-  try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(opts.port ?? 0, '127.0.0.1', resolve); }); }
-  catch (e) { rmSync(lock, { force: true }); throw e; }
-  const info: DaemonInfo = { port: (server.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString(), version: VERSION };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(opts.port ?? 0, '127.0.0.1', resolve);
+    });
+  } catch (e) {
+    rmSync(lock, { force: true });
+    throw e;
+  }
+  const info: DaemonInfo = {
+    port: (server.address() as AddressInfo).port,
+    pid: process.pid,
+    token,
+    startedAt: new Date().toISOString(),
+    version: VERSION,
+  };
   writeDaemonInfo(ctx.home, info);
   touch();
   ctx.logger.info('daemon started', { port: info.port });
 
-  const tick = () => { runMaintenance(ctx); void ctx.observer.backfill(); };
+  const tick = () => {
+    runMaintenance(ctx);
+    void ctx.observer.backfill();
+  };
   tick();
-  const embedTimer = setInterval(tick, 10 * 60 * 1000); embedTimer.unref?.();
+  const embedTimer = setInterval(tick, 10 * 60 * 1000);
+  embedTimer.unref?.();
 
-  const close = () => closing ??= (async () => {
-    if (idleTimer) clearTimeout(idleTimer); clearInterval(embedTimer);
-    await new Promise<void>((r) => server.close(() => r()));   // no new events past this point
-    server.closeAllConnections?.();
-    try { await ctx.observer.close(); } catch { /* best effort */ }   // running summaries finish before the store closes
-    await ctx.sync?.close();   // a background pull may still be writing to the store; finish before the lock is released
-    if (readDaemonInfo(ctx.home)?.token === token) removeDaemonInfo(ctx.home);   // never delete a successor's file
-    try { if (Number(readFileSync(lock, 'utf8')) === process.pid) rmSync(lock, { force: true }); } catch { /* gone */ }
-    ctx.store.close();
-    ctx.logger.info('daemon stopped');
-  })();
+  const close = () =>
+    (closing ??= (async () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      clearInterval(embedTimer);
+      await new Promise<void>((r) => server.close(() => r())); // no new events past this point
+      server.closeAllConnections?.();
+      try {
+        await ctx.observer.close();
+      } catch {
+        /* best effort */
+      } // running summaries finish before the store closes
+      await ctx.sync?.close(); // a background pull may still be writing to the store; finish before the lock is released
+      if (readDaemonInfo(ctx.home)?.token === token) removeDaemonInfo(ctx.home); // never delete a successor's file
+      try {
+        if (Number(readFileSync(lock, 'utf8')) === process.pid) rmSync(lock, { force: true });
+      } catch {
+        /* gone */
+      }
+      ctx.store.close();
+      ctx.logger.info('daemon stopped');
+    })());
   return { info, close };
 }

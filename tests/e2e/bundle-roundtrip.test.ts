@@ -14,43 +14,89 @@ import { waitFor } from '../helpers/wait.js';
 const BUNDLE = path.resolve(import.meta.dirname, '../../dist/memhive.cjs');
 
 const root = mkdtempSync(path.join(tmpdir(), 'mh-e2e-'));
-const dirs = { HOME: path.join(root, 'home'), MEMHIVE_HOME: path.join(root, 'mh'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CODEX_HOME: path.join(root, 'codex') };
+const dirs = {
+  HOME: path.join(root, 'home'),
+  MEMHIVE_HOME: path.join(root, 'mh'),
+  CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
+  CODEX_HOME: path.join(root, 'codex'),
+};
 const project = path.join(root, 'project');
-let llm: Server; let llmCalls = 0; let env: NodeJS.ProcessEnv = {};
+let llm: Server;
+let llmCalls = 0;
+let env: NodeJS.ProcessEnv = {};
 
-const run = (args: string[], stdin = '', timeoutMs = 10_000) => new Promise<{ code: number | null; out: string; err: string; ms: number }>((resolve, reject) => {
-  const t0 = Date.now();
-  const c = spawn(process.execPath, [BUNDLE, ...args], { cwd: project, env, stdio: ['pipe', 'pipe', 'pipe'] });
-  let out = ''; let err = '';
-  c.stdout.on('data', (d) => (out += d)); c.stderr.on('data', (d) => (err += d));
-  const kill = setTimeout(() => c.kill('SIGKILL'), timeoutMs);
-  c.on('error', reject);
-  c.on('close', (code) => { clearTimeout(kill); resolve({ code, out, err, ms: Date.now() - t0 }); });
-  c.stdin.end(stdin);
-});
-const hook = (event: string, extra: object) => run(['hook', 'claude-code', event], JSON.stringify({ session_id: 'e2e-1', cwd: project, hook_event_name: event, ...extra }));
-const daemonPid = (): number | null => { try { return JSON.parse(readFileSync(path.join(dirs.MEMHIVE_HOME, 'daemon.json'), 'utf8')).pid; } catch { return null; } };
-const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const run = (args: string[], stdin = '', timeoutMs = 10_000) =>
+  new Promise<{ code: number | null; out: string; err: string; ms: number }>((resolve, reject) => {
+    const t0 = Date.now();
+    const c = spawn(process.execPath, [BUNDLE, ...args], { cwd: project, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    c.stdout.on('data', (d) => (out += d));
+    c.stderr.on('data', (d) => (err += d));
+    const kill = setTimeout(() => c.kill('SIGKILL'), timeoutMs);
+    c.on('error', reject);
+    c.on('close', (code) => {
+      clearTimeout(kill);
+      resolve({ code, out, err, ms: Date.now() - t0 });
+    });
+    c.stdin.end(stdin);
+  });
+const hook = (event: string, extra: object) =>
+  run(
+    ['hook', 'claude-code', event],
+    JSON.stringify({ session_id: 'e2e-1', cwd: project, hook_event_name: event, ...extra })
+  );
+const daemonPid = (): number | null => {
+  try {
+    return JSON.parse(readFileSync(path.join(dirs.MEMHIVE_HOME, 'daemon.json'), 'utf8')).pid;
+  } catch {
+    return null;
+  }
+};
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 describe.skipIf(!existsSync(BUNDLE))('built bundle round trip', () => {
   let pid: number | null = null;
   beforeAll(async () => {
     for (const d of [...Object.values(dirs), project]) mkdirSync(d, { recursive: true });
     llm = createServer((req, res) => {
-      let body = ''; req.on('data', (c) => (body += c));
+      let body = '';
+      req.on('data', (c) => (body += c));
       req.on('end', () => {
         llmCalls++;
         const system = JSON.parse(body).messages[0].content as string;
         const content = system.includes('summarize one turn')
           ? { request: 'wire the e2e test', learned: 'bundle works', completed: 'round trip', next_steps: '' }
-          : { observations: [{ type: 'decision', title: 'Bundle e2e marker zebracorn', facts: ['detached daemon'], narrative: 'Hooks reached the daemon.' }] };
-        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+          : {
+              observations: [
+                {
+                  type: 'decision',
+                  title: 'Bundle e2e marker zebracorn',
+                  facts: ['detached daemon'],
+                  narrative: 'Hooks reached the daemon.',
+                },
+              ],
+            };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
       });
     });
     await new Promise<void>((r) => llm.listen(0, '127.0.0.1', r));
     // only what a user would have, pointed at temp dirs; no MEMHIVE_* from the outer shell
     env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('MEMHIVE_')));
-    Object.assign(env, dirs, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: `http://127.0.0.1:${(llm.address() as AddressInfo).port}/v1`, MEMHIVE_LLM_MODEL: 'fake' });
+    Object.assign(env, dirs, {
+      MEMHIVE_LLM_PROVIDER: 'openai-compat',
+      MEMHIVE_LLM_BASE_URL: `http://127.0.0.1:${(llm.address() as AddressInfo).port}/v1`,
+      MEMHIVE_LLM_MODEL: 'fake',
+    });
   });
   afterAll(async () => {
     // never leave the detached daemon behind, even when an assertion failed
@@ -64,23 +110,44 @@ describe.skipIf(!existsSync(BUNDLE))('built bundle round trip', () => {
     expect(start.code, start.err).toBe(0);
     const out = JSON.parse(start.out);
     expect(out.hookSpecificOutput.additionalContext).toContain('memhive ·');
-    pid = daemonPid(); expect(pid).not.toBeNull(); expect(alive(pid!)).toBe(true); expect(pid).not.toBe(process.pid);
+    pid = daemonPid();
+    expect(pid).not.toBeNull();
+    expect(alive(pid!)).toBe(true);
+    expect(pid).not.toBe(process.pid);
 
     // (b) 8 tool events and a Stop, each a separate process within the 2 s budget
     for (let i = 0; i < 8; i++) {
-      const r = await hook('PostToolUse', { tool_name: 'Edit', tool_input: { file_path: path.join(project, `f${i}.ts`) }, tool_response: { success: true } });
-      expect(r.code).toBe(0); expect(r.ms).toBeLessThan(2000);
+      const r = await hook('PostToolUse', {
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(project, `f${i}.ts`) },
+        tool_response: { success: true },
+      });
+      expect(r.code).toBe(0);
+      expect(r.ms).toBeLessThan(2000);
     }
     const stop = await hook('Stop', { stop_hook_active: false });
-    expect(stop.code).toBe(0); expect(stop.ms).toBeLessThan(2000);
+    expect(stop.code).toBe(0);
+    expect(stop.ms).toBeLessThan(2000);
 
     // (c) the fake LLM was called and the observation is searchable through the CLI
     await waitFor(() => llmCalls > 0, { timeout: 15_000, what: 'LLM called' });
-    const hit = await waitFor(async () => { const r = await run(['search', '--json', 'zebracorn']); return r.code === 0 && JSON.parse(r.out).results?.length ? JSON.parse(r.out).results[0] : null; }, { timeout: 15_000, interval: 200, what: 'observation searchable' });
+    const hit = await waitFor(
+      async () => {
+        const r = await run(['search', '--json', 'zebracorn']);
+        return r.code === 0 && JSON.parse(r.out).results?.length ? JSON.parse(r.out).results[0] : null;
+      },
+      { timeout: 15_000, interval: 200, what: 'observation searchable' }
+    );
     expect(hit.title).toBe('Bundle e2e marker zebracorn');
 
     // (d) MCP over stdio
-    const transport = new StdioClientTransport({ command: process.execPath, args: [BUNDLE, 'mcp'], cwd: project, env: env as Record<string, string>, stderr: 'pipe' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [BUNDLE, 'mcp'],
+      cwd: project,
+      env: env as Record<string, string>,
+      stderr: 'pipe',
+    });
     const client = new Client({ name: 'e2e', version: '0' });
     await client.connect(transport);
     try {
@@ -90,8 +157,11 @@ describe.skipIf(!existsSync(BUNDLE))('built bundle round trip', () => {
       const id = s.match(/#([0-9a-f]{8})/)![1];
       expect(text(await client.callTool({ name: 'timeline', arguments: { anchor_id: id } }))).toContain('zebracorn');
       const full = text(await client.callTool({ name: 'get_observations', arguments: { ids: [id] } }));
-      expect(full).toContain('Hooks reached the daemon.'); expect(full).toContain('<<<narrative');
-    } finally { await client.close(); }
+      expect(full).toContain('Hooks reached the daemon.');
+      expect(full).toContain('<<<narrative');
+    } finally {
+      await client.close();
+    }
 
     // (e) daemon stop: process gone, daemon.json and lock removed
     const st = await run(['daemon', 'stop']);

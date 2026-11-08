@@ -31,7 +31,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build",
-    "pack:check": "node scripts/check-pack.mjs"
+    "pack:check": "node scripts/check-pack.mjs",
+    "format": "biome format --write ."
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -43,6 +44,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.23.1",

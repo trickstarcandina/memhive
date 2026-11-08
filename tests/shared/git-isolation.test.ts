@@ -13,8 +13,11 @@ describe('test-run git isolation', () => {
     expect(projectKeyFor(dir).key).toMatch(/^path:/);
   });
   it('a fixture repo inside the run dir is still found', () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'mh-git-')); const sub = path.join(dir, 'a', 'b'); mkdirSync(sub, { recursive: true });
-    spawnSync('git', ['init', '-q', dir]); spawnSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/a/iso.git']);
+    const dir = mkdtempSync(path.join(tmpdir(), 'mh-git-'));
+    const sub = path.join(dir, 'a', 'b');
+    mkdirSync(sub, { recursive: true });
+    spawnSync('git', ['init', '-q', dir]);
+    spawnSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/a/iso.git']);
     expect(projectKeyFor(sub).key).toBe('github.com/a/iso');
   });
 });

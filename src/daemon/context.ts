@@ -17,11 +17,26 @@ export interface SyncHooks {
   hubErrors?(): Array<{ hub: string; error: string }>;
   /** The linked hub's sync protocol, or null when unknown (decides whether a forget reaches the team). */
   hubProtocol?(project: Project): Promise<number | null>;
-  syncNow(project: Project): Promise<{ pushed: { accepted: { sessions: number; observations: number; summaries: number }; rejected: Array<{ id: string; reason: string }> } | null; pulled: number; error?: string }>;
+  syncNow(
+    project: Project
+  ): Promise<{
+    pushed: {
+      accepted: { sessions: number; observations: number; summaries: number };
+      rejected: Array<{ id: string; reason: string }>;
+    } | null;
+    pulled: number;
+    error?: string;
+  }>;
   close(): void | Promise<void>;
 }
 export interface DaemonContext {
-  home: string; store: Store; observer: Observer; embedder: Embedder | null; settings: Settings; logger: Logger; userId: string;
+  home: string;
+  store: Store;
+  observer: Observer;
+  embedder: Embedder | null;
+  settings: Settings;
+  logger: Logger;
+  userId: string;
   sync: SyncHooks | null;
   /** null: memhive is paused or disabled, or the project is excluded; the event must not be recorded. */
   resolveSession(ev: HookEvent): { ctx: SessionCtx; project: Project; branch: string | null } | null;
@@ -29,7 +44,7 @@ export interface DaemonContext {
   pausedUntil(): number | null;
   /** Exclusion by settings.excludeProjects or `.memhive.json` for a working directory (spawns git). */
   excludedCwd(cwd: string): boolean;
-  excludedInfo(info: ProjectInfo): boolean;   // same, for a key already resolved
+  excludedInfo(info: ProjectInfo): boolean; // same, for a key already resolved
   /** The user of the hub the project is linked to; else the default user (`userId`). */
   userFor(project: Project): string;
 }

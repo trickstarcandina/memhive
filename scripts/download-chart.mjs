@@ -73,7 +73,7 @@ export function toWeeks(days) {
 export function niceStep(max, divisions = 4) {
   const raw = Math.max(max / divisions, 1);
   const power = 10 ** Math.floor(Math.log10(raw));
-  return [1, 2, 5, 10].find(step => step * power >= raw) * power;
+  return [1, 2, 5, 10].find((step) => step * power >= raw) * power;
 }
 
 /**
@@ -81,7 +81,7 @@ export function niceStep(max, divisions = 4) {
  * @returns {string}
  */
 function escape(text) {
-  return String(text).replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
+  return String(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
 /**
@@ -116,37 +116,37 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
     `<rect x="0.5" y="0.5" width="${WIDTH - 1}" height="${HEIGHT - 1}" rx="6" fill="${theme.background}" stroke="${theme.border}"/>`,
     `<text x="${PLOT.left - 32}" y="32" font-size="16" font-weight="600" fill="${theme.text}">npm downloads per week</text>`,
     `<text x="${PLOT.left - 32}" y="54" font-size="12" fill="${theme.muted}">${escape(
-      `${full.format(total)} total · ${PACKAGE} · updated ${updated}`,
-    )}</text>`,
+      `${full.format(total)} total · ${PACKAGE} · updated ${updated}`
+    )}</text>`
   );
 
   if (!weeks.length) {
     parts.push(
       `<text x="${WIDTH / 2}" y="${PLOT.top + plotHeight / 2}" font-size="13" text-anchor="middle" fill="${
         theme.muted
-      }">No downloads recorded yet</text>`,
+      }">No downloads recorded yet</text>`
     );
     return wrap(parts);
   }
 
   // Y axis and horizontal grid.
-  const max = Math.max(...weeks.map(week => week.downloads), 1);
+  const max = Math.max(...weeks.map((week) => week.downloads), 1);
   const step = niceStep(max);
   const top = Math.ceil(max / step) * step;
-  const y = value => bottom - (value / top) * plotHeight;
+  const y = (value) => bottom - (value / top) * plotHeight;
   for (let value = 0; value <= top; value += step) {
     parts.push(
       `<line x1="${PLOT.left}" x2="${WIDTH - PLOT.right}" y1="${y(value)}" y2="${y(value)}" stroke="${theme.grid}"/>`,
       `<text x="${PLOT.left - 8}" y="${y(value) + 4}" font-size="11" text-anchor="end" fill="${
         theme.muted
-      }">${compact.format(value)}</text>`,
+      }">${compact.format(value)}</text>`
     );
   }
 
   // Time-based x axis, so release lines land on their date rather than on a bar.
   const t0 = time(weeks[0].start);
   const t1 = time(weeks.at(-1).end) + DAY;
-  const x = t => PLOT.left + ((t - t0) / (t1 - t0)) * plotWidth;
+  const x = (t) => PLOT.left + ((t - t0) / (t1 - t0)) * plotWidth;
 
   for (const week of weeks) {
     const left = x(time(week.start));
@@ -155,9 +155,9 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
     parts.push(
       `<rect x="${(left + gap).toFixed(1)}" y="${y(week.downloads).toFixed(1)}" width="${Math.max(
         width - gap * 2,
-        1,
+        1
       ).toFixed(1)}" height="${(bottom - y(week.downloads)).toFixed(1)}" rx="2" fill="${theme.bar}">` +
-        `<title>${escape(`${week.start} – ${week.end}: ${full.format(week.downloads)}`)}</title></rect>`,
+        `<title>${escape(`${week.start} – ${week.end}: ${full.format(week.downloads)}`)}</title></rect>`
     );
   }
 
@@ -177,11 +177,11 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
       date.getUTCMonth() === 0 ? `${monthName.format(date)} ${date.getUTCFullYear()}` : monthName.format(date);
     parts.push(
       `<line x1="${at}" x2="${at}" y1="${bottom}" y2="${bottom + 4}" stroke="${theme.muted}"/>`,
-      `<text x="${at}" y="${bottom + 18}" font-size="11" text-anchor="middle" fill="${theme.muted}">${label}</text>`,
+      `<text x="${at}" y="${bottom + 18}" font-size="11" text-anchor="middle" fill="${theme.muted}">${label}</text>`
     );
   }
   parts.push(
-    `<line x1="${PLOT.left}" x2="${WIDTH - PLOT.right}" y1="${bottom}" y2="${bottom}" stroke="${theme.border}"/>`,
+    `<line x1="${PLOT.left}" x2="${WIDTH - PLOT.right}" y1="${bottom}" y2="${bottom}" stroke="${theme.border}"/>`
   );
 
   // Release lines. Labels use two rows so releases a few days apart do not overlap.
@@ -192,16 +192,16 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
     // A release in the dropped first week is pinned to the left edge.
     const at = Math.max(x(date), PLOT.left);
     parts.push(
-      `<line x1="${at}" x2="${at}" y1="${PLOT.top - 6}" y2="${bottom}" stroke="${theme.release}" stroke-dasharray="3 3"/>`,
+      `<line x1="${at}" x2="${at}" y1="${PLOT.top - 6}" y2="${bottom}" stroke="${theme.release}" stroke-dasharray="3 3"/>`
     );
-    const row = rows.findIndex(last => at - last > 56);
+    const row = rows.findIndex((last) => at - last > 56);
     if (row === -1) continue;
     rows[row] = at;
     // Near the right edge, put the label left of the line so it is not clipped.
     const left = at > WIDTH - PLOT.right - 48;
     parts.push(
       `<text x="${left ? at - 4 : at + 4}" y="${PLOT.top - 6 + row * 13}" font-size="11" font-weight="600" ` +
-        `text-anchor="${left ? 'end' : 'start'}" fill="${theme.release}">${escape(`v${release.version}`)}</text>`,
+        `text-anchor="${left ? 'end' : 'start'}" fill="${theme.release}">${escape(`v${release.version}`)}</text>`
     );
   }
 
@@ -244,11 +244,12 @@ export async function fetchStats(pkg = PACKAGE, now = new Date()) {
   const start = created > earliest ? created : earliest;
 
   // A package created today has no full day of data yet, and the API rejects a start after the end.
-  const { downloads } = start > end ? { downloads: [] } : await getJson(`https://api.npmjs.org/downloads/range/${start}:${end}/${pkg}`);
+  const { downloads } =
+    start > end ? { downloads: [] } : await getJson(`https://api.npmjs.org/downloads/range/${start}:${end}/${pkg}`);
   const releases = Object.keys(registry.versions)
     // Skip the placeholder npm creates for a staged publish (0.0.0-stage).
-    .filter(version => registry.time[version] && !registry.versions[version].stub)
-    .map(version => ({ version, date: registry.time[version].slice(0, 10) }))
+    .filter((version) => registry.time[version] && !registry.versions[version].stub)
+    .map((version) => ({ version, date: registry.time[version].slice(0, 10) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
   return { weeks: toWeeks(downloads), releases, updated: downloads.at(-1)?.day ?? end };

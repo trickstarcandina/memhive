@@ -9,33 +9,133 @@ const B64URL = ALNUM + '-_';
 // Each generator returns the full secret text and its distinctive core (>= 8 chars) that must never survive.
 type Secret = { text: string; core: string };
 const SECRETS: ((r: Rng) => Secret)[] = [
-  (r) => { const c = chars(r, ALNUM, int(r, 24, 40)); return { text: 'sk-ant-api03-' + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM, 32); return { text: 'sk-proj-' + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 20, 40)); return { text: pick(r, ['ghp_', 'gho_', 'ghs_', 'ghu_', 'ghr_']) + c, core: c }; },
-  (r) => { const c = chars(r, UPNUM, 16); return { text: pick(r, ['AKIA', 'ASIA']) + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 20, 30)); return { text: 'mh_' + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 16, 30)); return { text: pick(r, ['sk_live_', 'sk_test_', 'rk_live_']) + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM + '-_', 35); return { text: 'AIza' + c, core: c.slice(0, 20) }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 20, 30)); return { text: 'glpat-' + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 30, 40)); return { text: pick(r, ['npm_', 'hf_']) + c, core: c }; },
-  (r) => { const c = chars(r, ALNUM, 24); return { text: 'https://hooks.slack.com/services/T' + chars(r, UPNUM, 8) + '/B' + chars(r, UPNUM, 8) + '/' + c, core: c }; },
-  (r) => { const a = chars(r, ALNUM, 22), b = chars(r, ALNUM, 43); return { text: `SG.${a}.${b}`, core: b }; },
-  (r) => { const c = chars(r, HEX, 32); return { text: 'SK' + c, core: c }; },
-  (r) => { const c = chars(r, B64URL, int(r, 16, 40)); return { text: `eyJ${chars(r, B64URL, 12)}.eyJ${chars(r, B64URL, 12)}.${c}`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 20, 60)); return { text: `-----BEGIN ${pick(r, ['RSA ', 'EC ', 'OPENSSH ', 'ENCRYPTED ', 'PGP ', ''])}PRIVATE KEY${pick(r, ['', ' BLOCK'])}-----\n${c}\n-----END PRIVATE KEY-----`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `${pick(r, ['password', 'passwd', 'api_key', 'secret', 'token', 'client_secret'])}${pick(r, ['=', ': ', ' = '])}${c}`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `${pick(r, ['postgres', 'mysql', 'mongodb+srv', 'redis', 'amqp', 'https'])}://${pick(r, ['admin', 'u', ''])}:${c}@db.internal:5432/app`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `${pick(r, ['DB_PASS', 'MYSQL_PWD', 'CREDENTIALS', 'AUTH', 'ACCESS_KEY', 'AWS_SESSION_TOKEN', 'STRIPE_SECRET'])}=${c}`, core: c }; },
-  (r) => { const c = `${chars(r, ALNUM, 8)} ${chars(r, ALNUM, 8)}`; return { text: `${pick(r, ['MNEMONIC', 'DB_PASSWORD', 'SECRET_KEY'])}=${pick(r, ['"', "'"])}${c}${pick(r, ['"', "'"])}`, core: c.slice(0, 8) }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: JSON.stringify({ user: 'app', [pick(r, ['password', 'api_key', 'secret', 'token'])]: c }), core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Authorization: Basic ${c}`, core: c }; },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 24, 40));
+    return { text: 'sk-ant-api03-' + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, 32);
+    return { text: 'sk-proj-' + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 20, 40));
+    return { text: pick(r, ['ghp_', 'gho_', 'ghs_', 'ghu_', 'ghr_']) + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, UPNUM, 16);
+    return { text: pick(r, ['AKIA', 'ASIA']) + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 20, 30));
+    return { text: 'mh_' + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 16, 30));
+    return { text: pick(r, ['sk_live_', 'sk_test_', 'rk_live_']) + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM + '-_', 35);
+    return { text: 'AIza' + c, core: c.slice(0, 20) };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 20, 30));
+    return { text: 'glpat-' + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 30, 40));
+    return { text: pick(r, ['npm_', 'hf_']) + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, 24);
+    return {
+      text: 'https://hooks.slack.com/services/T' + chars(r, UPNUM, 8) + '/B' + chars(r, UPNUM, 8) + '/' + c,
+      core: c,
+    };
+  },
+  (r) => {
+    const a = chars(r, ALNUM, 22),
+      b = chars(r, ALNUM, 43);
+    return { text: `SG.${a}.${b}`, core: b };
+  },
+  (r) => {
+    const c = chars(r, HEX, 32);
+    return { text: 'SK' + c, core: c };
+  },
+  (r) => {
+    const c = chars(r, B64URL, int(r, 16, 40));
+    return { text: `eyJ${chars(r, B64URL, 12)}.eyJ${chars(r, B64URL, 12)}.${c}`, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 20, 60));
+    return {
+      text: `-----BEGIN ${pick(r, ['RSA ', 'EC ', 'OPENSSH ', 'ENCRYPTED ', 'PGP ', ''])}PRIVATE KEY${pick(r, ['', ' BLOCK'])}-----\n${c}\n-----END PRIVATE KEY-----`,
+      core: c,
+    };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return {
+      text: `${pick(r, ['password', 'passwd', 'api_key', 'secret', 'token', 'client_secret'])}${pick(r, ['=', ': ', ' = '])}${c}`,
+      core: c,
+    };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return {
+      text: `${pick(r, ['postgres', 'mysql', 'mongodb+srv', 'redis', 'amqp', 'https'])}://${pick(r, ['admin', 'u', ''])}:${c}@db.internal:5432/app`,
+      core: c,
+    };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return {
+      text: `${pick(r, ['DB_PASS', 'MYSQL_PWD', 'CREDENTIALS', 'AUTH', 'ACCESS_KEY', 'AWS_SESSION_TOKEN', 'STRIPE_SECRET'])}=${c}`,
+      core: c,
+    };
+  },
+  (r) => {
+    const c = `${chars(r, ALNUM, 8)} ${chars(r, ALNUM, 8)}`;
+    return {
+      text: `${pick(r, ['MNEMONIC', 'DB_PASSWORD', 'SECRET_KEY'])}=${pick(r, ['"', "'"])}${c}${pick(r, ['"', "'"])}`,
+      core: c.slice(0, 8),
+    };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: JSON.stringify({ user: 'app', [pick(r, ['password', 'api_key', 'secret', 'token'])]: c }), core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: `Authorization: Basic ${c}`, core: c };
+  },
   // Only the Cookie rule catches these: the secret is not in the first cookie, or it is quoted with attributes.
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Cookie: theme=dark; session=${c}`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `Set-Cookie: sid="${c}"; Path=/; HttpOnly`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `authorization: ${pick(r, ['bearer', 'token', 'Basic'])} ${c}`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `os.environ["${pick(r, ['API_TOKEN', 'DB_PASSWORD', 'SECRET_KEY'])}"] = "${c}"`, core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: pick(r, [`mysql -u root -p${c} db`, `sshpass -p ${c} ssh h`, `docker login -u me -p ${c}`]), core: c }; },
-  (r) => { const c = chars(r, ALNUM, int(r, 8, 20)); return { text: `curl -u admin:${c} https://api.example.com`, core: c }; },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: `Cookie: theme=dark; session=${c}`, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: `Set-Cookie: sid="${c}"; Path=/; HttpOnly`, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: `authorization: ${pick(r, ['bearer', 'token', 'Basic'])} ${c}`, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: `os.environ["${pick(r, ['API_TOKEN', 'DB_PASSWORD', 'SECRET_KEY'])}"] = "${c}"`, core: c };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return {
+      text: pick(r, [`mysql -u root -p${c} db`, `sshpass -p ${c} ssh h`, `docker login -u me -p ${c}`]),
+      core: c,
+    };
+  },
+  (r) => {
+    const c = chars(r, ALNUM, int(r, 8, 20));
+    return { text: `curl -u admin:${c} https://api.example.com`, core: c };
+  },
 ];
 
 // Host text: TS code, YAML, JSON, logs, Markdown. None of it is a secret on its own.
@@ -52,7 +152,16 @@ const HOSTS = [
   'SELECT id, name FROM users WHERE id = $1;',
 ];
 const SEPS = [' ', '\n', '\t', ' ', '\n\n'];
-const WRAPS: [string, string][] = [['', ''], ['"', '"'], ["'", "'"], ['`', '`'], ['(', ')'], ['[', ']'], ['{', '}'], ['<', '>']];
+const WRAPS: [string, string][] = [
+  ['', ''],
+  ['"', '"'],
+  ["'", "'"],
+  ['`', '`'],
+  ['(', ')'],
+  ['[', ']'],
+  ['{', '}'],
+  ['<', '>'],
+];
 
 // Splits only at whitespace so a secret is never glued onto a host word (`fooghp_...` is not a token boundary).
 function insertAt(r: Rng, host: string, piece: string): string {
@@ -95,16 +204,48 @@ describe('redactSecrets property (F1)', () => {
 
   // Vocabulary taken from the non-secret fixtures in sanitize.test.ts, so a widened rule cannot quietly regress them.
   const SAFE = [
-    'const token = getToken()', 'const tokenizer = new Tokenizer()', 'let x = 5',
-    'password: string;', 'maxTokens: number = 100000', 'const a = process.env.SECRET', 'config.token', 'const t = config.token', 'token=$TOKEN',
-    'token: string | null,', 'secret: Foo[];', 'token: Map<string, number>;', 'TOKEN_COUNT=1000000', 'max_tokens=100000',
-    'token: null', 'secret: Foo | null;', 'f(token: Token)', 'f(a, token: Token = t)', 'token: string[]', 'token: bigint;',
-    'function f(a: string, b: Map<string, number>, token: Token)', 'f(a?: Foo, token: Token = t)', 'f(token: Ref<Foo>)',
-    'password: Map<string, number>', 'token: Promise<NodeJS.Timeout | null>;', 'token: Promise<Map<string, number>>',
-    'token: Record<string, string>', 'token: Promise<string>;', 'token: Record<string, string>,', 'token: number[]',
-    'interface A { password?: string }', 'const x = ${TOKEN}', 'the password field is required', 'password hunter2',
-    'Basic authentication is supported', 'author: Jane Doe', 'passed: 3, passing tests', 'https://example.com:8080/path',
-    'docker run -u 1000:1000 img', 'cookie: string;', 'sessionId: string', 'Rotate the API key every month.',
+    'const token = getToken()',
+    'const tokenizer = new Tokenizer()',
+    'let x = 5',
+    'password: string;',
+    'maxTokens: number = 100000',
+    'const a = process.env.SECRET',
+    'config.token',
+    'const t = config.token',
+    'token=$TOKEN',
+    'token: string | null,',
+    'secret: Foo[];',
+    'token: Map<string, number>;',
+    'TOKEN_COUNT=1000000',
+    'max_tokens=100000',
+    'token: null',
+    'secret: Foo | null;',
+    'f(token: Token)',
+    'f(a, token: Token = t)',
+    'token: string[]',
+    'token: bigint;',
+    'function f(a: string, b: Map<string, number>, token: Token)',
+    'f(a?: Foo, token: Token = t)',
+    'f(token: Ref<Foo>)',
+    'password: Map<string, number>',
+    'token: Promise<NodeJS.Timeout | null>;',
+    'token: Promise<Map<string, number>>',
+    'token: Record<string, string>',
+    'token: Promise<string>;',
+    'token: Record<string, string>,',
+    'token: number[]',
+    'interface A { password?: string }',
+    'const x = ${TOKEN}',
+    'the password field is required',
+    'password hunter2',
+    'Basic authentication is supported',
+    'author: Jane Doe',
+    'passed: 3, passing tests',
+    'https://example.com:8080/path',
+    'docker run -u 1000:1000 img',
+    'cookie: string;',
+    'sessionId: string',
+    'Rotate the API key every month.',
   ];
   it('leaves secret-free host text unchanged', () => {
     const r = mulberry32(0xbadc0de);
@@ -127,7 +268,9 @@ describe('stripPrivate property (F2)', () => {
       const isMention = t === '"<private>"' || t === "'</private>'";
       const isTag = !isMention && t.startsWith('<');
       if (isTag) {
-        if (t.startsWith('</')) { if (state.depth > 0) state.depth--; } else state.depth++;
+        if (t.startsWith('</')) {
+          if (state.depth > 0) state.depth--;
+        } else state.depth++;
       } else if (state.depth === 0) out += t;
     }
     return out;
@@ -160,5 +303,4 @@ describe('stripPrivate property (F2)', () => {
       expect(isSubsequence(outB, b.join('')), msg).toBe(true);
     }
   });
-
 });

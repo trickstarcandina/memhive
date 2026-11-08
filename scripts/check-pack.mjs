@@ -13,8 +13,12 @@ const EXACT = ['LICENSE', 'README.md', 'dist/memhive.cjs', 'package.json'];
 const TREES = ['plugin/', 'plugin-marketplace/'];
 // Each must contain at least one file.
 const REQUIRED_DIRS = [
-  'plugin/.claude-plugin/', 'plugin/.codex-plugin/', 'plugin/hooks/', 'plugin/skills/',
-  'plugin-marketplace/.agents/', 'plugin-marketplace/.claude-plugin/',
+  'plugin/.claude-plugin/',
+  'plugin/.codex-plugin/',
+  'plugin/hooks/',
+  'plugin/skills/',
+  'plugin-marketplace/.agents/',
+  'plugin-marketplace/.claude-plugin/',
 ];
 
 /** Returns a list of problems; empty means the file list is right. */
@@ -37,7 +41,10 @@ function run(cmd, args) {
 
 export function listFiles(tarball) {
   if (tarball) {
-    return run('tar', ['-tzf', tarball]).split(/\r?\n/).filter((l) => l && !l.endsWith('/')).map((l) => l.replace(/^package\//, ''));
+    return run('tar', ['-tzf', tarball])
+      .split(/\r?\n/)
+      .filter((l) => l && !l.endsWith('/'))
+      .map((l) => l.replace(/^package\//, ''));
   }
   return JSON.parse(run('npm', ['pack', '--dry-run', '--json', '--ignore-scripts']))[0].files.map((f) => f.path);
 }

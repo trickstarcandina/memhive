@@ -3,12 +3,20 @@ import { sanitizePrompt, sanitizeToolPayload } from '../sanitize.js';
 
 const KIND: Record<string, HookEventKind> = {
   SessionStart: 'session-start',
-  UserPromptSubmit: 'prompt', PostToolUse: 'tool', PostToolUseFailure: 'tool',
-  Stop: 'stop', SessionEnd: 'session-end',
+  UserPromptSubmit: 'prompt',
+  PostToolUse: 'tool',
+  PostToolUseFailure: 'tool',
+  Stop: 'stop',
+  SessionEnd: 'session-end',
 };
 const SOURCES = new Set<SessionSource>(['startup', 'resume', 'clear', 'compact']);
 
-export function normalizeHookPayload(raw: unknown, host: Host, allowed: ReadonlySet<string>, now = new Date()): HookEvent | null {
+export function normalizeHookPayload(
+  raw: unknown,
+  host: Host,
+  allowed: ReadonlySet<string>,
+  now = new Date()
+): HookEvent | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   const hostEvent = typeof r.hook_event_name === 'string' ? r.hook_event_name : '';
@@ -27,8 +35,13 @@ export function normalizeHookPayload(raw: unknown, host: Host, allowed: Readonly
     const name = typeof r.tool_name === 'string' ? r.tool_name : 'unknown';
     const failed = hostEvent === 'PostToolUseFailure';
     const output = failed ? { error: r.error, is_interrupt: r.is_interrupt === true } : r.tool_response;
-    const state = { depth: 0 };   // shared: a private block opened in the input also hides the output
-    ev.tool = { name, input: sanitizeToolPayload(r.tool_input, undefined, state), output: sanitizeToolPayload(output, undefined, state), failed };
+    const state = { depth: 0 }; // shared: a private block opened in the input also hides the output
+    ev.tool = {
+      name,
+      input: sanitizeToolPayload(r.tool_input, undefined, state),
+      output: sanitizeToolPayload(output, undefined, state),
+      failed,
+    };
   }
   return ev;
 }

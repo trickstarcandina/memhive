@@ -4,12 +4,27 @@ import { ensureHomeDir, resolvePaths } from './paths.js';
 import { safeJsonParse } from './json.js';
 import { OBSERVATION_TYPES, type ObservationType } from '../store/types.js';
 
-export interface LlmSettings { provider: 'anthropic' | 'openai-compat'; model: string; baseUrl?: string; apiKey?: string }
-export interface EmbedSettings { baseUrl: string; apiKey?: string; model: string; dims: number }
+export interface LlmSettings {
+  provider: 'anthropic' | 'openai-compat';
+  model: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+export interface EmbedSettings {
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+  dims: number;
+}
 /** 'mine': only the local user's rows go into the session-start context; 'team' (default): teammates' pulled rows too. */
-export interface ContextSettings { scope: 'team' | 'mine' }
+export interface ContextSettings {
+  scope: 'team' | 'mine';
+}
 export interface Settings {
-  llm: LlmSettings; embed: EmbedSettings | null; contextTokens: number; context: ContextSettings;
+  llm: LlmSettings;
+  embed: EmbedSettings | null;
+  contextTokens: number;
+  context: ContextSettings;
   /** Project keys or globs (`*` one segment, `**` any) never recorded; also matched against the repo's root path. */
   excludeProjects: string[];
   /** Opt-in: days to keep observations, per type, else `default`; null (the default for all) or 0 keeps forever. Pinned rows are always kept. */
@@ -19,7 +34,10 @@ export interface Settings {
 }
 export type RetentionDays = { default: number | null } & Partial<Record<ObservationType, number | null>>;
 
-export const DEFAULT_MODELS: Record<LlmSettings['provider'], string> = { anthropic: 'claude-haiku-5-5', 'openai-compat': 'qwen2.5:7b' };
+export const DEFAULT_MODELS: Record<LlmSettings['provider'], string> = {
+  anthropic: 'claude-haiku-5-5',
+  'openai-compat': 'qwen2.5:7b',
+};
 
 export const DEFAULT_SETTINGS: Settings = {
   llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },
@@ -27,7 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   contextTokens: 2000,
   context: { scope: 'team' },
   excludeProjects: [],
-  retentionDays: { default: null },   // opt-in: a default that deletes would remove notes on the first start after an upgrade
+  retentionDays: { default: null }, // opt-in: a default that deletes would remove notes on the first start after an upgrade
   mcp: { allowProjects: [] },
 };
 
@@ -43,10 +61,12 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const file: Partial<Settings> = isObj(parsed) ? (parsed as Partial<Settings>) : {};
   const fl: Partial<LlmSettings> = isObj(file.llm) ? (file.llm as Partial<LlmSettings>) : {};
   const llm: LlmSettings = { ...DEFAULT_SETTINGS.llm, ...fl };
-  if (env.MEMHIVE_LLM_PROVIDER === 'anthropic' || env.MEMHIVE_LLM_PROVIDER === 'openai-compat') llm.provider = env.MEMHIVE_LLM_PROVIDER;
+  if (env.MEMHIVE_LLM_PROVIDER === 'anthropic' || env.MEMHIVE_LLM_PROVIDER === 'openai-compat')
+    llm.provider = env.MEMHIVE_LLM_PROVIDER;
   if (llm.provider !== 'anthropic' && llm.provider !== 'openai-compat') llm.provider = DEFAULT_SETTINGS.llm.provider;
   // The file's model belongs to the file's provider; another provider (env switch, or none saved) gets its own default.
-  if (!fl.model || (fl.provider ?? DEFAULT_SETTINGS.llm.provider) !== llm.provider) llm.model = DEFAULT_MODELS[llm.provider];
+  if (!fl.model || (fl.provider ?? DEFAULT_SETTINGS.llm.provider) !== llm.provider)
+    llm.model = DEFAULT_MODELS[llm.provider];
   if (llm.provider === 'anthropic') {
     if (env.MEMHIVE_ANTHROPIC_API_KEY) llm.apiKey = env.MEMHIVE_ANTHROPIC_API_KEY;
     if (env.MEMHIVE_ANTHROPIC_MODEL) llm.model = env.MEMHIVE_ANTHROPIC_MODEL;
@@ -60,26 +80,61 @@ export function loadSettings(home: string, env: NodeJS.ProcessEnv = process.env)
   const dims = posInt(env.MEMHIVE_EMBED_DIMS) ?? posInt(fe.dims);
   const baseUrl = env.MEMHIVE_EMBED_BASE_URL ?? fe.baseUrl ?? '';
   const model = env.MEMHIVE_EMBED_MODEL ?? fe.model ?? '';
-  const embed: EmbedSettings | null = dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model ? null
-    : { baseUrl, apiKey: env.MEMHIVE_EMBED_API_KEY ?? fe.apiKey, model, dims };
+  const embed: EmbedSettings | null =
+    dims === undefined || typeof baseUrl !== 'string' || !baseUrl || typeof model !== 'string' || !model
+      ? null
+      : { baseUrl, apiKey: env.MEMHIVE_EMBED_API_KEY ?? fe.apiKey, model, dims };
   const contextTokens = Number(env.MEMHIVE_CONTEXT_TOKENS ?? file.contextTokens ?? DEFAULT_SETTINGS.contextTokens);
   const fc = isObj(file.context) ? (file.context as Record<string, unknown>) : {};
   const isScope = (v: unknown): v is ContextSettings['scope'] => v === 'team' || v === 'mine';
   // Deprecated alias from 0.2 pre-releases: includeOtherUsers (MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS); false means scope 'mine'.
   const envOthers = env.MEMHIVE_CONTEXT_INCLUDE_OTHER_USERS;
-  const scope: ContextSettings['scope'] = isScope(env.MEMHIVE_CONTEXT_SCOPE) ? env.MEMHIVE_CONTEXT_SCOPE
-    : envOthers !== undefined && envOthers !== '' ? (['0', 'false', 'no', 'off'].includes(envOthers.toLowerCase()) ? 'mine' : 'team')
-    : isScope(fc.scope) ? fc.scope : fc.includeOtherUsers === false ? 'mine' : 'team';
-  const list = (v: unknown): string[] | undefined => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim()) : undefined;
-  const excludeProjects = env.MEMHIVE_EXCLUDE_PROJECTS !== undefined ? env.MEMHIVE_EXCLUDE_PROJECTS.split(',').map((x) => x.trim()).filter(Boolean) : list(file.excludeProjects) ?? [];
+  const scope: ContextSettings['scope'] = isScope(env.MEMHIVE_CONTEXT_SCOPE)
+    ? env.MEMHIVE_CONTEXT_SCOPE
+    : envOthers !== undefined && envOthers !== ''
+      ? ['0', 'false', 'no', 'off'].includes(envOthers.toLowerCase())
+        ? 'mine'
+        : 'team'
+      : isScope(fc.scope)
+        ? fc.scope
+        : fc.includeOtherUsers === false
+          ? 'mine'
+          : 'team';
+  const list = (v: unknown): string[] | undefined =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim())
+      : undefined;
+  const excludeProjects =
+    env.MEMHIVE_EXCLUDE_PROJECTS !== undefined
+      ? env.MEMHIVE_EXCLUDE_PROJECTS.split(',')
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : (list(file.excludeProjects) ?? []);
   const fr = isObj(file.retentionDays) ? (file.retentionDays as Record<string, unknown>) : {};
   const days = (v: unknown): number | null | undefined => (v === null || v === 0 || v === '0' ? null : posInt(v));
   const retentionDays: RetentionDays = { ...DEFAULT_SETTINGS.retentionDays };
-  for (const k of ['default', ...OBSERVATION_TYPES] as const) { const d = days(fr[k]); if (d !== undefined) retentionDays[k] = d; }
-  if (env.MEMHIVE_RETENTION_DAYS !== undefined && env.MEMHIVE_RETENTION_DAYS !== '') retentionDays.default = posInt(env.MEMHIVE_RETENTION_DAYS) ?? null;   // 0 or junk: keep forever
+  for (const k of ['default', ...OBSERVATION_TYPES] as const) {
+    const d = days(fr[k]);
+    if (d !== undefined) retentionDays[k] = d;
+  }
+  if (env.MEMHIVE_RETENTION_DAYS !== undefined && env.MEMHIVE_RETENTION_DAYS !== '')
+    retentionDays.default = posInt(env.MEMHIVE_RETENTION_DAYS) ?? null; // 0 or junk: keep forever
   const fm = isObj(file.mcp) ? (file.mcp as Record<string, unknown>) : {};
-  const allowProjects = env.MEMHIVE_MCP_ALLOW_PROJECTS !== undefined ? env.MEMHIVE_MCP_ALLOW_PROJECTS.split(',').map((x) => x.trim()).filter(Boolean) : list(fm.allowProjects) ?? [];
-  return { llm, embed, contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens, context: { scope }, excludeProjects, retentionDays, mcp: { allowProjects } };
+  const allowProjects =
+    env.MEMHIVE_MCP_ALLOW_PROJECTS !== undefined
+      ? env.MEMHIVE_MCP_ALLOW_PROJECTS.split(',')
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : (list(fm.allowProjects) ?? []);
+  return {
+    llm,
+    embed,
+    contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : DEFAULT_SETTINGS.contextTokens,
+    context: { scope },
+    excludeProjects,
+    retentionDays,
+    mcp: { allowProjects },
+  };
 }
 
 export function saveSettings(home: string, settings: Settings): void {

@@ -1,1 +1,10 @@
-{ "session_id": "cx-1", "turn_id": "t1", "cwd": "/work/app", "hook_event_name": "PostToolUse", "tool_name": "apply_patch", "tool_use_id": "call-1", "tool_input": { "command": "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch" }, "tool_response": "Success. Updated the following files:\nM src/a.ts" }
+{
+  "session_id": "cx-1",
+  "turn_id": "t1",
+  "cwd": "/work/app",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call-1",
+  "tool_input": { "command": "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch" },
+  "tool_response": "Success. Updated the following files:\nM src/a.ts"
+}

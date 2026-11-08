@@ -1,45 +1,124 @@
 import { z } from 'zod';
 import { MAX_RESPONSE_BYTES, ResponseTooLarge, readBodyCapped } from '../shared/http.js';
-import { HubConfigInfoSchema, MeResultSchema, PullResultSchema, PushResultSchema, type PushBody, type PushResult } from '../hub/wire.js';
+import {
+  HubConfigInfoSchema,
+  MeResultSchema,
+  PullResultSchema,
+  PushResultSchema,
+  type PushBody,
+  type PushResult,
+} from '../hub/wire.js';
 
 // Hub-supplied text reaches the terminal (`memhive sync`) and the logs: no control characters (terminal escapes), bounded length.
-export const safeHubText = (v: unknown): string => String(v).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, 300);
+export const safeHubText = (v: unknown): string =>
+  String(v)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
+    .slice(0, 300);
 
-export class HubError extends Error { constructor(message: string, public readonly status: number, public readonly code: string, public readonly retryAfterMs?: number) { super(message); this.name = 'HubError'; } }
+export class HubError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code: string,
+    public readonly retryAfterMs?: number
+  ) {
+    super(message);
+    this.name = 'HubError';
+  }
+}
 
 // Older hubs omit version, protocol and body_limit; the engine treats a missing protocol as "older hub", not as an error.
 export const ClientHubConfigSchema = HubConfigInfoSchema.partial({ version: true, protocol: true, body_limit: true });
 export type HubConfigInfo = z.infer<typeof ClientHubConfigSchema>;
 // The envelope is checked here; rows are checked one by one in the engine, so one bad row cannot stall the cursor.
 // max_seq and epoch are optional for older hubs.
-const ClientPullSchema = PullResultSchema.extend({ sessions: z.array(z.unknown()), observations: z.array(z.unknown()), summaries: z.array(z.unknown()), tombstones: z.array(z.unknown()).default([]), max_seq: z.number().optional() });   // tombstones: protocol 2
+const ClientPullSchema = PullResultSchema.extend({
+  sessions: z.array(z.unknown()),
+  observations: z.array(z.unknown()),
+  summaries: z.array(z.unknown()),
+  tombstones: z.array(z.unknown()).default([]),
+  max_seq: z.number().optional(),
+}); // tombstones: protocol 2
 export type ClientPullResult = z.infer<typeof ClientPullSchema>;
 
 export class HubClient {
   private fetchImpl: typeof fetch;
   /** Response cap; the engine raises it to 4x the hub's body_limit once /v1/config is known. */
   maxBytes = MAX_RESPONSE_BYTES;
-  constructor(private hubUrl: string, private key: string, fetchImpl?: typeof fetch) { this.fetchImpl = fetchImpl ?? fetch; }
-  private async req<T>(schema: z.ZodType<T>, method: 'GET' | 'POST', path: string, body?: unknown, timeoutMs = 10000): Promise<T> {
-    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
+  constructor(
+    private hubUrl: string,
+    private key: string,
+    fetchImpl?: typeof fetch
+  ) {
+    this.fetchImpl = fetchImpl ?? fetch;
+  }
+  private async req<T>(
+    schema: z.ZodType<T>,
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    timeoutMs = 10000
+  ): Promise<T> {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
-      const res = await this.fetchImpl(this.hubUrl + path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.key}` }, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal, redirect: 'error' });
+      const res = await this.fetchImpl(this.hubUrl + path, {
+        method,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.key}` },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: ctl.signal,
+        redirect: 'error',
+      });
       let text: string;
-      try { text = await readBodyCapped(res, this.maxBytes); }
-      catch (e) { if (e instanceof ResponseTooLarge) throw new HubError(`hub response over ${this.maxBytes} bytes`, res.status, 'response_too_large'); throw e; } let json: any; let parsed = true;
-      try { json = text ? JSON.parse(text) : {}; } catch { json = {}; parsed = false; }
+      try {
+        text = await readBodyCapped(res, this.maxBytes);
+      } catch (e) {
+        if (e instanceof ResponseTooLarge)
+          throw new HubError(`hub response over ${this.maxBytes} bytes`, res.status, 'response_too_large');
+        throw e;
+      }
+      let json: any;
+      let parsed = true;
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = {};
+        parsed = false;
+      }
       if (!res.ok) {
-        const ra = Number(res.headers.get('retry-after'));   // seconds form only; the engine caps it
-        throw new HubError(json?.error?.message != null ? safeHubText(json.error.message) : `hub ${res.status}`, res.status, json?.error?.code != null ? safeHubText(json.error.code).slice(0, 64) : 'http_error', Number.isFinite(ra) && ra > 0 ? ra * 1000 : undefined);
+        const ra = Number(res.headers.get('retry-after')); // seconds form only; the engine caps it
+        throw new HubError(
+          json?.error?.message != null ? safeHubText(json.error.message) : `hub ${res.status}`,
+          res.status,
+          json?.error?.code != null ? safeHubText(json.error.code).slice(0, 64) : 'http_error',
+          Number.isFinite(ra) && ra > 0 ? ra * 1000 : undefined
+        );
       }
       // A 2xx that is not the hub's JSON (captive portal, HTML error page, a proxy) must not be read as an empty page.
       const r = parsed ? schema.safeParse(json) : null;
-      if (!r?.success) throw new HubError(`hub sent an unexpected response for ${path.split('?')[0]}`, res.status, 'bad_response');
+      if (!r?.success)
+        throw new HubError(`hub sent an unexpected response for ${path.split('?')[0]}`, res.status, 'bad_response');
       return r.data;
-    } finally { clearTimeout(t); }
+    } finally {
+      clearTimeout(t);
+    }
   }
-  config(timeoutMs = 10000) { return this.req(ClientHubConfigSchema, 'GET', '/v1/config', undefined, timeoutMs); }
-  me() { return this.req(MeResultSchema, 'GET', '/v1/me'); }
-  push(body: PushBody, timeoutMs = 15000): Promise<PushResult> { return this.req(PushResultSchema, 'POST', '/v1/sync/push', body, timeoutMs); }
-  pull(projectKey: string, since: number, limit = 500, timeoutMs = 10000, vectors = true): Promise<ClientPullResult> { return this.req(ClientPullSchema, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(projectKey)}&since=${since}&limit=${limit}${vectors ? '' : '&vectors=0'}`, undefined, timeoutMs); }
+  config(timeoutMs = 10000) {
+    return this.req(ClientHubConfigSchema, 'GET', '/v1/config', undefined, timeoutMs);
+  }
+  me() {
+    return this.req(MeResultSchema, 'GET', '/v1/me');
+  }
+  push(body: PushBody, timeoutMs = 15000): Promise<PushResult> {
+    return this.req(PushResultSchema, 'POST', '/v1/sync/push', body, timeoutMs);
+  }
+  pull(projectKey: string, since: number, limit = 500, timeoutMs = 10000, vectors = true): Promise<ClientPullResult> {
+    return this.req(
+      ClientPullSchema,
+      'GET',
+      `/v1/sync/pull?project_key=${encodeURIComponent(projectKey)}&since=${since}&limit=${limit}${vectors ? '' : '&vectors=0'}`,
+      undefined,
+      timeoutMs
+    );
+  }
 }

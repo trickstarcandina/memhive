@@ -1,1 +1,7 @@
-{ "session_id": "cx-1", "turn_id": "t1", "cwd": "/work/app", "hook_event_name": "Stop", "last_assistant_message": "done" }
+{
+  "session_id": "cx-1",
+  "turn_id": "t1",
+  "cwd": "/work/app",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "done"
+}

@@ -1,15 +1,31 @@
 import { it, expect } from 'vitest';
-import { chmodSync, lstatSync, symlinkSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  symlinkSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { detectHosts, installClaudeCode, installCodex, uninstallCodex, type RunFn } from '../../src/install/hosts.js';
 
 const calls: string[] = [];
-const ok: RunFn = (c, a) => { calls.push(`${c} ${a.join(' ')}`); return { status: 0, stdout: '', stderr: '' }; };
+const ok: RunFn = (c, a) => {
+  calls.push(`${c} ${a.join(' ')}`);
+  return { status: 0, stdout: '', stderr: '' };
+};
 const bad: RunFn = () => ({ status: null, stdout: '', stderr: '', error: new Error('ENOENT') });
 
 it('detects hosts via injected exists', () => {
-  expect(detectHosts({ CLAUDE_CONFIG_DIR: '/a', CODEX_HOME: '/b' }, (p) => p === '/a')).toEqual({ claudeCode: true, codex: false });
+  expect(detectHosts({ CLAUDE_CONFIG_DIR: '/a', CODEX_HOME: '/b' }, (p) => p === '/a')).toEqual({
+    claudeCode: true,
+    codex: false,
+  });
 });
 it('claude install runs marketplace add + install; prints manual steps on failure', () => {
   calls.length = 0;
@@ -22,7 +38,9 @@ it('codex install edits config.toml in temp home, preserving other content; unin
   const cfg = path.join(home, 'config.toml');
   writeFileSync(cfg, 'model = "x"  # mine\n\n[features]\nhooks = false\n');
   expect(installCodex('/m', home, ok).ok).toBe(true);
-  expect(readFileSync(cfg, 'utf8')).toBe('model = "x"  # mine\n\n[features]\nhooks = true\n\n[plugins."memhive@memhive-local"]\nenabled = true\n');
+  expect(readFileSync(cfg, 'utf8')).toBe(
+    'model = "x"  # mine\n\n[features]\nhooks = true\n\n[plugins."memhive@memhive-local"]\nenabled = true\n'
+  );
   uninstallCodex(home, ok);
   expect(readFileSync(cfg, 'utf8')).toContain('enabled = false');
 });
@@ -50,19 +68,22 @@ it('uninstall never appends a table', () => {
 it('installCodex keeps a backup of config.toml, replaces it atomically and keeps its mode', () => {
   const home = mkdtempSync(path.join(tmpdir(), 'cx-'));
   const cfg = path.join(home, 'config.toml');
-  writeFileSync(cfg, 'model = "x"\n'); chmodSync(cfg, 0o640);
+  writeFileSync(cfg, 'model = "x"\n');
+  chmodSync(cfg, 0o640);
   const ino = statSync(cfg).ino;
   expect(installCodex('/m', home, ok).ok).toBe(true);
   expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n');
-  expect(statSync(cfg).ino).not.toBe(ino);   // renamed into place, not rewritten in place
+  expect(statSync(cfg).ino).not.toBe(ino); // renamed into place, not rewritten in place
   expect(statSync(cfg).mode & 0o777).toBe(0o640);
   uninstallCodex(home, ok);
-  expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n');   // the first backup is never overwritten
+  expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n'); // the first backup is never overwritten
   expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
 });
 it('installCodex keeps a symlinked config.toml a symlink and edits its target', () => {
-  const home = mkdtempSync(path.join(tmpdir(), 'cx-')); const dots = mkdtempSync(path.join(tmpdir(), 'cx-dots-'));
-  const target = path.join(dots, 'config.toml'); writeFileSync(target, 'model = "x"\n');
+  const home = mkdtempSync(path.join(tmpdir(), 'cx-'));
+  const dots = mkdtempSync(path.join(tmpdir(), 'cx-dots-'));
+  const target = path.join(dots, 'config.toml');
+  writeFileSync(target, 'model = "x"\n');
   symlinkSync(target, path.join(home, 'config.toml'));
   expect(installCodex('/m', home, ok).ok).toBe(true);
   expect(lstatSync(path.join(home, 'config.toml')).isSymbolicLink()).toBe(true);

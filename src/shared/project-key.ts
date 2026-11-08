@@ -7,11 +7,11 @@ import { readRepoConfig, type RepoConfig } from './optout.js';
 export function normalizeRemote(url: string): string | null {
   let s = url.trim();
   if (!s) return null;
-  s = s.replace(/^[a-z+]+:\/\//i, '');          // scheme
-  s = s.replace(/^[^@/]+@/, '');                 // user@
+  s = s.replace(/^[a-z+]+:\/\//i, ''); // scheme
+  s = s.replace(/^[^@/]+@/, ''); // user@
   // host:port/ -> host/. Also applied to scp-like host:123/repo (strictly a path): changing it would rekey existing projects.
   s = s.replace(/^([^:/]+):(\d+)\//, '$1/');
-  s = s.replace(/^([^:/]+):/, '$1/');            // scp-like host:path
+  s = s.replace(/^([^:/]+):/, '$1/'); // scp-like host:path
   s = s.replace(/\.git\/?$/i, '').replace(/\/+$/, '');
   if (!/^[^/]+\/.+/.test(s) || /\s/.test(s)) return null;
   return s.toLowerCase();
@@ -23,7 +23,13 @@ export interface ProjectKeyDeps {
   gitRevParse: (cwd: string) => { top: string | null; branch: string | null };
   readRepoConfig?: (dir: string) => RepoConfig;
 }
-export interface ProjectInfo { key: string; name: string; top: string; branch: string | null; disabled: boolean }
+export interface ProjectInfo {
+  key: string;
+  name: string;
+  top: string;
+  branch: string | null;
+  disabled: boolean;
+}
 
 function git(cwd: string, args: string[]): string | null {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 2000 });
@@ -33,8 +39,14 @@ const defaultDeps: ProjectKeyDeps = {
   gitRemote: (cwd) => git(cwd, ['config', '--get', 'remote.origin.url']),
   gitRevParse: (cwd) => {
     // A repo without commits fails on HEAD (status 128) but still prints the top level first.
-    const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', timeout: 2000 });
-    const [top, branch] = (r.error ? '' : r.stdout ?? '').trim().split('\n').map((l) => l.trim());
+    const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    const [top, branch] = (r.error ? '' : (r.stdout ?? ''))
+      .trim()
+      .split('\n')
+      .map((l) => l.trim());
     return { top: top || null, branch: branch && branch !== 'HEAD' ? branch : null };
   },
 };
@@ -48,7 +60,13 @@ export function projectKeyFor(cwd: string, deps: ProjectKeyDeps = defaultDeps): 
   // Nearest `.memhive.json` from cwd up to the repo root, so each monorepo package can carry its own.
   const read = deps.readRepoConfig ?? readRepoConfig;
   let repo: RepoConfig = {};
-  const real = (p: string) => { try { return realpathSync(p); } catch { return path.resolve(p); } };   // git prints the real path
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  }; // git prints the real path
   for (let d = real(cwd), stop = real(top); ; d = path.dirname(d)) {
     repo = read(d);
     if (repo.disabled || repo.project || d === stop || d === path.dirname(d) || !d.startsWith(stop)) break;

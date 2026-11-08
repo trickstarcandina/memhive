@@ -3,10 +3,17 @@ import { it, expect } from 'vitest';
 import { checkPackFiles } from '../../scripts/check-pack.mjs';
 
 const GOOD = [
-  'LICENSE', 'README.md', 'dist/memhive.cjs', 'package.json',
-  'plugin-marketplace/.agents/plugins/marketplace.json', 'plugin-marketplace/.claude-plugin/marketplace.json',
-  'plugin/.claude-plugin/plugin.json', 'plugin/.codex-plugin/plugin.json', 'plugin/.mcp.json',
-  'plugin/hooks/hooks.json', 'plugin/skills/mem-search/SKILL.md',
+  'LICENSE',
+  'README.md',
+  'dist/memhive.cjs',
+  'package.json',
+  'plugin-marketplace/.agents/plugins/marketplace.json',
+  'plugin-marketplace/.claude-plugin/marketplace.json',
+  'plugin/.claude-plugin/plugin.json',
+  'plugin/.codex-plugin/plugin.json',
+  'plugin/.mcp.json',
+  'plugin/hooks/hooks.json',
+  'plugin/skills/mem-search/SKILL.md',
 ];
 
 it('accepts the expected package contents', () => {
@@ -15,7 +22,9 @@ it('accepts the expected package contents', () => {
 
 it('rejects sourcemaps, sources and tests', () => {
   expect(checkPackFiles([...GOOD, 'dist/memhive.cjs.map', 'src/cli/index.ts', 'tests/a.test.ts'])).toEqual([
-    'unexpected file: dist/memhive.cjs.map', 'unexpected file: src/cli/index.ts', 'unexpected file: tests/a.test.ts',
+    'unexpected file: dist/memhive.cjs.map',
+    'unexpected file: src/cli/index.ts',
+    'unexpected file: tests/a.test.ts',
   ]);
 });
 

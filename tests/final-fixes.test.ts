@@ -23,36 +23,66 @@ const silent = { info() {}, warn() {}, error() {}, debug() {} };
 async function callWith(deps: Parameters<typeof createMcpServer>[0], name: string, args: Record<string, unknown>) {
   const server = createMcpServer(deps);
   const [a, b] = InMemoryTransport.createLinkedPair();
-  await server.connect(a); const c = new Client({ name: 't', version: '0' }); await c.connect(b);
-  const r: any = await c.callTool({ name, arguments: args }); await c.close(); return r;
+  await server.connect(a);
+  const c = new Client({ name: 't', version: '0' });
+  await c.connect(b);
+  const r: any = await c.callTool({ name, arguments: args });
+  await c.close();
+  return r;
 }
 
 describe('mcp reconnect', () => {
   // get_observations first asks for the project key (its ids are scoped to the project); seen records the other calls.
-  const good = (seen: string[]) => ({ request: async (_m: string, p: string) => { if (p.startsWith('/v1/project?')) return { project: { key: 'k' } }; seen.push(p); return { observations: [] }; } }) as any;
+  const good = (seen: string[]) =>
+    ({
+      request: async (_m: string, p: string) => {
+        if (p.startsWith('/v1/project?')) return { project: { key: 'k' } };
+        seen.push(p);
+        return { observations: [] };
+      },
+    }) as any;
   it('retries once on connection failure via reconnect', async () => {
     const seen: string[] = [];
-    const dead = { request: async () => { throw new TypeError('fetch failed'); } } as any;
+    const dead = {
+      request: async () => {
+        throw new TypeError('fetch failed');
+      },
+    } as any;
     const reconnect = vi.fn(async () => good(seen));
     const r = await callWith({ client: dead, cwd: '/x', reconnect }, 'get_observations', { ids: ['abcd1234'] });
-    expect(r.isError).toBeFalsy(); expect(reconnect).toHaveBeenCalledTimes(1); expect(seen).toHaveLength(1);
+    expect(r.isError).toBeFalsy();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(1);
   });
   it('retries once on 401', async () => {
     const seen: string[] = [];
-    const stale = { request: async () => { throw new DaemonError('unauthorized', 401); } } as any;
-    const r = await callWith({ client: stale, cwd: '/x', reconnect: async () => good(seen) }, 'get_observations', { ids: ['abcd1234'] });
-    expect(r.isError).toBeFalsy(); expect(seen).toHaveLength(1);
+    const stale = {
+      request: async () => {
+        throw new DaemonError('unauthorized', 401);
+      },
+    } as any;
+    const r = await callWith({ client: stale, cwd: '/x', reconnect: async () => good(seen) }, 'get_observations', {
+      ids: ['abcd1234'],
+    });
+    expect(r.isError).toBeFalsy();
+    expect(seen).toHaveLength(1);
   });
   it('does not retry other daemon errors', async () => {
     const reconnect = vi.fn(async () => null);
-    const bad = { request: async () => { throw new DaemonError('nope', 500); } } as any;
+    const bad = {
+      request: async () => {
+        throw new DaemonError('nope', 500);
+      },
+    } as any;
     const r = await callWith({ client: bad, cwd: '/x', reconnect }, 'get_observations', { ids: ['abcd1234'] });
-    expect(r.isError).toBe(true); expect(reconnect).not.toHaveBeenCalled();
+    expect(r.isError).toBe(true);
+    expect(reconnect).not.toHaveBeenCalled();
   });
   it('accepts a leading # on ids', async () => {
     const seen: string[] = [];
     const r = await callWith({ client: good(seen), cwd: '/x' }, 'get_observations', { ids: ['#abcd1234'] });
-    expect(r.isError).toBeFalsy(); expect(seen[0]).toContain('ids=abcd1234');
+    expect(r.isError).toBeFalsy();
+    expect(seen[0]).toContain('ids=abcd1234');
   });
 });
 
@@ -62,39 +92,56 @@ describe('observer', () => {
     try {
       const sum = JSON.stringify({ request: 'r', learned: 'l', completed: 'c', next_steps: 'n' });
       const complete = vi.fn().mockResolvedValue(sum);
-      const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
-      const p = store.getOrCreateProject('k', 'proj'); const s = sess(p.id); store.upsertSession(s);
+      const store = new SqliteStore(':memory:', { dims: null });
+      store.migrate();
+      const p = store.getOrCreateProject('k', 'proj');
+      const s = sess(p.id);
+      store.upsertSession(s);
       const ctx: SessionCtx = { sessionId: s.id, projectId: p.id, projectName: 'proj', userId: 'local' };
       const o = new Observer({ store, provider: { complete }, embedder: null, logger: silent });
       o.onPrompt(ctx, 'implement the login flow please');
-      await o.onStop(ctx); await o.onSessionEnd(ctx);
+      await o.onStop(ctx);
+      await o.onSessionEnd(ctx);
       expect(complete).toHaveBeenCalledTimes(1);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it('drops sessions idle for over 30 min', async () => {
     vi.useFakeTimers();
     try {
-      const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
+      const store = new SqliteStore(':memory:', { dims: null });
+      store.migrate();
       const o = new Observer({ store, provider: { complete: async () => '' }, embedder: null, logger: silent });
       const c = (id: string): SessionCtx => ({ sessionId: id, projectId: 'p', projectName: 'n', userId: 'u' });
       o.onTool(c('a'), { name: 'Read', input: {}, output: '', at: new Date().toISOString() });
       await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
       o.onTool(c('b'), { name: 'Read', input: {}, output: '', at: new Date().toISOString() });
       expect(o.sessionCount).toBe(1);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe('prompt sanitizing', () => {
   it('redacts secrets in stored prompts via the adapter', () => {
     const a = getAdapter('claude-code')!;
-    const fx = JSON.parse(readFileSync(new URL('./fixtures/claude-code/user-prompt-submit.json', import.meta.url), 'utf8'));
-    const e = a.parse({ ...fx, prompt: 'use sk-ant-api03-abcdefghijklmnopqrstuvwx and password=hunter2xyz' }, new Date())!;
-    expect(e.prompt).not.toContain('sk-ant'); expect(e.prompt).not.toContain('hunter2xyz'); expect(e.prompt).toContain('<redacted>');
+    const fx = JSON.parse(
+      readFileSync(new URL('./fixtures/claude-code/user-prompt-submit.json', import.meta.url), 'utf8')
+    );
+    const e = a.parse(
+      { ...fx, prompt: 'use sk-ant-api03-abcdefghijklmnopqrstuvwx and password=hunter2xyz' },
+      new Date()
+    )!;
+    expect(e.prompt).not.toContain('sk-ant');
+    expect(e.prompt).not.toContain('hunter2xyz');
+    expect(e.prompt).toContain('<redacted>');
   });
   it('caps prompts at 16000 chars plus marker', () => {
     const out = sanitizePrompt('x '.repeat(20000));
-    expect(out.length).toBeLessThan(16200); expect(out).toContain('<elided');
+    expect(out.length).toBeLessThan(16200);
+    expect(out).toContain('<elided');
   });
   it('bare <private without > fails closed', () => {
     expect(stripPrivate('keep <private secret')).toBe('keep ');
@@ -107,7 +154,8 @@ describe('file modes', () => {
     const home = path.join(tmp(), 'mh-home');
     const ctx = createDaemonContext(home, {});
     createLogger(home, 'x', {}).info('hi');
-    expect(mode(home)).toBe(0o700); expect(mode(path.join(home, 'logs'))).toBe(0o700);
+    expect(mode(home)).toBe(0o700);
+    expect(mode(path.join(home, 'logs'))).toBe(0o700);
     ctx.store.close();
     saveSettings(home, DEFAULT_SETTINGS);
     expect(mode(path.join(home, 'settings.json'))).toBe(0o600);
@@ -115,22 +163,32 @@ describe('file modes', () => {
     expect(mode(path.join(home, 'memhive.db'))).toBe(0o600);
   });
   it('tightens an existing loose home', () => {
-    const home = tmp(); chmodSync(home, 0o755);
+    const home = tmp();
+    chmodSync(home, 0o755);
     writeFileSync(path.join(home, 'settings.json'), '{}');
     createDaemonContext(home, {}).store.close();
     expect(mode(home)).toBe(0o700);
   });
   it('leaves the mode of a shared directory MEMHIVE_HOME points at, warns, and keeps memhive files private', () => {
-    const home = tmp(); chmodSync(home, 0o755);
+    const home = tmp();
+    chmodSync(home, 0o755);
     writeFileSync(path.join(home, 'notes.txt'), 'not memhive');
     const warnings: string[] = [];
     setHomeWarningSink((m) => warnings.push(m));
-    const ctx = createDaemonContext(home, {});   // migrate writes, so the WAL files exist while the store is open
+    const ctx = createDaemonContext(home, {}); // migrate writes, so the WAL files exist while the store is open
     createLogger(home, 'x', {}).info('hi');
     saveSettings(home, DEFAULT_SETTINGS);
     expect(mode(home)).toBe(0o755);
     expect(warnings.join('')).toMatch(/readable by other users/);
-    for (const f of ['memhive.db', 'memhive.db-wal', 'memhive.db-shm', 'settings.json', 'logs/x.log', 'logs/daemon.log']) if (existsSync(path.join(home, f))) expect([f, mode(path.join(home, f))]).toEqual([f, 0o600]);
+    for (const f of [
+      'memhive.db',
+      'memhive.db-wal',
+      'memhive.db-shm',
+      'settings.json',
+      'logs/x.log',
+      'logs/daemon.log',
+    ])
+      if (existsSync(path.join(home, f))) expect([f, mode(path.join(home, f))]).toEqual([f, 0o600]);
     expect(mode(path.join(home, 'logs'))).toBe(0o700);
     expect(existsSync(path.join(home, 'memhive.db-wal'))).toBe(true);
     ctx.store.close();
@@ -140,9 +198,18 @@ describe('file modes', () => {
 describe('store', () => {
   it('duplicate observation id is ignored; sqlite-vec load failure falls back to FTS only', () => {
     const warn = vi.fn();
-    const s = new SqliteStore(':memory:', { dims: 4, warn, loadVec: () => { throw new Error('no ext'); } }); s.migrate();
+    const s = new SqliteStore(':memory:', {
+      dims: 4,
+      warn,
+      loadVec: () => {
+        throw new Error('no ext');
+      },
+    });
+    s.migrate();
     expect(warn).toHaveBeenCalled();
-    const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id); s.upsertSession(a);
+    const p = s.getOrCreateProject('k', 'n');
+    const a = sess(p.id);
+    s.upsertSession(a);
     const o = obs({ projectId: p.id, sessionId: a.id });
     s.insertObservations([o, o]);
     expect(s.countObservations(p.id)).toBe(1);
@@ -151,8 +218,11 @@ describe('store', () => {
     expect(s.listMissingEmbedding(5)).toHaveLength(1);
   });
   it('ties on created_at order by rowid DESC', () => {
-    const s = new SqliteStore(':memory:', { dims: null }); s.migrate();
-    const p = s.getOrCreateProject('k', 'n'); const a = sess(p.id); s.upsertSession(a);
+    const s = new SqliteStore(':memory:', { dims: null });
+    s.migrate();
+    const p = s.getOrCreateProject('k', 'n');
+    const a = sess(p.id);
+    s.upsertSession(a);
     const at = '2026-01-01T00:00:00.000Z';
     const list = ['a', 'b', 'c'].map((t) => obs({ projectId: p.id, sessionId: a.id, title: t, createdAt: at }));
     s.insertObservations(list);

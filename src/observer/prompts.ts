@@ -9,21 +9,42 @@ Respond with JSON only: {"observations":[{"type":"...","title":"<= 80 chars","su
 Return {"observations":[]} when nothing is worth remembering.${DATA_NOTE}`;
 
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const cut = (v: unknown, max = 4000): string => { const s = typeof v === 'string' ? v : JSON.stringify(v ?? null); return esc(s.length > max ? s.slice(0, max) + `…<${s.length - max} more chars>` : s); };
+const cut = (v: unknown, max = 4000): string => {
+  const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);
+  return esc(s.length > max ? s.slice(0, max) + `…<${s.length - max} more chars>` : s);
+};
 
-export function buildObservationPrompt(input: { projectName: string; prompt: string | null; recentTitles: string[]; events: ToolEvent[] }): string {
+export function buildObservationPrompt(input: {
+  projectName: string;
+  prompt: string | null;
+  recentTitles: string[];
+  events: ToolEvent[];
+}): string {
   const lines = [`<project>${esc(input.projectName)}</project>`];
   if (input.prompt) lines.push(`<user_request>${cut(input.prompt, 2000)}</user_request>`);
-  if (input.recentTitles.length) lines.push(`<already_observed>\n${input.recentTitles.map((t) => `- ${esc(t)}`).join('\n')}\n</already_observed>`);
+  if (input.recentTitles.length)
+    lines.push(`<already_observed>\n${input.recentTitles.map((t) => `- ${esc(t)}`).join('\n')}\n</already_observed>`);
   lines.push('<tool_calls>');
-  for (const e of input.events) lines.push(`<call name="${esc(e.name)}" at="${esc(e.at)}"${e.failed ? ' failed="true"' : ''}>\n<input>${cut(e.input)}</input>\n<output>${cut(e.output)}</output>\n</call>`);
+  for (const e of input.events)
+    lines.push(
+      `<call name="${esc(e.name)}" at="${esc(e.at)}"${e.failed ? ' failed="true"' : ''}>\n<input>${cut(e.input)}</input>\n<output>${cut(e.output)}</output>\n</call>`
+    );
   lines.push('</tool_calls>');
   return lines.join('\n');
 }
 
 export const SUMMARY_SYSTEM = `You summarize one turn of a coding agent for the next session. Respond with JSON only: {"request":"what the user asked, 1 sentence","learned":"key things discovered, <= 3 sentences","completed":"what was done, <= 3 sentences","next_steps":"what remains or is suggested, <= 2 sentences"}. Use empty strings when unknown.${DATA_NOTE}`;
 
-export function buildSummaryPrompt(input: { projectName: string; prompt: string | null; observations: Array<{ title: string; facts: string[] }> }): string {
-  return [`<project>${esc(input.projectName)}</project>`, `<user_request>${cut(input.prompt ?? '', 2000)}</user_request>`,
-    '<observations>', ...input.observations.map((o) => `- ${esc(o.title)}: ${esc(o.facts.join('; '))}`), '</observations>'].join('\n');
+export function buildSummaryPrompt(input: {
+  projectName: string;
+  prompt: string | null;
+  observations: Array<{ title: string; facts: string[] }>;
+}): string {
+  return [
+    `<project>${esc(input.projectName)}</project>`,
+    `<user_request>${cut(input.prompt ?? '', 2000)}</user_request>`,
+    '<observations>',
+    ...input.observations.map((o) => `- ${esc(o.title)}: ${esc(o.facts.join('; '))}`),
+    '</observations>',
+  ].join('\n');
 }

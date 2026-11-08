@@ -10,7 +10,9 @@ describe('logger', () => {
     const log = createLogger(home, 'hook', {});
     log.info('hello', { a: 1 });
     log.debug('hidden');
-    const lines = readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8').trim().split('\n');
+    const lines = readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8')
+      .trim()
+      .split('\n');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0])).toMatchObject({ level: 'info', msg: 'hello', a: 1 });
   });
@@ -35,7 +37,7 @@ describe('logger', () => {
 describe('logger robustness', () => {
   it('still appends when the rotation rename fails', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
-    mkdirSync(path.join(home, 'logs', 'hook.log.1', 'busy'), { recursive: true });   // rename onto a non-empty dir fails
+    mkdirSync(path.join(home, 'logs', 'hook.log.1', 'busy'), { recursive: true }); // rename onto a non-empty dir fails
     writeFileSync(path.join(home, 'logs', 'hook.log'), 'x'.repeat(200) + '\n');
     const log = createLogger(home, 'hook', {}, { maxBytes: 100 });
     log.info('kept');

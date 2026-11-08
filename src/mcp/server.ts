@@ -15,13 +15,22 @@ import { formatFull, formatIndex } from './format.js';
 import { formatForget, type ForgetResult } from './format-forget.js';
 
 // Accepts the `#abcd1234` form the context footer and index print.
-const id = z.preprocess((v) => (typeof v === 'string' ? v.replace(/^#/, '') : v), z.string().max(64).regex(/^[0-9a-f-]+$/i));
+const id = z.preprocess(
+  (v) => (typeof v === 'string' ? v.replace(/^#/, '') : v),
+  z
+    .string()
+    .max(64)
+    .regex(/^[0-9a-f-]+$/i)
+);
 
 /** Re-resolves the daemon (it may have idle-exited and restarted with a new port/token). */
 export type Reconnect = () => Promise<DaemonClient | null>;
 
 export interface McpDeps {
-  client: DaemonClient | null; cwd: string; reconnect?: Reconnect; env?: NodeJS.ProcessEnv;
+  client: DaemonClient | null;
+  cwd: string;
+  reconnect?: Reconnect;
+  env?: NodeJS.ProcessEnv;
   /** The token in daemon.json now; a change (or none) means the daemon restarted, or the port may belong to someone else. */
   currentToken?: () => string | null;
   /** settings.mcp.allowProjects: keys or globs `search` may read besides the current project. */
@@ -34,9 +43,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const rpc = {
     async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
       // Re-prove the daemon (ensureDaemon runs the HMAC health check) before talking to a port it may have given up.
-      if (!current || (deps.currentToken && deps.currentToken() !== current.token)) { current = (await deps.reconnect?.()) ?? null; if (!current) throw new Error('memhive daemon unavailable'); }
-      try { return await current.request<T>(method, path, body); }
-      catch (e) {
+      if (!current || (deps.currentToken && deps.currentToken() !== current.token)) {
+        current = (await deps.reconnect?.()) ?? null;
+        if (!current) throw new Error('memhive daemon unavailable');
+      }
+      try {
+        return await current.request<T>(method, path, body);
+      } catch (e) {
         const stale = e instanceof DaemonError ? e.status === 401 : (e as Error)?.name !== 'AbortError';
         const next = stale && deps.reconnect ? await deps.reconnect() : null;
         if (!next) throw e;
@@ -45,74 +58,153 @@ export function createMcpServer(deps: McpDeps): McpServer {
       }
     },
   };
-  const projectKey = async () => (await rpc.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(deps.cwd)}`)).project.key;
+  const projectKey = async () =>
+    (await rpc.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(deps.cwd)}`)).project
+      .key;
   const textResult = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
   // Checked per call, so the server never needs a daemon while MEMHIVE_DISABLED is set.
   // A 409 (paused, excluded project) is an answer for the agent, not a tool failure.
-  const tool: typeof server.registerTool = (name, config, cb) => server.registerTool(name, config, (async (...a: unknown[]) => {
-    if (envDisabled(deps.env ?? process.env)) return textResult('memhive disabled (MEMHIVE_DISABLED is set); nothing was read or saved.');
-    try { return await (cb as (...x: unknown[]) => unknown)(...a); }
-    catch (e) { if (e instanceof DaemonError && e.status === 409) return textResult(e.message); throw e; }
-  }) as typeof cb);
+  const tool: typeof server.registerTool = (name, config, cb) =>
+    server.registerTool(name, config, (async (...a: unknown[]) => {
+      if (envDisabled(deps.env ?? process.env))
+        return textResult('memhive disabled (MEMHIVE_DISABLED is set); nothing was read or saved.');
+      try {
+        return await (cb as (...x: unknown[]) => unknown)(...a);
+      } catch (e) {
+        if (e instanceof DaemonError && e.status === 409) return textResult(e.message);
+        throw e;
+      }
+    }) as typeof cb);
 
-  tool('search', {
-    description: 'Step 1 of 3. Search past observations and session summaries for this project. Returns a compact index (ids, types, titles; summaries have type session-summary). An empty query lists the newest observations (narrow it with since or type). Follow with timeline and get_observations.',
-    inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().max(200).optional(), since: z.string().max(64).optional().describe('ISO date or relative like 7d, 12h'), project: z.string().max(1000).optional().describe('project key; defaults to the current repo (others only if allowlisted in settings)'), limit: z.number().int().min(1).max(100).default(20) },
-  }, async (a) => {
-    // Another project's memory only when allowlisted: text in an untrusted repo must not steer the agent into reading it.
-    const here = await projectKey();
-    const allowed = !a.project || a.project === here || matchesAny(deps.allowProjects ?? [], a.project);
-    const q = new URLSearchParams({ q: a.query, project_key: allowed && a.project ? a.project : here, limit: String(a.limit) });
-    if (a.type) q.set('type', a.type);
-    if (a.user) q.set('user', a.user);
-    if (a.since) q.set('since', a.since);
-    const r = await rpc.request<{ results?: SearchResult[]; observations: Observation[] }>('GET', `/v1/search?${q}`);
-    const note = allowed ? '' : `Note: project "${a.project!.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)}" is not in settings.mcp.allowProjects; searched the current project instead.\n\n`;
-    return textResult(note + formatIndex(r.results ?? r.observations));
-  });
+  tool(
+    'search',
+    {
+      description:
+        'Step 1 of 3. Search past observations and session summaries for this project. Returns a compact index (ids, types, titles; summaries have type session-summary). An empty query lists the newest observations (narrow it with since or type). Follow with timeline and get_observations.',
+      inputSchema: {
+        query: z.string().max(2000),
+        type: z.enum(OBSERVATION_TYPES).optional(),
+        user: z.string().max(200).optional(),
+        since: z.string().max(64).optional().describe('ISO date or relative like 7d, 12h'),
+        project: z
+          .string()
+          .max(1000)
+          .optional()
+          .describe('project key; defaults to the current repo (others only if allowlisted in settings)'),
+        limit: z.number().int().min(1).max(100).default(20),
+      },
+    },
+    async (a) => {
+      // Another project's memory only when allowlisted: text in an untrusted repo must not steer the agent into reading it.
+      const here = await projectKey();
+      const allowed = !a.project || a.project === here || matchesAny(deps.allowProjects ?? [], a.project);
+      const q = new URLSearchParams({
+        q: a.query,
+        project_key: allowed && a.project ? a.project : here,
+        limit: String(a.limit),
+      });
+      if (a.type) q.set('type', a.type);
+      if (a.user) q.set('user', a.user);
+      if (a.since) q.set('since', a.since);
+      const r = await rpc.request<{ results?: SearchResult[]; observations: Observation[] }>('GET', `/v1/search?${q}`);
+      const note = allowed
+        ? ''
+        : `Note: project "${a.project!.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)}" is not in settings.mcp.allowProjects; searched the current project instead.\n\n`;
+      return textResult(note + formatIndex(r.results ?? r.observations));
+    }
+  );
 
-  tool('timeline', {
-    description: 'Step 2 of 3. Show observations recorded before and after an anchor observation (same session), as an index.',
-    inputSchema: { anchor_id: id, before: z.number().int().min(0).max(50).default(5), after: z.number().int().min(0).max(50).default(5) },
-  }, async (a) => {
-    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}&scope=mcp&project_key=${encodeURIComponent(await projectKey())}`);
-    return textResult(formatIndex(r.observations));
-  });
+  tool(
+    'timeline',
+    {
+      description:
+        'Step 2 of 3. Show observations recorded before and after an anchor observation (same session), as an index.',
+      inputSchema: {
+        anchor_id: id,
+        before: z.number().int().min(0).max(50).default(5),
+        after: z.number().int().min(0).max(50).default(5),
+      },
+    },
+    async (a) => {
+      const r = await rpc.request<{ observations: Observation[] }>(
+        'GET',
+        `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}&scope=mcp&project_key=${encodeURIComponent(await projectKey())}`
+      );
+      return textResult(formatIndex(r.observations));
+    }
+  );
 
-  tool('get_observations', {
-    description: 'Step 3 of 3. Fetch full details for selected observation or session-summary ids of this project (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
-    inputSchema: { ids: z.array(id).min(1).max(50) },
-  }, async (a) => {
-    const r = await rpc.request<{ observations: Observation[]; summaries?: Summary[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}&scope=mcp&project_key=${encodeURIComponent(await projectKey())}`);
-    return textResult(formatFull(r.observations, r.summaries ?? []));
-  });
+  tool(
+    'get_observations',
+    {
+      description:
+        'Step 3 of 3. Fetch full details for selected observation or session-summary ids of this project (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
+      inputSchema: { ids: z.array(id).min(1).max(50) },
+    },
+    async (a) => {
+      const r = await rpc.request<{ observations: Observation[]; summaries?: Summary[] }>(
+        'GET',
+        `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}&scope=mcp&project_key=${encodeURIComponent(await projectKey())}`
+      );
+      return textResult(formatFull(r.observations, r.summaries ?? []));
+    }
+  );
 
-  tool('save_memory', {
-    description: 'Save a note for future sessions of this project (a decision, a gotcha, a convention).',
-    inputSchema: { text: z.string().min(1).max(20000), title: z.string().max(2000).optional(), type: z.enum(OBSERVATION_TYPES).default('discovery') },
-  }, async (a) => {
-    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/memories', { projectKey: await projectKey(), cwd: deps.cwd, text: a.text, title: a.title, type: a.type });
-    return textResult(`Saved #${shortId(r.observation.id)} · ${r.observation.type} · ${r.observation.title.replace(/\s+/g, ' ')}`);
-  });
+  tool(
+    'save_memory',
+    {
+      description: 'Save a note for future sessions of this project (a decision, a gotcha, a convention).',
+      inputSchema: {
+        text: z.string().min(1).max(20000),
+        title: z.string().max(2000).optional(),
+        type: z.enum(OBSERVATION_TYPES).default('discovery'),
+      },
+    },
+    async (a) => {
+      const r = await rpc.request<{ observation: Observation }>('POST', '/v1/memories', {
+        projectKey: await projectKey(),
+        cwd: deps.cwd,
+        text: a.text,
+        title: a.title,
+        type: a.type,
+      });
+      return textResult(
+        `Saved #${shortId(r.observation.id)} · ${r.observation.type} · ${r.observation.title.replace(/\s+/g, ' ')}`
+      );
+    }
+  );
 
   // Tools that change one observation by id (pin, unpin; forget joins them) share this shape.
   const idTool = (name: string, description: string, run: (id: string) => Promise<string>) =>
     tool(name, { description, inputSchema: { id } }, async (a) => textResult(await run(a.id)));
   const pin = (pinned: boolean) => async (oid: string) => {
-    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/observations/edit', { projectKey: await projectKey(), id: oid, pinned });
+    const r = await rpc.request<{ observation: Observation }>('POST', '/v1/observations/edit', {
+      projectKey: await projectKey(),
+      id: oid,
+      pinned,
+    });
     return `${pinned ? 'Pinned' : 'Unpinned'} #${shortId(r.observation.id)} · ${r.observation.title.replace(/\s+/g, ' ')}`;
   };
-  idTool('pin', 'Pin an observation (full id or 8-char short id): it is listed first in the session-start context (within the token budget) and never expired by retention.', pin(true));
+  idTool(
+    'pin',
+    'Pin an observation (full id or 8-char short id): it is listed first in the session-start context (within the token budget) and never expired by retention.',
+    pin(true)
+  );
   idTool('unpin', 'Unpin an observation so it is ranked and expired like any other.', pin(false));
 
-  tool('forget', {
-    description: 'Permanently delete observations or session summaries of this project (full ids, unique prefixes or 8-char short ids), e.g. a secret recorded by mistake. Only rows recorded on this machine can be forgotten; on a linked hub the deletion reaches teammates too.',
-    inputSchema: { ids: z.array(id).min(1).max(50) },
-  }, async (a) => {
-    // Never force: an agent steered by text in a repo must not be able to wipe teammates' memory.
-    const r = await rpc.request<ForgetResult>('POST', '/v1/forget', { projectKey: await projectKey(), ids: a.ids });
-    return textResult(formatForget(r));
-  });
+  tool(
+    'forget',
+    {
+      description:
+        'Permanently delete observations or session summaries of this project (full ids, unique prefixes or 8-char short ids), e.g. a secret recorded by mistake. Only rows recorded on this machine can be forgotten; on a linked hub the deletion reaches teammates too.',
+      inputSchema: { ids: z.array(id).min(1).max(50) },
+    },
+    async (a) => {
+      // Never force: an agent steered by text in a repo must not be able to wipe teammates' memory.
+      const r = await rpc.request<ForgetResult>('POST', '/v1/forget', { projectKey: await projectKey(), ids: a.ids });
+      return textResult(formatForget(r));
+    }
+  );
 
   return server;
 }
@@ -125,11 +217,25 @@ export function mcpCwd(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()
 
 export async function runMcp(): Promise<number> {
   const home = resolvePaths().home;
-  const warn = (m: string) => { process.stderr.write(m + '\n'); };   // MCP stderr goes to the host's log, not the conversation
+  const warn = (m: string) => {
+    process.stderr.write(m + '\n');
+  }; // MCP stderr goes to the host's log, not the conversation
   const info = envDisabled() ? null : await ensureDaemon(home, { wait: true, waitMs: 5000, warn });
-  if (!info && !envDisabled()) { process.stderr.write('memhive: daemon could not be started\n'); return 1; }
-  const reconnect: Reconnect = async () => { const i = await ensureDaemon(home, { wait: true, waitMs: 5000, warn }); return i ? new DaemonClient(i) : null; };
-  const server = createMcpServer({ client: info ? new DaemonClient(info) : null, cwd: mcpCwd(), reconnect, currentToken: () => readDaemonInfo(home)?.token ?? null, allowProjects: loadSettings(home).mcp.allowProjects });
+  if (!info && !envDisabled()) {
+    process.stderr.write('memhive: daemon could not be started\n');
+    return 1;
+  }
+  const reconnect: Reconnect = async () => {
+    const i = await ensureDaemon(home, { wait: true, waitMs: 5000, warn });
+    return i ? new DaemonClient(i) : null;
+  };
+  const server = createMcpServer({
+    client: info ? new DaemonClient(info) : null,
+    cwd: mcpCwd(),
+    reconnect,
+    currentToken: () => readDaemonInfo(home)?.token ?? null,
+    allowProjects: loadSettings(home).mcp.allowProjects,
+  });
   await server.connect(new StdioServerTransport());
   await new Promise(() => {}); // stdio transport keeps the process alive until the host closes it
   return 0;

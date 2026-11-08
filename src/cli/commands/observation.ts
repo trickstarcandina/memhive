@@ -9,37 +9,87 @@ import type { Observation, Summary } from '../../store/types.js';
 import { daemonFor, printJson, projectKeyFor } from './search.js';
 
 /** `show <id...>`: full observations or session summaries (full ids, unique prefixes or 8-char short ids). */
-export async function showCommand(args: string[], io: CliIo, opts: { home?: string; cwd?: string } = {}): Promise<number> {
-  const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
+export async function showCommand(
+  args: string[],
+  io: CliIo,
+  opts: { home?: string; cwd?: string } = {}
+): Promise<number> {
+  const home = opts.home ?? resolvePaths().home;
+  const cwd = opts.cwd ?? process.cwd();
   const { positional, flags } = parseArgs(args, 'show');
   const ids = positional.map((x) => x.replace(/^#/, ''));
-  if (!ids.length || ids.length > 50 || (flags['all-projects'] && typeof flags.project === 'string')) { io.stderr(COMMANDS.show.usage); return 2; }
-  const client = await daemonFor(home, io); if (!client) return 1;
+  if (!ids.length || ids.length > 50 || (flags['all-projects'] && typeof flags.project === 'string')) {
+    io.stderr(COMMANDS.show.usage);
+    return 2;
+  }
+  const client = await daemonFor(home, io);
+  if (!client) return 1;
   try {
     const q = new URLSearchParams({ ids: ids.join(',') });
     if (flags['all-projects']) q.set('all_projects', '1');
-    else { const key = await projectKeyFor(client, flags, cwd, io); if (key === null) return 1; q.set('project_key', key); }
-    const r = await client.request<{ observations: Observation[]; summaries?: Summary[] }>('GET', `/v1/observations?${q}`);
+    else {
+      const key = await projectKeyFor(client, flags, cwd, io);
+      if (key === null) return 1;
+      q.set('project_key', key);
+    }
+    const r = await client.request<{ observations: Observation[]; summaries?: Summary[] }>(
+      'GET',
+      `/v1/observations?${q}`
+    );
     const summaries = r.summaries ?? [];
     if (flags.json) printJson(io, { observations: r.observations, summaries });
     else io.stdout(formatFull(r.observations, summaries) + '\n');
     return r.observations.length + summaries.length ? 0 : 1;
-  } catch (e) { if (e instanceof DaemonError) { io.stderr(`memhive show: ${e.message}\n`); return 1; } throw e; }
+  } catch (e) {
+    if (e instanceof DaemonError) {
+      io.stderr(`memhive show: ${e.message}\n`);
+      return 1;
+    }
+    throw e;
+  }
 }
 
 /** `edit <id>`: title, narrative (own rows only; stays on this machine) and pin. */
-export async function editCommand(args: string[], io: CliIo, opts: { home?: string; cwd?: string } = {}): Promise<number> {
-  const home = opts.home ?? resolvePaths().home; const cwd = opts.cwd ?? process.cwd();
+export async function editCommand(
+  args: string[],
+  io: CliIo,
+  opts: { home?: string; cwd?: string } = {}
+): Promise<number> {
+  const home = opts.home ?? resolvePaths().home;
+  const cwd = opts.cwd ?? process.cwd();
   const { positional, flags } = parseArgs(args, 'edit');
-  const str = (k: string) => (typeof flags[k] === 'string' ? flags[k] as string : undefined);
-  const patch = { title: str('title'), narrative: str('narrative'), pinned: flags.pin ? true : flags.unpin ? false : undefined };
-  if (positional.length !== 1 || (flags.pin && flags.unpin) || Object.values(patch).every((v) => v === undefined)) { io.stderr(COMMANDS.edit.usage); return 2; }
-  const client = await daemonFor(home, io); if (!client) return 1;
+  const str = (k: string) => (typeof flags[k] === 'string' ? (flags[k] as string) : undefined);
+  const patch = {
+    title: str('title'),
+    narrative: str('narrative'),
+    pinned: flags.pin ? true : flags.unpin ? false : undefined,
+  };
+  if (positional.length !== 1 || (flags.pin && flags.unpin) || Object.values(patch).every((v) => v === undefined)) {
+    io.stderr(COMMANDS.edit.usage);
+    return 2;
+  }
+  const client = await daemonFor(home, io);
+  if (!client) return 1;
   try {
-    const projectKey = await projectKeyFor(client, flags, cwd, io); if (projectKey === null) return 1;
-    const r = await client.request<{ observation: Observation }>('POST', '/v1/observations/edit', { projectKey, id: positional[0], ...patch });
+    const projectKey = await projectKeyFor(client, flags, cwd, io);
+    if (projectKey === null) return 1;
+    const r = await client.request<{ observation: Observation }>('POST', '/v1/observations/edit', {
+      projectKey,
+      id: positional[0],
+      ...patch,
+    });
     const o = r.observation;
-    if (flags.json) printJson(io, r); else io.stdout(`edited #${shortId(o.id)} · ${o.type} · ${o.title.replace(/\s+/g, ' ').slice(0, 120)}${o.pinned ? ' · pinned' : ''}\n`);
+    if (flags.json) printJson(io, r);
+    else
+      io.stdout(
+        `edited #${shortId(o.id)} · ${o.type} · ${o.title.replace(/\s+/g, ' ').slice(0, 120)}${o.pinned ? ' · pinned' : ''}\n`
+      );
     return 0;
-  } catch (e) { if (e instanceof DaemonError) { io.stderr(`memhive edit: ${e.message}\n`); return 1; } throw e; }
+  } catch (e) {
+    if (e instanceof DaemonError) {
+      io.stderr(`memhive edit: ${e.message}\n`);
+      return 1;
+    }
+    throw e;
+  }
 }
