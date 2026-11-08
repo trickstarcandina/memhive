@@ -15,6 +15,16 @@ export const COMMANDS: Record<string, CommandSpec> = {
   stats: spec(`usage: memhive stats [--project key] [--json]   (row counts per project; observer counters since the daemon started)
   --json  {"db_bytes", "projects": [{"key", "name", "hubUrl", "observations": {"local", "hub"}, "byType", "sessions", "summaries", "pinned", "unsynced", "missingEmbedding", "lastPushAt", "lastPullAt"}], "observer": {"since", "calls", "failures", "unparseable", "stored", "duplicates"}}
 `, ['project'], ['json']),
+  backup: spec('usage: memhive backup [path] [--json]   (consistent copy of the database through the daemon; default ./memhive-backup-<time>.db; never inside the memhive home; --json {"path", "bytes"})\n', [], ['json']),
+  export: spec(`usage: memhive export [--project key] [--format jsonl|md] [--out file [--force]]   (every session, observation and summary of the project; default the current one, to stdout)
+  jsonl: one row per line with "kind" (project, session, observation, summary) and its fields; md: grouped by session
+  --out is created 0600 and never overwritten unless --force (then replaced, not written through)
+`, ['project', 'format', 'out'], ['force']),
+  import: spec(`usage: memhive import <file.jsonl> [--project key] [--sync] [--json]   (rows from memhive export, into the current project or --project)
+  rows are cleaned like pulled ones; ids already here or forgotten are skipped; rows are marked synced unless --sync
+  (then they are imported as your own rows and a linked project pushes them)
+  --json  {"project", "imported": {"sessions", "observations", "summaries"}, "skipped"}
+`, ['project'], ['sync', 'json']),
   hook: spec('usage: memhive hook <claude-code|codex> <event>\n'),
   daemon: spec('usage: memhive daemon <run|start|stop|status> [--json]   (--json: status only, {"running", "port", "pid", "startedAt", "version"})\n', [], ['json']),
   mcp: spec('usage: memhive mcp\n'),
@@ -53,6 +63,7 @@ usage: memhive <command>   (memhive <command> --help for its flags)
   recent [--limit n]   show <id...>   edit <id> [--title t] [--narrative t] [--pin|--unpin]
   forget <id...> [--yes] [--force] [--project key]
   embed [--missing|--rebuild]
+  backup [path] | export [--project key] [--format jsonl|md] [--out file] | import <file.jsonl> [--sync]
   serve [--reset-vectors]
   key <create|list|revoke|rotate>   user <list|remove>   project list
   login <hub-url> [--key-stdin]

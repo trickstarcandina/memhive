@@ -30,6 +30,9 @@ export async function main(argv: string[], io: Partial<CliIo> = {}): Promise<num
     case 'show': return (await import('./commands/observation.js')).showCommand(rest, { stdout, stderr });
     case 'edit': return (await import('./commands/observation.js')).editCommand(rest, { stdout, stderr });
     case 'stats': return (await import('./commands/stats.js')).statsCommand(rest, { stdout, stderr });
+    case 'backup': return (await import('./commands/transfer.js')).backupCommand(rest, { stdout, stderr });
+    case 'export': return (await import('./commands/transfer.js')).exportCommand(rest, { stdout, stderr });
+    case 'import': return (await import('./commands/transfer.js')).importCommand(rest, { stdout, stderr });
     case 'forget': return (await import('./commands/forget.js')).forgetCommand(rest, { stdout, stderr });
     case 'embed': return (await import('./commands/embed.js')).embedCommand(rest, { stdout, stderr });
     case 'doctor': return (await import('./commands/doctor.js')).doctorCommand(rest, { stdout, stderr });

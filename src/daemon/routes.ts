@@ -1,4 +1,8 @@
-import { statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, realpathSync, rmSync, statSync } from 'node:fs';
+import nodePath from 'node:path';
+import { z } from 'zod';
+import { EXPORT_TABLES, ExportRowSchema } from '../store/export.js';
+import { cleanObservation, cleanSession, cleanSummary, safeText } from '../sync/clean.js';
 import type { DaemonContext } from './context.js';
 import { resolvePaths } from '../shared/paths.js';
 import type { HookEvent } from '../hooks/types.js';
@@ -58,6 +62,73 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
       projects: projects.map((p) => { const st = store.getSyncState(p.id); return { key: p.key, name: p.name, hubUrl: p.hubUrl, ...store.projectStats(p.id), lastPushAt: st.lastPushAt, lastPullAt: st.lastPullAt }; }),
       observer: ctx.observer.counters,
     });
+  }
+
+  // A consistent copy of the live database (WAL included). Never inside the memhive home: a copy there would be swept up
+  // by a purge and sits next to the credentials it should outlive.
+  if (method === 'POST' && path === '/v1/backup') {
+    const file = (body as { path?: unknown } | undefined)?.path;
+    if (typeof file !== 'string' || !nodePath.isAbsolute(file) || file.length > 4096) return err(400, 'bad_backup', 'path (absolute) required');
+    let dir: string; try { dir = realpathSync(nodePath.dirname(file)); } catch { return err(400, 'bad_backup', `directory ${nodePath.dirname(file)} does not exist`); }
+    const target = nodePath.join(dir, nodePath.basename(file)); const home = realpathSync(ctx.home);
+    if (target === home || !nodePath.relative(home, target).startsWith('..')) return err(400, 'bad_backup', `refusing a backup inside the memhive home (${ctx.home}); pick a path outside it`);
+    if (existsSync(target)) return err(409, 'exists', `${target} already exists`);
+    try { closeSync(openSync(target, 'wx', 0o600)); } catch (e) { return err(400, 'bad_backup', `cannot create ${target}: ${(e as Error).message}`); }   // 0600 before any row is written
+    try { store.backup(target); } catch (e) { rmSync(target, { force: true }); throw e; }
+    return ok({ path: target, bytes: statSync(target).size });
+  }
+
+  // Export pages: one table at a time, continued from `after` (a rowid), so any size fits the response cap.
+  if (method === 'GET' && path === '/v1/export') {
+    const project = store.getProjectByKey(q.get('project_key') ?? ''); const kind = q.get('kind') as keyof typeof EXPORT_TABLES;
+    if (!project) return err(404, 'not_found', 'no such project');
+    if (!(kind in EXPORT_TABLES)) return err(400, 'bad_export', 'kind must be session, observation or summary');
+    const page = store.exportRows(EXPORT_TABLES[kind], project.id, Math.max(Number(q.get('after') ?? 0) || 0, 0), 200);
+    return ok({ project: { key: project.key, name: project.name }, rows: page.rows.map((r) => ({ kind, ...r })), next: page.rows.length === 200 ? page.last : null });
+  }
+
+  // Import rows of an export into one project. Existing and forgotten ids are skipped (idempotent); rows are marked synced
+  // unless sync, so an import never pushes someone's old rows to a hub by surprise. The file is untrusted: every row is
+  // cleaned like a pulled one. sync: the rows are imported as the local user's (origin local) so they push; otherwise
+  // the file's origin is kept.
+  if (method === 'POST' && path === '/v1/import') {
+    const b = (body ?? {}) as { projectKey?: unknown; rows?: unknown; sync?: unknown };
+    if (typeof b.projectKey !== 'string' || !b.projectKey || b.projectKey.length > 1000 || !Array.isArray(b.rows) || b.rows.length > 500) return err(400, 'bad_import', 'projectKey and rows (at most 500) required');
+    const parsed = z.array(ExportRowSchema).safeParse(b.rows);
+    if (!parsed.success) { const i = parsed.error.issues[0]; return err(400, 'bad_import', `row ${String(i.path[0] ?? '?')}: ${i.path.slice(1).join('.') || 'row'}: ${i.message}`.slice(0, 300)); }
+    if (matchesAny(ctx.settings.excludeProjects, b.projectKey)) return err(409, 'excluded', EXCLUDED_MSG);
+    const project = store.getProjectByKey(b.projectKey) ?? store.getOrCreateProject(b.projectKey, b.projectKey.split('/').pop() ?? b.projectKey);
+    const syncedAt = b.sync === true ? null : new Date().toISOString();
+    const origin = b.sync === true ? { origin: 'local' as const } : {};
+    const rows = (parsed.data.filter((r) => r.kind !== 'project') as Array<Exclude<typeof parsed.data[number], { kind: 'project' }>>).map((r) =>
+      r.kind === 'session' ? { ...cleanSession(r), cwd: safeText(r.cwd, 1000), branch: r.branch == null ? null : safeText(r.branch, 200), ...origin }
+      : r.kind === 'observation' ? { ...cleanObservation(r), ...origin } : { ...cleanSummary(r), ...origin });
+    const dead = (k: 'session' | 'observation' | 'summary') => store.forgottenIds(project.id, k, rows.filter((r) => r.kind === k).map((r) => r.id));
+    const forgotten = { session: dead('session'), observation: dead('observation'), summary: dead('summary') };
+    const done = { sessions: 0, observations: 0, summaries: 0 }; let skipped = 0;
+    const ownSession = (sid: string) => store.getSession(sid)?.projectId === project.id;
+    store.transaction(() => {
+      for (const r of rows) {
+        if (forgotten[r.kind].has(r.id)) { skipped++; continue; }
+        const { kind: _k, ...f } = r;
+        if (r.kind === 'session') {
+          if (store.getSession(r.id)) { skipped++; continue; }
+          store.upsertSession({ ...(f as Omit<typeof r, 'kind'>), projectId: project.id, syncedAt, branch: r.branch ?? null }); done.sessions++;
+        } else if (!ownSession(r.sessionId)) skipped++;   // its session is missing or belongs to another project
+        else if (r.kind === 'observation') {
+          if (store.hasObservations([r.id]).size) { skipped++; continue; }
+          const { pinned, ...o } = f as Omit<typeof r, 'kind'>;
+          store.insertObservations([{ ...o, projectId: project.id, embeddingModel: null, syncedAt }]);   // vectors are not exported: the backfill embeds
+          if (pinned) store.setPinned(r.id, true);
+          done.observations++;
+        } else {
+          if (store.hasSummaries([r.id]).size) { skipped++; continue; }
+          store.insertSummaries([{ ...(f as Omit<typeof r, 'kind'>), projectId: project.id, syncedAt }]); done.summaries++;
+        }
+      }
+    });
+    if (syncedAt === null && project.hubUrl) ctx.sync?.schedulePush(project.id);
+    return ok({ project: project.key, imported: done, skipped });
   }
 
   if (method === 'GET' && path === '/v1/project') {

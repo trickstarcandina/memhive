@@ -4,6 +4,7 @@ import type { SyncHooks } from '../daemon/context.js';
 import { z } from 'zod';
 import { HUB_PROTOCOL, HubObservationSchema, HubSessionSchema, HubSummarySchema, HubTombstoneSchema, MAX_ITEM, MAX_LIST, MAX_LONG, MAX_SHORT, type PushBody, type PushResult } from '../hub/wire.js';
 import { redactSecrets } from '../hooks/sanitize.js';
+import { cleanObservation, cleanSession, cleanSummary, safeText } from './clean.js';
 import type { HubObservation } from '../hub/store/types.js';
 import { HubClient, HubError, type HubConfigInfo } from './client.js';
 import { loadCredentials, saveCredentials } from './credentials.js';
@@ -29,13 +30,6 @@ const PulledObservation = HubObservationSchema.extend({ id: pid, sessionId: pid,
 const PulledSummary = HubSummarySchema.extend({ id: pid, sessionId: pid, createdAt: pdate });
 const PulledTombstone = HubTombstoneSchema.extend({ id: pid });
 const TOMBSTONES_FROM = 2;   // the first hub protocol that accepts and relays tombstones
-const safeText = (v: string, n: number) => v.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, n);
-// The author name is shown in context and MCP output: no control characters, bounded.
-const cleanUser = (v: string) => safeText(redactSecrets(v), 200);
-// Pulled rows come from other clients (or anyone with a key and curl): redact and clip them again with the hub's caps,
-// clipping rather than rejecting so an older hub's longer rows still arrive.
-const cut = (v: string, n: number) => redactSecrets(v).slice(0, n);
-const cutList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => cut(v, MAX_ITEM));
 // Outgoing rows are clipped to the same caps: the hub refuses an over-cap row, and a refused row would be lost.
 const clipList = (l: string[]) => l.slice(0, MAX_LIST).map((v) => v.slice(0, MAX_ITEM));
 // seenCount, lastSeenAt and pinned are this machine's bookkeeping, not part of the shared row.
@@ -346,9 +340,10 @@ export class SyncEngine implements SyncHooks {
           hold(tbl, raw, `store: ${e instanceof Error ? e.message : String(e)}`); return false;
         }
       };
-      const sessions = rows('sessions', page.sessions, PulledSession).map(({ row: s, raw }) => ({ raw, row: { ...s, userId: cleanUser(s.userId), host: cut(s.host, MAX_SHORT), hostSessionId: cut(s.hostSessionId, MAX_SHORT), cwd: '' } }));
-      const observations = rows('observations', page.observations, PulledObservation).map(({ row: o, raw }) => ({ raw, row: { ...o, userId: cleanUser(o.userId), title: cut(o.title, MAX_SHORT), subtitle: cut(o.subtitle, MAX_SHORT), narrative: cut(o.narrative, MAX_LONG), facts: cutList(o.facts), concepts: cutList(o.concepts), filesRead: cutList(o.filesRead), filesModified: cutList(o.filesModified) } }));
-      const summaries = rows('summaries', page.summaries, PulledSummary).map(({ row: m, raw }) => ({ raw, row: { ...m, userId: cleanUser(m.userId), request: cut(m.request, MAX_LONG), learned: cut(m.learned, MAX_LONG), completed: cut(m.completed, MAX_LONG), nextSteps: cut(m.nextSteps, MAX_LONG) } }));
+      // Pulled rows come from other clients (or anyone with a key and curl): cleaned again before they are stored.
+      const sessions = rows('sessions', page.sessions, PulledSession).map(({ row: s, raw }) => ({ raw, row: { ...cleanSession(s), cwd: '' } }));
+      const observations = rows('observations', page.observations, PulledObservation).map(({ row: o, raw }) => ({ raw, row: cleanObservation(o) }));
+      const summaries = rows('summaries', page.summaries, PulledSummary).map(({ row: m, raw }) => ({ raw, row: cleanSummary(m) }));
       let pageApplied = 0;
       const tombs = page.tombstones.flatMap((raw) => { const r = PulledTombstone.safeParse(raw); if (r.success) return [r.data]; logger.warn('pulled tombstone is malformed; skipped', { hub: project.hubUrl }); return []; });
       // One transaction per page: a page applies whole with its cursor, and SQLite commits once instead of per row.

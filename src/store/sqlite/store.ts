@@ -128,6 +128,12 @@ export class SqliteStore implements Store {
   }
   getProject(id: string): Project | null { const r = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined; return r ? rowToProject(r) : null; }
   getProjectByKey(key: string): Project | null { const r = this.db.prepare('SELECT * FROM projects WHERE key = ?').get(key) as Row | undefined; return r ? rowToProject(r) : null; }
+  exportRows(table: SyncTable, projectId: string, afterRowid: number, limit: number): { rows: Array<Session | Observation | Summary>; last: number } {
+    const rows = this.db.prepare(`SELECT rowid AS _rowid, * FROM ${table} WHERE project_id = ? AND rowid > ? ORDER BY rowid LIMIT ?`).all(projectId, afterRowid, limit) as Row[];
+    const conv: (r: Row) => Session | Observation | Summary = table === 'sessions' ? rowToSession : table === 'observations' ? rowToObservation : rowToSummary;
+    return { rows: rows.map(conv), last: rows.length ? Number(rows[rows.length - 1]._rowid) : afterRowid };
+  }
+  backup(file: string): void { this.db.prepare('VACUUM INTO ?').run(file); }
   listProjects(): Project[] { return (this.db.prepare('SELECT * FROM projects ORDER BY key').all() as Row[]).map(rowToProject); }
   projectStats(projectId: string): ProjectStats {
     const one = (sql: string) => Number((this.db.prepare(sql).get(projectId) as Row).c);

@@ -38,6 +38,10 @@ export interface Store {
   getProject(id: string): Project | null;
   getProjectByKey(key: string): Project | null;
   listProjects(): Project[];
+  /** Rows of one table of the project after `afterRowid`, in insert order (export pages); `last` is the rowid to continue from. */
+  exportRows(table: SyncTable, projectId: string, afterRowid: number, limit: number): { rows: Array<Session | Observation | Summary>; last: number };
+  /** A consistent copy of the whole database (VACUUM INTO); the file must not exist or be empty. */
+  backup(file: string): void;
   projectStats(projectId: string): ProjectStats;
   setProjectHub(id: string, hubUrl: string | null): void;
   upsertSession(s: Session): void;
