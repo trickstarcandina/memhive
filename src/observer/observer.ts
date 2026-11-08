@@ -427,7 +427,9 @@ export class Observer {
       const batch = rows.slice(i, i + 16);
       try {
         const vecs = await embedder.embed(batch.map(embeddingText));
-        batch.forEach((o, k) => out.set(o.id, vecs[k]));
+        batch.forEach((o, k) => {
+          out.set(o.id, vecs[k]);
+        });
       } catch (e) {
         logger.warn('embedding failed, left for backfill', { error: String(e) });
       }
@@ -453,6 +455,7 @@ export class Observer {
     if (!this.deps.embedder) return Promise.resolve();
     const batch = opts.batch ?? 64;
     const gap = opts.minIntervalMs ?? 1000;
+    // biome-ignore lint/suspicious/noAssignInExpressions: lazy init with ??= is intended
     return (this.backfilling ??= (async () => {
       try {
         while (!this.closed) {

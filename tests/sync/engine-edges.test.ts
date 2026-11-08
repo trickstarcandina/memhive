@@ -281,6 +281,7 @@ describe('review follow-ups', () => {
     await t.engine.pull(t.project, 2000);
     const got = t.store.getSession(s.id)!.userId;
     expect(got.length).toBe(200);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
     expect(got).not.toMatch(/[\u0000-\u001f]/);
   });
   it('last_error is cleared by the next success and carries last_error_at', async () => {
@@ -321,7 +322,7 @@ describe('review follow-ups', () => {
     expect(t.store.getObservations([ok.id])[0].syncedAt).not.toBeNull();
     expect(t.store.listUnsynced('observations', t.project.id, 500)).toHaveLength(200);
     // past 5 tries a new process (daemon restart) tries once more, then skips them again; 20 tries in total give them up
-    let last;
+    let last: Awaited<ReturnType<SyncEngine['push']>> | undefined;
     for (let r = 0; r < 15; r++) {
       const e = new SyncEngine({
         store: t.store,

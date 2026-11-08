@@ -123,6 +123,7 @@ describe('malformed hub responses', () => {
       },
       (x: HubError) => x
     );
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
     expect(e.message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     expect(e.message.startsWith('?[31mX?')).toBe(true);
     expect(e.message.length).toBeLessThanOrEqual(300);

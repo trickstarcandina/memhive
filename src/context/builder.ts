@@ -70,6 +70,7 @@ const FOOTER = [
   'Observation ids above are 8-char short ids; pass ids with or without the leading #.',
 ];
 // Hub rows come from other users: control chars (C0, DEL, C1 incl. NEL, line/paragraph separators) collapse so a field stays on one line.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
 const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ');
 const day = (iso: string) => oneLine(iso.slice(0, 10));
 const clip = (s: string, n: number) => {

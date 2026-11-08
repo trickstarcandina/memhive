@@ -12,6 +12,7 @@ import {
 // Hub-supplied text reaches the terminal (`memhive sync`) and the logs: no control characters (terminal escapes), bounded length.
 export const safeHubText = (v: unknown): string =>
   String(v)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
     .slice(0, 300);
 
@@ -77,7 +78,7 @@ export class HubClient {
           throw new HubError(`hub response over ${this.maxBytes} bytes`, res.status, 'response_too_large');
         throw e;
       }
-      let json: any;
+      let json: unknown;
       let parsed = true;
       try {
         json = text ? JSON.parse(text) : {};
@@ -87,10 +88,11 @@ export class HubClient {
       }
       if (!res.ok) {
         const ra = Number(res.headers.get('retry-after')); // seconds form only; the engine caps it
+        const err = (json as { error?: { message?: unknown; code?: unknown } } | null)?.error;
         throw new HubError(
-          json?.error?.message != null ? safeHubText(json.error.message) : `hub ${res.status}`,
+          err?.message != null ? safeHubText(err.message) : `hub ${res.status}`,
           res.status,
-          json?.error?.code != null ? safeHubText(json.error.code).slice(0, 64) : 'http_error',
+          err?.code != null ? safeHubText(err.code).slice(0, 64) : 'http_error',
           Number.isFinite(ra) && ra > 0 ? ra * 1000 : undefined
         );
       }

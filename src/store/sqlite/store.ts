@@ -26,7 +26,75 @@ import { SQLITE_MIGRATIONS } from './migrations.js';
 import { ftsTokens, toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
 
+// biome-ignore lint/suspicious/noExplicitAny: ad-hoc query rows (aggregates, joins); table rows are typed by the mappers below
 type Row = Record<string, any>;
+interface ProjectRow {
+  id: string;
+  key: string;
+  name: string;
+  hub_url: string | null;
+  created_at: string;
+}
+interface SessionRow {
+  id: string;
+  project_id: string;
+  user_id: string;
+  host: string;
+  host_session_id: string;
+  cwd: string;
+  started_at: string;
+  ended_at: string | null;
+  synced_at: string | null;
+  origin: 'local' | 'hub';
+  branch: string | null;
+}
+interface ObservationRow {
+  id: string;
+  project_id: string;
+  session_id: string;
+  user_id: string;
+  type: ObservationType;
+  title: string;
+  subtitle: string;
+  facts: string;
+  narrative: string;
+  concepts: string;
+  files_read: string;
+  files_modified: string;
+  created_at: string;
+  embedding_model: string | null;
+  origin: 'local' | 'hub';
+  synced_at: string | null;
+  seen_count: number | null;
+  last_seen_at: string | null;
+  pinned: number | null;
+}
+interface SyncStateRow {
+  project_id: string;
+  pull_cursor: number;
+  hub_epoch: string | null;
+  backoff_until: number | null;
+  backoff_ms: number | null;
+  strikes: number | null;
+  last_error: string | null;
+  last_error_at: number | null;
+  last_push_at: number | null;
+  last_pull_at: number | null;
+  quarantined: number | null;
+}
+interface SummaryRow {
+  id: string;
+  project_id: string;
+  session_id: string;
+  user_id: string;
+  request: string;
+  learned: string;
+  completed: string;
+  next_steps: string;
+  created_at: string;
+  origin: 'local' | 'hub';
+  synced_at: string | null;
+}
 const cosine = (a: number[], b: number[]) => {
   let d = 0,
     x = 0,
@@ -50,60 +118,72 @@ const pj = (v: unknown): string[] => {
   }
 };
 
-const rowToProject = (r: Row): Project => ({
-  id: r.id,
-  key: r.key,
-  name: r.name,
-  hubUrl: r.hub_url ?? null,
-  createdAt: r.created_at,
-});
-const rowToSession = (r: Row): Session => ({
-  id: r.id,
-  projectId: r.project_id,
-  userId: r.user_id,
-  host: r.host,
-  hostSessionId: r.host_session_id,
-  cwd: r.cwd,
-  startedAt: r.started_at,
-  endedAt: r.ended_at ?? null,
-  syncedAt: r.synced_at ?? null,
-  origin: r.origin,
-  branch: r.branch ?? null,
-});
-const rowToObservation = (r: Row): Observation => ({
-  id: r.id,
-  projectId: r.project_id,
-  sessionId: r.session_id,
-  userId: r.user_id,
-  type: r.type,
-  title: r.title,
-  subtitle: r.subtitle,
-  facts: pj(r.facts),
-  narrative: r.narrative,
-  concepts: pj(r.concepts),
-  filesRead: pj(r.files_read),
-  filesModified: pj(r.files_modified),
-  createdAt: r.created_at,
-  embeddingModel: r.embedding_model ?? null,
-  origin: r.origin,
-  syncedAt: r.synced_at ?? null,
-  seenCount: Number(r.seen_count ?? 1),
-  lastSeenAt: r.last_seen_at ?? null,
-  pinned: !!r.pinned,
-});
-const rowToSyncState = (r: Row): SyncState => ({
-  projectId: r.project_id,
-  pullCursor: Number(r.pull_cursor),
-  hubEpoch: r.hub_epoch ?? null,
-  backoffUntil: r.backoff_until ?? null,
-  backoffMs: r.backoff_ms ?? null,
-  strikes: Number(r.strikes ?? 0),
-  lastError: r.last_error ?? null,
-  lastErrorAt: r.last_error_at ?? null,
-  lastPushAt: r.last_push_at ?? null,
-  lastPullAt: r.last_pull_at ?? null,
-  quarantined: Number(r.quarantined ?? 0),
-});
+const rowToProject = (row: Row): Project => {
+  const r = row as ProjectRow;
+  return {
+    id: r.id,
+    key: r.key,
+    name: r.name,
+    hubUrl: r.hub_url ?? null,
+    createdAt: r.created_at,
+  };
+};
+const rowToSession = (row: Row): Session => {
+  const r = row as SessionRow;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    userId: r.user_id,
+    host: r.host,
+    hostSessionId: r.host_session_id,
+    cwd: r.cwd,
+    startedAt: r.started_at,
+    endedAt: r.ended_at ?? null,
+    syncedAt: r.synced_at ?? null,
+    origin: r.origin,
+    branch: r.branch ?? null,
+  };
+};
+const rowToObservation = (row: Row): Observation => {
+  const r = row as ObservationRow;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    sessionId: r.session_id,
+    userId: r.user_id,
+    type: r.type,
+    title: r.title,
+    subtitle: r.subtitle,
+    facts: pj(r.facts),
+    narrative: r.narrative,
+    concepts: pj(r.concepts),
+    filesRead: pj(r.files_read),
+    filesModified: pj(r.files_modified),
+    createdAt: r.created_at,
+    embeddingModel: r.embedding_model ?? null,
+    origin: r.origin,
+    syncedAt: r.synced_at ?? null,
+    seenCount: Number(r.seen_count ?? 1),
+    lastSeenAt: r.last_seen_at ?? null,
+    pinned: !!r.pinned,
+  };
+};
+const rowToSyncState = (row: Row): SyncState => {
+  const r = row as SyncStateRow;
+  return {
+    projectId: r.project_id,
+    pullCursor: Number(r.pull_cursor),
+    hubEpoch: r.hub_epoch ?? null,
+    backoffUntil: r.backoff_until ?? null,
+    backoffMs: r.backoff_ms ?? null,
+    strikes: Number(r.strikes ?? 0),
+    lastError: r.last_error ?? null,
+    lastErrorAt: r.last_error_at ?? null,
+    lastPushAt: r.last_push_at ?? null,
+    lastPullAt: r.last_pull_at ?? null,
+    quarantined: Number(r.quarantined ?? 0),
+  };
+};
 const SYNC_COLS: Record<keyof SyncStatePatch, string> = {
   backoffUntil: 'backoff_until',
   backoffMs: 'backoff_ms',
@@ -118,19 +198,22 @@ const TOMB_TABLE: Record<TombstoneTable, SyncTable> = {
   summary: 'summaries',
   session: 'sessions',
 };
-const rowToSummary = (r: Row): Summary => ({
-  id: r.id,
-  projectId: r.project_id,
-  sessionId: r.session_id,
-  userId: r.user_id,
-  request: r.request,
-  learned: r.learned,
-  completed: r.completed,
-  nextSteps: r.next_steps,
-  createdAt: r.created_at,
-  origin: r.origin,
-  syncedAt: r.synced_at ?? null,
-});
+const rowToSummary = (row: Row): Summary => {
+  const r = row as SummaryRow;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    sessionId: r.session_id,
+    userId: r.user_id,
+    request: r.request,
+    learned: r.learned,
+    completed: r.completed,
+    nextSteps: r.next_steps,
+    createdAt: r.created_at,
+    origin: r.origin,
+    syncedAt: r.synced_at ?? null,
+  };
+};
 
 function filterSql(f: SearchFilters, alias: string): { sql: string; params: unknown[] } {
   const parts = ['1 = 1'];
@@ -243,7 +326,7 @@ export class SqliteStore implements Store {
       this.db
         .prepare('SELECT version FROM schema_migrations')
         .all()
-        .map((r: any) => r.version as number)
+        .map((r) => (r as { version: number }).version)
     );
     const newest = Math.max(0, ...applied);
     if (newest > SQLITE_MIGRATIONS.length) throw new DatabaseNewerThanBinary(newest, SQLITE_MIGRATIONS.length);

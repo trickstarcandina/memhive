@@ -104,7 +104,7 @@ describe('doctor checks', () => {
     writeFileSync(big, '');
     truncateSync(big, 11 * 1024 * 1024);
     const r = await doctor(home);
-    expect(r.out).toMatch(/ok   database schema v\d+ \(this memhive knows up to v\d+\)/);
+    expect(r.out).toMatch(/ok {3}database schema v\d+ \(this memhive knows up to v\d+\)/);
     expect(r.out).toContain('info capture paused until `memhive resume`');
     expect(r.out).toContain('info logs/hook.log 0.0 MB');
     expect(r.out).toContain('warn logs/daemon.log is 11.0 MB');

@@ -14,6 +14,7 @@ export async function postJson(
   headers: Record<string, string>,
   body: unknown,
   timeoutMs: number
+  // biome-ignore lint/suspicious/noExplicitAny: provider JSON (Anthropic/OpenAI/Ollama shapes); callers check each field they read
 ): Promise<{ status: number; json: any }> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
@@ -26,7 +27,7 @@ export async function postJson(
       redirect: 'error',
     });
     const text = await readBodyCapped(res, MAX_RESPONSE_BYTES);
-    let json: any = null;
+    let json: unknown = null;
     try {
       json = text ? JSON.parse(text) : null;
     } catch {
@@ -41,8 +42,8 @@ export async function postJson(
 }
 
 /** Error-body excerpt for messages; strips the key in case the server echoes it back. */
-export function errorDetail(json: any, secret?: string): string {
-  let s = JSON.stringify(json?.error ?? json) ?? '';
+export function errorDetail(json: unknown, secret?: string): string {
+  let s = JSON.stringify((json as { error?: unknown } | null)?.error ?? json) ?? '';
   if (secret) s = s.split(secret).join('[redacted]');
   return s.slice(0, 300);
 }

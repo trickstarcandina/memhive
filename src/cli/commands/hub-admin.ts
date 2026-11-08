@@ -10,7 +10,7 @@ export async function withHubStore(
   env: NodeJS.ProcessEnv,
   fn: (store: HubStore) => Promise<number>
 ): Promise<number> {
-  let store;
+  let store: HubStore;
   try {
     store = createHubStore(env, 'admin');
   } catch (e) {

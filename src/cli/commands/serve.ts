@@ -24,7 +24,7 @@ export async function serveCommand(
 ): Promise<number> {
   const { flags } = parseArgs(args, 'serve');
   if (flags['reset-vectors']) env = { ...env, MEMHIVE_RESET_VECTORS: '1' };
-  let store;
+  let store: ReturnType<typeof createHubStore>;
   try {
     store = createHubStore(env);
   } catch (e) {
@@ -46,7 +46,7 @@ export async function serveCommand(
   }
   // The first admin key goes to a 0600 file, not stdout: container logs keep stdout on the host for anyone in the docker group.
   const keyFile = env.MEMHIVE_ADMIN_KEY_FILE || path.join(resolvePaths(env.MEMHIVE_HOME).home, 'hub-admin-key');
-  let admin;
+  let admin: Awaited<ReturnType<typeof ensureAdminKey>>;
   try {
     admin = await ensureAdminKey(store, (raw) => writeSecret(keyFile, raw + '\n'));
   } catch (e) {
@@ -60,7 +60,7 @@ export async function serveCommand(
     );
     if (env.MEMHIVE_PRINT_ADMIN_KEY === '1') io.stdout(`  ${admin}\n`);
   }
-  let hub;
+  let hub: Awaited<ReturnType<typeof startHub>>;
   try {
     hub = await startHub(store, cfg, createLogger(resolvePaths(env.MEMHIVE_HOME).home, 'hub', env));
   } catch (e) {

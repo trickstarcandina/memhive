@@ -32,7 +32,8 @@
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build",
     "pack:check": "node scripts/check-pack.mjs",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "lint": "biome ci ."
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

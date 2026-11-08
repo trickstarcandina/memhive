@@ -38,6 +38,7 @@ const strs = (v: unknown) =>
     : [];
 
 export function parseObservations(text: string): ObservationDraft[] | null {
+  // biome-ignore lint/suspicious/noExplicitAny: model output; every field read is checked by str/strs or a type guard
   const j = extractJson(text) as any;
   if (!j || !Array.isArray(j.observations)) return null;
   const out: ObservationDraft[] = [];
@@ -60,6 +61,7 @@ export function parseObservations(text: string): ObservationDraft[] | null {
 }
 
 export function parseSummary(text: string): SummaryDraft | null {
+  // biome-ignore lint/suspicious/noExplicitAny: model output; every field read is checked by str/strs or a type guard
   const j = extractJson(text) as any;
   if (!j || typeof j !== 'object') return null;
   const s: SummaryDraft = {

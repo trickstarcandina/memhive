@@ -8,14 +8,66 @@ import type {
   HubUserInfo,
   HubUserRemoval,
   SyncLogEntry,
-  SyncTable,
 } from './types.js';
-import type { Observation, Project, SearchFilters, Session, Summary, Tombstone } from '../../store/types.js';
+import type {
+  Observation,
+  ObservationType,
+  Project,
+  SearchFilters,
+  Session,
+  Summary,
+  Tombstone,
+} from '../../store/types.js';
 import { HUB_SQLITE_MIGRATIONS } from './migrations-sqlite.js';
 import { toFtsQuery } from '../../store/sqlite/fts-query.js';
 import { newId } from '../../shared/ids.js';
 
+// biome-ignore lint/suspicious/noExplicitAny: ad-hoc query rows (aggregates, joins); table rows are typed by the mappers below
 type Row = Record<string, any>;
+interface SessionRow {
+  id: string;
+  project_id: string;
+  user_id: string;
+  host: string;
+  host_session_id: string;
+  started_at: string;
+  ended_at: string | null;
+}
+interface ObservationRow {
+  id: string;
+  project_id: string;
+  session_id: string;
+  user_id: string;
+  type: ObservationType;
+  title: string;
+  subtitle: string;
+  facts: string;
+  narrative: string;
+  concepts: string;
+  files_read: string;
+  files_modified: string;
+  created_at: string;
+  embedding_model: string | null;
+  embedding?: Buffer | null;
+}
+interface SummaryRow {
+  id: string;
+  project_id: string;
+  session_id: string;
+  user_id: string;
+  request: string;
+  learned: string;
+  completed: string;
+  next_steps: string;
+  created_at: string;
+}
+interface ApiKeyRow {
+  id: string;
+  user_name: string;
+  label: string;
+  created_at: string;
+  revoked_at: string | null;
+}
 const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => {
   try {
@@ -28,56 +80,68 @@ const pj = (v: unknown): string[] => {
 const vecToBlob = (v: number[] | null) => (v ? Buffer.from(new Float32Array(v).buffer) : null);
 const blobToVec = (b: Buffer | null): number[] | null =>
   b ? Array.from(new Float32Array(Uint8Array.from(b).buffer)) : null;
-const rowToSession = (r: Row): Session => ({
-  id: r.id,
-  projectId: r.project_id,
-  userId: r.user_id,
-  host: r.host,
-  hostSessionId: r.host_session_id,
-  cwd: '',
-  startedAt: r.started_at,
-  endedAt: r.ended_at ?? null,
-  syncedAt: null,
-});
-const rowToObs = (r: Row): HubObservation => ({
-  id: r.id,
-  projectId: r.project_id,
-  sessionId: r.session_id,
-  userId: r.user_id,
-  type: r.type,
-  title: r.title,
-  subtitle: r.subtitle,
-  facts: pj(r.facts),
-  narrative: r.narrative,
-  concepts: pj(r.concepts),
-  filesRead: pj(r.files_read),
-  filesModified: pj(r.files_modified),
-  createdAt: r.created_at,
-  embeddingModel: r.embedding_model ?? null,
-  origin: 'hub',
-  syncedAt: null,
-  embedding: blobToVec(r.embedding ?? null),
-});
-const rowToSummary = (r: Row): Summary => ({
-  id: r.id,
-  projectId: r.project_id,
-  sessionId: r.session_id,
-  userId: r.user_id,
-  request: r.request,
-  learned: r.learned,
-  completed: r.completed,
-  nextSteps: r.next_steps,
-  createdAt: r.created_at,
-  origin: 'hub',
-  syncedAt: null,
-});
-const rowToKey = (r: Row): HubApiKey => ({
-  id: r.id,
-  userName: r.user_name,
-  label: r.label,
-  createdAt: r.created_at,
-  revokedAt: r.revoked_at ?? null,
-});
+const rowToSession = (row: Row): Session => {
+  const r = row as SessionRow;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    userId: r.user_id,
+    host: r.host,
+    hostSessionId: r.host_session_id,
+    cwd: '',
+    startedAt: r.started_at,
+    endedAt: r.ended_at ?? null,
+    syncedAt: null,
+  };
+};
+const rowToObs = (row: Row): HubObservation => {
+  const r = row as ObservationRow;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    sessionId: r.session_id,
+    userId: r.user_id,
+    type: r.type,
+    title: r.title,
+    subtitle: r.subtitle,
+    facts: pj(r.facts),
+    narrative: r.narrative,
+    concepts: pj(r.concepts),
+    filesRead: pj(r.files_read),
+    filesModified: pj(r.files_modified),
+    createdAt: r.created_at,
+    embeddingModel: r.embedding_model ?? null,
+    origin: 'hub',
+    syncedAt: null,
+    embedding: blobToVec(r.embedding ?? null),
+  };
+};
+const rowToSummary = (row: Row): Summary => {
+  const r = row as SummaryRow;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    sessionId: r.session_id,
+    userId: r.user_id,
+    request: r.request,
+    learned: r.learned,
+    completed: r.completed,
+    nextSteps: r.next_steps,
+    createdAt: r.created_at,
+    origin: 'hub',
+    syncedAt: null,
+  };
+};
+const rowToKey = (row: Row): HubApiKey => {
+  const r = row as ApiKeyRow;
+  return {
+    id: r.id,
+    userName: r.user_name,
+    label: r.label,
+    createdAt: r.created_at,
+    revokedAt: r.revoked_at ?? null,
+  };
+};
 const inList = (ids: string[]) => ids.map(() => '?').join(',');
 const TOMB_TABLES = { observation: 'observations', summary: 'summaries', session: 'sessions' } as const;
 
@@ -102,7 +166,7 @@ export class SqliteHubStore implements HubStore {
       this.db
         .prepare('SELECT version FROM schema_migrations')
         .all()
-        .map((r: any) => r.version)
+        .map((r) => (r as { version: number }).version)
     );
     HUB_SQLITE_MIGRATIONS.forEach((sql, i) => {
       if (!applied.has(i + 1))
@@ -150,6 +214,7 @@ export class SqliteHubStore implements HubStore {
   }
   private logStmt?: Database.Statement;
   private get log(): Database.Statement {
+    // biome-ignore lint/suspicious/noAssignInExpressions: lazy init with ??= is intended
     return (this.logStmt ??= this.db.prepare('INSERT INTO sync_log(project_id, tbl, row_id) VALUES (?, ?, ?)'));
   }
   async upsertSessions(rows: Session[]): Promise<string[]> {

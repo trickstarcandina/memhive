@@ -50,7 +50,7 @@ export function renderedPaths(file: string): { node: string; bundle: string } | 
     j.mcpServers?.memhive ??
     Object.values(j.hooks ?? {})
       .flat()
-      .flatMap((m: any) => m.hooks ?? [])[0];
+      .flatMap((m) => (m as { hooks?: unknown[] }).hooks ?? [])[0];
   if (!first) return null;
   if (Array.isArray(first.args)) return { node: first.command, bundle: first.args[0] };
   const m = /^'((?:[^']|'\\'')*)' '((?:[^']|'\\'')*)'/.exec(first.command ?? ''); // shq() from plugin-files.ts
@@ -128,7 +128,7 @@ export async function doctorCommand(
       );
     }
   } else add('info', 'settings', 'no settings.json (defaults and MEMHIVE_* env)', 'run `memhive install`');
-  let s;
+  let s: ReturnType<typeof loadSettings>;
   try {
     s = loadSettings(home, env);
   } catch (e) {
@@ -147,7 +147,7 @@ export async function doctorCommand(
       `embedder ${s.embed.model} (${s.embed.dims} dims) at ${s.embed.baseUrl} (api key ${s.embed.apiKey ? 'set' : 'not set'})`
     );
   else add('info', 'embedder', 'embedder: not configured (FTS-only search)');
-  let provider;
+  let provider: ReturnType<typeof createProvider> | undefined;
   try {
     provider = createProvider(s);
     add('ok', 'provider', 'provider credentials present');
@@ -203,7 +203,7 @@ export async function doctorCommand(
     for (const rel of ['hooks/hooks.json', 'hooks/codex-hooks.json', '.mcp.json']) {
       const file = path.join(plugin, rel);
       if (!existsSync(file)) continue;
-      let p;
+      let p: ReturnType<typeof renderedPaths>;
       try {
         p = renderedPaths(file);
       } catch (e) {

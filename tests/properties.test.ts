@@ -14,7 +14,7 @@ import { normalizeRemote } from '../src/shared/project-key.js';
 import { formatFull, formatIndex } from '../src/mcp/format.js';
 import { buildContext, estimateTokens } from '../src/context/builder.js';
 import { PostgresHubStore } from '../src/hub/store/postgres.js';
-import { obs, sess } from './store/store-contract.js';
+import { obs } from './store/store-contract.js';
 import { newId } from '../src/shared/ids.js';
 import type { Summary } from '../src/store/types.js';
 

@@ -8,6 +8,7 @@ const est = (o: Row) =>
     ? Math.ceil((o.request.length + o.learned.length + o.completed.length + o.nextSteps.length) / 4)
     : Math.ceil((o.title.length + o.subtitle.length + o.narrative.length + o.facts.join(' ').length) / 4);
 // Stored text is data: keep each field on one line (control chars incl. newlines become spaces).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
 const line = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim();
 // A list item made only of rule characters ("- ---", "- - -") is a CommonMark thematic break: it would pass as our separator.
 const item = (s: string) => {

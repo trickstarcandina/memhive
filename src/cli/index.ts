@@ -1,7 +1,9 @@
 import { VERSION } from '../shared/version.js';
 import { COMMANDS, USAGE, flagError } from './help.js';
 
+// biome-ignore lint/suspicious/noExplicitAny: CommonJS globals of the esbuild bundle, untyped in this ESM source
 declare const require: any;
+// biome-ignore lint/suspicious/noExplicitAny: see above
 declare const module: any;
 
 export interface CliIo {

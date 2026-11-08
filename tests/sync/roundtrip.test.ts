@@ -269,7 +269,7 @@ describe.each(hubStores('rt'))('$name', ({ open }) => {
       expect(clipped.facts[0]).toHaveLength(4000);
       a.engine.close();
       b.engine.close();
-      e2.close();
+      await e2.close();
     });
     it('resend after lost response is idempotent', async () => {
       // the hub commits, then the response is lost (daemon crash before markSynced): the next push resends the same rows

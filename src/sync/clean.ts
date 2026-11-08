@@ -3,6 +3,7 @@ import { redactSecrets, stripPrivate } from '../hooks/sanitize.js';
 
 // Rows that come from elsewhere (a hub pull, an import file) pass through here before they are stored: redacted, private
 // blocks dropped, and clipped to the hub's caps rather than rejected, so an older hub's longer rows still arrive.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
 export const safeText = (v: string, n: number) => v.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, n);
 // The author name is shown in context and MCP output: no control characters, bounded.
 export const cleanUser = (v: string) => safeText(redactSecrets(v), 200);

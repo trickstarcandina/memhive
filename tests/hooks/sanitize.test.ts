@@ -469,6 +469,7 @@ describe('redactSecrets coverage (H1)', () => {
     const N = 2 * 1024 * 1024;
     const fill = (u: string) => u.repeat(Math.ceil(N / u.length)).slice(0, N);
     let seed = 7;
+    // biome-ignore lint/suspicious/noAssignInExpressions: compact seeded LCG
     const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32;
     const words = ['alpha', 'beta', 'token', 'password', 'gamma', 'secret', 'map', 'key', 'url', 'auth'];
     let random = '';

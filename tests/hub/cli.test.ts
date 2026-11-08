@@ -59,7 +59,7 @@ it('key create/list/revoke on a sqlite file, and --help is side-effect free', as
   expect(k.o.out).toMatch(/usage: memhive key/);
 });
 // Runs serve until `run` finishes, then stops it through the abort signal.
-export async function withServe(
+async function withServe(
   args: string[],
   env: NodeJS.ProcessEnv,
   run: (out: { out: string; err: string }) => Promise<void> = async () => {}

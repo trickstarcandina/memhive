@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../../src/shared/settings.js';

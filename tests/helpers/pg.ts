@@ -34,6 +34,7 @@ export function pgTestDb(name: string): { url: string; reset(): Promise<void> } 
   return {
     url,
     async reset() {
+      // biome-ignore lint/suspicious/noAssignInExpressions: lazy init with ??= is intended
       await (created ??= create());
       const pool = new Pool({ connectionString: url });
       try {

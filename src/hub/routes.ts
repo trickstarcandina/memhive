@@ -42,7 +42,8 @@ function rejection(row: unknown, issues: z.core.$ZodIssue[], kindFields: string[
 // Postgres rejects NUL in text and jsonb; strip it everywhere so a row cannot fail in the DB after passing validation.
 const noNul = <T>(v: T): T =>
   (typeof v === 'string'
-    ? v.replace(/\u0000/g, '')
+    ? // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+      v.replace(/\u0000/g, '')
     : Array.isArray(v)
       ? v.map(noNul)
       : v && typeof v === 'object'

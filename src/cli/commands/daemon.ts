@@ -13,7 +13,7 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
   const home = opts.home ?? resolvePaths().home;
   const sub = args.find((a) => !a.startsWith('--')) ?? 'status';
   if (sub === 'run') {
-    let h;
+    let h: Awaited<ReturnType<typeof startDaemon>>;
     try {
       h = await startDaemon(createDaemonContext(home));
     } catch (e) {

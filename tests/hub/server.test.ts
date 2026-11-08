@@ -297,18 +297,18 @@ describe('hub push hardening', () => {
     expect(byIdOf(r).get(longVec.id)).toEqual({ id: longVec.id, reason: 'invalid_row', field: 'embedding' });
     expect(r.json.rejected.find((x: any) => x.reason === 'invalid_id').id.length).toBeLessThanOrEqual(64); // a bogus id is not echoed whole
     const byId = new Map(r.json.rejected.map((x: any) => [x.id, x]));
-    cases.forEach(([field], i) =>
-      expect(byId.get(obsRows[i].id)).toEqual({ id: obsRows[i].id, reason: 'invalid_row', field })
-    );
-    sums.forEach((m, i) =>
+    cases.forEach(([field], i) => {
+      expect(byId.get(obsRows[i].id)).toEqual({ id: obsRows[i].id, reason: 'invalid_row', field });
+    });
+    sums.forEach((m, i) => {
       expect(byId.get(m.id)).toMatchObject({
         reason: 'invalid_row',
         field: ['request', 'learned', 'completed', 'nextSteps'][i],
-      })
-    );
-    sessions.forEach((s, i) =>
-      expect(byId.get(s.id)).toMatchObject({ reason: 'invalid_row', field: ['host', 'hostSessionId'][i] })
-    );
+      });
+    });
+    sessions.forEach((s, i) => {
+      expect(byId.get(s.id)).toMatchObject({ reason: 'invalid_row', field: ['host', 'hostSessionId'][i] });
+    });
     expect(byId.has(longCwd.id)).toBe(false);
     expect(byId.has(hubOwned.id)).toBe(false);
     expect(JSON.stringify(r.json)).not.toContain('xxxx'); // names the field, never echoes the value

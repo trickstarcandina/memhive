@@ -39,7 +39,7 @@ export function createJsonServer(
         return;
       }
       const raw = req.method === 'POST' ? await readBody(req, bodyLimit) : '';
-      let body: unknown = undefined;
+      let body: unknown;
       if (raw) {
         try {
           body = JSON.parse(raw);

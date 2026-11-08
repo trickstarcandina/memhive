@@ -35,6 +35,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npm run lint
+        if: matrix.os == 'ubuntu-latest'
       - run: npm run typecheck
       - run: npm run build
       - run: npm test

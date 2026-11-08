@@ -165,6 +165,7 @@ export class SyncEngine implements SyncHooks {
   /** Records a failure for `memhive sync` and sync_state.last_error (redacted, no control chars, bounded). */
   private noteError(projectId: string, msg: string): void {
     const clean = redactSecrets(msg)
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
       .replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
       .slice(0, 500);
     this.lastError.set(projectId, clean);
@@ -570,7 +571,7 @@ export class SyncEngine implements SyncHooks {
     let limit = PULL_LIMIT;
     for (;;) {
       if (Date.now() >= deadline) break;
-      let page;
+      let page: Awaited<ReturnType<HubClient['pull']>>;
       try {
         page = await client.pull(project.key, since, limit, left(), vectors);
       } catch (e) {

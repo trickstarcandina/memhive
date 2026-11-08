@@ -32,7 +32,9 @@ export class OpenAICompatEmbedder implements Embedder {
       this.timeoutMs
     );
     if (status !== 200) throw new ProviderError(`embed ${status}`, classifyStatus(status), status);
-    const data: any[] = Array.isArray(json?.data) ? [...json.data].sort((a, b) => a.index - b.index) : [];
+    const data: { index: number; embedding?: unknown[] }[] = Array.isArray(json?.data)
+      ? [...json.data].sort((a, b) => a.index - b.index)
+      : [];
     if (data.length !== texts.length) throw new ProviderError('embed: wrong result count', 'bad_response', status);
     return data.map((d) => {
       if (!Array.isArray(d.embedding) || d.embedding.length !== this.dims)

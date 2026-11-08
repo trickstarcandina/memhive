@@ -135,7 +135,7 @@ describe('session start pull', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const s = linked(5000);
     s.ctx.store.setPullCursor(s.project.id, 1); // pulled before
-    let r;
+    let r: Awaited<ReturnType<typeof startAt>>;
     try {
       r = await startAt(s); // resolves with no timer advanced: the route does not wait on the hub
       expect(r.ms).toBe(0);
@@ -168,8 +168,7 @@ describe('session start pull', () => {
     }
     slow.ctx.store.close();
     const fast = linked(20);
-    let r;
-    r = await startAt(fast);
+    const r = await startAt(fast);
     expect(r.ms).toBeLessThan(900);
     expect(r.context).toContain('Pulled from hub');
     await fast.ctx.sync!.close();

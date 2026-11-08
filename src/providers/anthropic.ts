@@ -30,8 +30,8 @@ export class AnthropicProvider implements LlmProvider {
         status
       );
     const text = (json?.content ?? [])
-      .filter((c: any) => c.type === 'text')
-      .map((c: any) => c.text)
+      .filter((c: { type?: unknown }) => c.type === 'text')
+      .map((c: { text?: unknown }) => c.text)
       .join('');
     if (!text) throw new ProviderError('anthropic: empty response', 'bad_response', status);
     return text;

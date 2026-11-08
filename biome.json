@@ -1,19 +1,66 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["src/**", "tests/**", "scripts/**", "*.mjs", "*.ts"] },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
-  "javascript": {
-    "formatter": { "quoteStyle": "single", "semicolons": "always", "trailingCommas": "es5" }
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
   },
-  "assist": { "enabled": false },
+  "files": {
+    "includes": ["src/**", "tests/**", "scripts/**", "*.mjs", "*.ts"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "es5"
+    }
+  },
+  "assist": {
+    "enabled": false
+  },
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
-      "suspicious": { "noExplicitAny": "warn" },
-      "style": { "noNonNullAssertion": "off", "useImportType": "error" },
-      "nursery": { "noFloatingPromises": "error" }
+      "preset": "recommended",
+      "suspicious": {
+        "noExplicitAny": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useImportType": "error",
+        "useTemplate": "off"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
+      }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noFocusedTests": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["tests/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    }
+  ]
 }

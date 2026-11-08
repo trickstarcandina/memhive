@@ -80,7 +80,7 @@ export function niceStep(max, divisions = 4) {
  * @param {string} text Text
  * @returns {string}
  */
-function escape(text) {
+function escapeXml(text) {
   return String(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
@@ -115,7 +115,7 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
   parts.push(
     `<rect x="0.5" y="0.5" width="${WIDTH - 1}" height="${HEIGHT - 1}" rx="6" fill="${theme.background}" stroke="${theme.border}"/>`,
     `<text x="${PLOT.left - 32}" y="32" font-size="16" font-weight="600" fill="${theme.text}">npm downloads per week</text>`,
-    `<text x="${PLOT.left - 32}" y="54" font-size="12" fill="${theme.muted}">${escape(
+    `<text x="${PLOT.left - 32}" y="54" font-size="12" fill="${theme.muted}">${escapeXml(
       `${full.format(total)} total · ${PACKAGE} · updated ${updated}`
     )}</text>`
   );
@@ -157,7 +157,7 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
         width - gap * 2,
         1
       ).toFixed(1)}" height="${(bottom - y(week.downloads)).toFixed(1)}" rx="2" fill="${theme.bar}">` +
-        `<title>${escape(`${week.start} – ${week.end}: ${full.format(week.downloads)}`)}</title></rect>`
+        `<title>${escapeXml(`${week.start} – ${week.end}: ${full.format(week.downloads)}`)}</title></rect>`
     );
   }
 
@@ -201,7 +201,7 @@ export function renderChart({ weeks: allWeeks, releases, updated }, theme) {
     const left = at > WIDTH - PLOT.right - 48;
     parts.push(
       `<text x="${left ? at - 4 : at + 4}" y="${PLOT.top - 6 + row * 13}" font-size="11" font-weight="600" ` +
-        `text-anchor="${left ? 'end' : 'start'}" fill="${theme.release}">${escape(`v${release.version}`)}</text>`
+        `text-anchor="${left ? 'end' : 'start'}" fill="${theme.release}">${escapeXml(`v${release.version}`)}</text>`
     );
   }
 
