@@ -1,4 +1,4 @@
-FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS build
+FROM node:26-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS build
 WORKDIR /app
 # No compiler toolchain: better-sqlite3 and sqlite-vec load prebuilt binaries shipped in their
 # packages. --ignore-scripts stops npm from running node-gyp anyway because binding.gyp exists.
@@ -7,7 +7,7 @@ RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
+FROM node:26-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
 WORKDIR /app
 ENV NODE_ENV=production
 # Inside the container the hub must listen on all interfaces; compose publishes it on loopback only.
