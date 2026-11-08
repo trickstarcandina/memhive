@@ -18,4 +18,5 @@ export const HUB_SQLITE_MIGRATIONS: string[] = [
   `CREATE TABLE hub_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
   `CREATE INDEX summaries_project ON summaries(project_id);
   CREATE INDEX sessions_project ON sessions(project_id);`,
+  `ALTER TABLE sessions DROP COLUMN cwd;`,
 ];

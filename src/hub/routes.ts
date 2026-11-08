@@ -46,8 +46,8 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     const sessions: Session[] = [];
     for (const r of rows('sessions')) {
       const p = PushSessionSchema.safeParse(r); if (!p.success) { rejected.push(rejection(r, p.error.issues, [], 'invalid_row')); continue; }
-      const s = p.data;
-      sessions.push({ ...s, cwd: s.cwd ?? '', endedAt: s.endedAt ?? null, projectId: project.id, userId: auth.userName, syncedAt: null });
+      const { cwd: _cwd, ...s } = p.data;   // accepted for older clients, never stored (Session.cwd is '' on the hub)
+      sessions.push({ ...s, cwd: '', endedAt: s.endedAt ?? null, projectId: project.id, userId: auth.userName, syncedAt: null });
     }
     const sIds = await store.upsertSessions(sessions);
     // An unchanged session is either identical (fine) or owned by another user/project (the upsert skipped it): report the latter.

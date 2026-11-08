@@ -128,7 +128,7 @@ describe('hub push hardening', () => {
     const r = await push(bobKey, { sessions: [{ ...s, cwd: '/bob', endedAt: '2030-01-01T00:00:00.000Z' }], observations: [{ ...o, title: 'hijacked' }, mine] });
     expect(r.json.accepted).toEqual({ sessions: 0, observations: 0, summaries: 0 });
     expect(r.json.rejected).toEqual([{ id: sid, reason: 'not_owner' }, { id: o.id, reason: 'unknown_session' }, { id: mine.id, reason: 'unknown_session' }]);
-    expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', cwd: '/alice', endedAt: null });
+    expect((await store.getSessions([sid]))[0]).toMatchObject({ userId: 'alice', endedAt: null });
     expect((await store.getObservations([o.id]))[0]).toMatchObject({ userId: 'alice', title: 'alice-obs' });
   });
   it('push rejects oversized observation fields', async () => {
@@ -154,6 +154,15 @@ describe('hub push hardening', () => {
       const bad = await call(aliceKey, 'POST', '/v1/sync/push', { projectKey: PK, sessions: [], observations: [], summaries: [], ...top });
       expect(bad.status).toBe(400); expect(bad.json.error.code).toBe('bad_push');
     }
+  });
+  it('the hub never stores or relays session cwd', async () => {
+    const sid = newId(); const s = hsess('x', { id: sid, cwd: '/home/alice/clients/acme' });
+    expect((await push(aliceKey, { sessions: [s] })).json.accepted.sessions).toBe(1);
+    expect((await push(aliceKey, { sessions: [{ ...s, cwd: '/elsewhere' }] })).json.accepted.sessions).toBe(0);   // a cwd change is not a change
+    const { cwd: _c, ...noCwd } = s; expect((await push(aliceKey, { sessions: [{ ...noCwd, id: newId() }] })).json.accepted.sessions).toBe(1);   // optional
+    const pull = await call(bobKey, 'GET', `/v1/sync/pull?project_key=${encodeURIComponent(PK)}&since=0&limit=1000`);
+    expect(JSON.stringify(pull.json)).not.toContain('/home/alice'); expect(pull.json.sessions.find((x: any) => x.id === sid).cwd).toBe('');
+    expect(JSON.stringify(await store.getSessions([sid]))).not.toContain('acme');
   });
   it('invalid vectors are rejected per row', async () => {
     const sid = newId(); const bad = hobs({ projectId: 'x', sessionId: sid, title: 'nan', embedding: [1, 'a' as any, 0, 0], embeddingModel: 'bge-m3' });

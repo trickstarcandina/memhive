@@ -14,7 +14,7 @@ export class HubInvalidVector extends Error {
   constructor(public rowId: string) { super(`invalid_embedding: row ${rowId} has a non-finite value`); this.name = 'HubInvalidVector'; }
 }
 const parseVec = (v: any): number[] | null => (v == null ? null : typeof v === 'string' ? JSON.parse(v) : Array.isArray(v) ? v : null);
-const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: iso(r.started_at), endedAt: isoOrNull(r.ended_at), syncedAt: null });
+const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: '', startedAt: iso(r.started_at), endedAt: isoOrNull(r.ended_at), syncedAt: null });
 const rowToObs = (r: Row): HubObservation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: arr(r.facts), narrative: r.narrative, concepts: arr(r.concepts), filesRead: arr(r.files_read), filesModified: arr(r.files_modified), createdAt: iso(r.created_at), embeddingModel: r.embedding_model ?? null, origin: 'hub', syncedAt: null, embedding: parseVec(r.embedding) });
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: iso(r.created_at), origin: 'hub', syncedAt: null });
 const rowToKey = (r: Row): HubApiKey => ({ id: r.id, userName: r.user_name, label: r.label, createdAt: iso(r.created_at), revokedAt: isoOrNull(r.revoked_at) });
@@ -106,11 +106,11 @@ export class PostgresHubStore implements HubStore {
     // ON CONFLICT DO UPDATE cannot touch a row twice in one statement: the last copy of an id wins, as a row-by-row upsert would
     const uniq = [...new Map(rows.map((r) => [r.id, r])).values()];
     return this.tx(uniq.map((r) => r.projectId), async (c) => {
-      const { rows: ret } = await c.query(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at)
-        SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::timestamptz[])
-        ON CONFLICT (id) DO UPDATE SET ended_at = ${newEnd}, cwd = EXCLUDED.cwd
-        WHERE sessions.project_id = EXCLUDED.project_id AND sessions.user_id = EXCLUDED.user_id AND (sessions.cwd IS DISTINCT FROM EXCLUDED.cwd OR sessions.ended_at IS DISTINCT FROM ${newEnd}) RETURNING id`,
-        [uniq.map((s) => s.id), uniq.map((s) => s.projectId), uniq.map((s) => s.userId), uniq.map((s) => s.host), uniq.map((s) => s.hostSessionId), uniq.map((s) => s.cwd), uniq.map((s) => s.startedAt), uniq.map((s) => s.endedAt)]);
+      const { rows: ret } = await c.query(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, started_at, ended_at)
+        SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::timestamptz[], $7::timestamptz[])
+        ON CONFLICT (id) DO UPDATE SET ended_at = ${newEnd}
+        WHERE sessions.project_id = EXCLUDED.project_id AND sessions.user_id = EXCLUDED.user_id AND sessions.ended_at IS DISTINCT FROM ${newEnd} RETURNING id`,
+        [uniq.map((s) => s.id), uniq.map((s) => s.projectId), uniq.map((s) => s.userId), uniq.map((s) => s.host), uniq.map((s) => s.hostSessionId), uniq.map((s) => s.startedAt), uniq.map((s) => s.endedAt)]);
       const changed = PostgresHubStore.written(uniq, ret); await this.log(c, 'sessions', changed);
       return changed.map((s) => s.id);
     });

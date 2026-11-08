@@ -29,5 +29,7 @@ export function hubPgMigrations(dims: number | null): string[] {
     // No HNSW index on embedding: the hub relays vectors to clients and never searches them (hub search is full-text).
     `CREATE INDEX summaries_project ON summaries(project_id);
     CREATE INDEX sessions_project ON sessions(project_id);`,
+    // Session paths (/home/alice/clients/...) leak usernames and client names to the team; the hub no longer keeps them.
+    `ALTER TABLE sessions DROP COLUMN cwd;`,
   ];
 }

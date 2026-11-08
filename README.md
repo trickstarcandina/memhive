@@ -215,7 +215,7 @@ memhive link https://hub.example.com
 
 ### What syncs
 
-Observations, summaries and session records of linked projects are pushed to the hub. Prompts and raw tool output never leave the machine, and `<private>` blocks and redacted secrets are removed before anything is stored.
+Observations, summaries and session records of linked projects are pushed to the hub. A session record carries the host, the host's session id and its start and end times; the hub drops the session's working directory, so local paths and usernames are not shared. Prompts and raw tool output never leave the machine, and `<private>` blocks and redacted secrets are removed before anything is stored.
 
 ### Embedding model must match
 

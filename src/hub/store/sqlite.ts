@@ -11,7 +11,7 @@ const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 const vecToBlob = (v: number[] | null) => (v ? Buffer.from(new Float32Array(v).buffer) : null);
 const blobToVec = (b: Buffer | null): number[] | null => (b ? Array.from(new Float32Array(Uint8Array.from(b).buffer)) : null);
-const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: null });
+const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: '', startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: null });
 const rowToObs = (r: Row): HubObservation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: 'hub', syncedAt: null, embedding: blobToVec(r.embedding ?? null) });
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: 'hub', syncedAt: null });
 const rowToKey = (r: Row): HubApiKey => ({ id: r.id, userName: r.user_name, label: r.label, createdAt: r.created_at, revokedAt: r.revoked_at ?? null });
@@ -54,11 +54,11 @@ export class SqliteHubStore implements HubStore {
   private get log(): Database.Statement { return (this.logStmt ??= this.db.prepare('INSERT INTO sync_log(project_id, tbl, row_id) VALUES (?, ?, ?)')); }
   async upsertSessions(rows: Session[]): Promise<string[]> {
     const newEnd = `CASE WHEN excluded.ended_at IS NULL THEN sessions.ended_at WHEN sessions.ended_at IS NULL THEN excluded.ended_at ELSE MAX(sessions.ended_at, excluded.ended_at) END`;
-    const stmt = this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, cwd, started_at, ended_at) VALUES (@id, @projectId, @userId, @host, @hostSessionId, @cwd, @startedAt, @endedAt)
-      ON CONFLICT(id) DO UPDATE SET ended_at = ${newEnd}, cwd = excluded.cwd
-      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id AND (sessions.cwd IS NOT excluded.cwd OR sessions.ended_at IS NOT (${newEnd}))`);
+    const stmt = this.db.prepare(`INSERT INTO sessions(id, project_id, user_id, host, host_session_id, started_at, ended_at) VALUES (@id, @projectId, @userId, @host, @hostSessionId, @startedAt, @endedAt)
+      ON CONFLICT(id) DO UPDATE SET ended_at = ${newEnd}
+      WHERE sessions.project_id = excluded.project_id AND sessions.user_id = excluded.user_id AND sessions.ended_at IS NOT (${newEnd})`);
     const changed: string[] = [];
-    this.db.transaction(() => { for (const r of rows) { if (stmt.run({ id: r.id, projectId: r.projectId, userId: r.userId, host: r.host, hostSessionId: r.hostSessionId, cwd: r.cwd, startedAt: r.startedAt, endedAt: r.endedAt ?? null }).changes) { changed.push(r.id); this.log.run(r.projectId, 'sessions', r.id); } } })();
+    this.db.transaction(() => { for (const r of rows) { if (stmt.run({ id: r.id, projectId: r.projectId, userId: r.userId, host: r.host, hostSessionId: r.hostSessionId, startedAt: r.startedAt, endedAt: r.endedAt ?? null }).changes) { changed.push(r.id); this.log.run(r.projectId, 'sessions', r.id); } } })();
     return changed;
   }
   async insertObservations(rows: HubObservation[]): Promise<string[]> {
