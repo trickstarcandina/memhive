@@ -1,7 +1,6 @@
 import { HubDimsMismatch, type HubStore, type HubObservation } from './store/types.js';
 import type { HubConfig } from './server.js';
 import { OBSERVATION_TYPES, type ObservationType, type SearchFilters, type Session, type Summary } from '../store/types.js';
-import { HubInvalidVector } from './store/postgres.js';
 import { VERSION } from '../shared/version.js';
 
 export interface PushBody { projectKey: string; projectName: string; sessions: Session[]; observations: HubObservation[]; summaries: Summary[] }
@@ -59,15 +58,13 @@ export async function handleHubRoute(store: HubStore, cfg: HubConfig, auth: { ke
     // A row must hang off a session this user owns in this project (avoids FK 500s and attaching rows to someone else's session).
     const owned = new Set((await store.getSessions([...new Set([...obsIn, ...sumIn].map((r) => r.sessionId))])).filter((x) => x.userId === auth.userName && x.projectId === project.id).map((x) => x.id));
     const keep = <T extends { id: string; sessionId: string }>(rows: T[]) => rows.filter((r) => { if (owned.has(r.sessionId)) return true; rejected.push({ id: r.id, reason: 'unknown_session' }); return false; });
-    let obs = keep(obsIn); const sums = keep(sumIn);
-    let oIds: string[] = [];
-    for (;;) {
-      try { oIds.push(...await store.insertObservations(obs)); break; }
-      catch (e) {
-        if (e instanceof HubDimsMismatch) { oIds.push(...e.inserted); for (const id of e.rejected) rejected.push({ id, reason: 'embedding_model_mismatch' }); break; }
-        if (e instanceof HubInvalidVector) { rejected.push({ id: e.rowId, reason: 'invalid_vector' }); obs = obs.filter((o) => o.id !== e.rowId); continue; }
-        throw e;
-      }
+    const obs = keep(obsIn); const sums = keep(sumIn);
+    // Non-finite vectors were rejected above, so the store's own invalid-vector guard cannot fire here.
+    let oIds: string[];
+    try { oIds = await store.insertObservations(obs); }
+    catch (e) {
+      if (!(e instanceof HubDimsMismatch)) throw e;
+      oIds = e.inserted; for (const id of e.rejected) rejected.push({ id, reason: 'embedding_model_mismatch' });
     }
     const mIds = await store.insertSummaries(sums);
     const result: PushResult = { accepted: { sessions: sIds.length, observations: oIds.length, summaries: mIds.length }, rejected };
