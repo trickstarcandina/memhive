@@ -91,8 +91,8 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     const type = (b.type && OBSERVATION_TYPES.includes(b.type as ObservationType) ? b.type : 'discovery') as ObservationType;
     const now = new Date().toISOString();
     let session = store.getSessionByHost('manual', project.id);
-    if (!session) { session = { id: newId(), projectId: project.id, userId: ctx.userId, host: 'manual', hostSessionId: project.id, cwd: '', startedAt: now, endedAt: null, syncedAt: null }; store.upsertSession(session); }
-    const o: Observation = { id: newId(), projectId: project.id, sessionId: session.id, userId: ctx.userId, type, title: (title || text).slice(0, 200), subtitle: '', facts: [text], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: now, embeddingModel: null, origin: 'local', syncedAt: null };
+    if (!session) { session = { id: newId(), projectId: project.id, userId: ctx.userFor(project), host: 'manual', hostSessionId: project.id, cwd: '', startedAt: now, endedAt: null, syncedAt: null }; store.upsertSession(session); }
+    const o: Observation = { id: newId(), projectId: project.id, sessionId: session.id, userId: session.userId, type, title: (title || text).slice(0, 200), subtitle: '', facts: [text], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: now, embeddingModel: null, origin: 'local', syncedAt: null };
     store.insertObservations([o]);
     if (ctx.embedder) { try { const [v] = await ctx.embedder.embed([embeddingText(o)]); store.setObservationEmbedding(o.id, v, ctx.embedder.model); } catch { /* backfill later */ } }
     ctx.sync?.schedulePush(project.id);

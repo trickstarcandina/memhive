@@ -7,6 +7,8 @@ import path from 'node:path';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { DaemonClient } from '../../src/daemon/client.js';
 import { readDaemonInfo } from '../../src/daemon/info.js';
+import { saveCredentials } from '../../src/sync/credentials.js';
+import { projectKeyFor } from '../../src/shared/project-key.js';
 import type { HookEvent } from '../../src/hooks/types.js';
 
 const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
@@ -121,5 +123,22 @@ describe('daemon lock and authenticated health', () => {
     const port = (srv.address() as any).port;
     expect(await new DaemonClient({ port, pid: process.pid, token: 't', startedAt: '' }).health()).toBe(false);
     await new Promise((r) => srv.close(r));
+  });
+});
+
+describe('user id per linked hub', () => {
+  it('a project linked to a hub records the user of that hub; an unlinked one the default user', () => {
+    const h2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const linkedDir = mkdtempSync(path.join(tmpdir(), 'mh-linked-')); const plainDir = mkdtempSync(path.join(tmpdir(), 'mh-plain-'));
+    saveCredentials(h2, { hubs: { 'https://a.example': { key: 'mh_a', user: 'alice' }, 'https://b.example': { key: 'mh_b', user: 'bob' } } });
+    const ctx = createDaemonContext(h2, { MEMHUB_LLM_PROVIDER: 'openai-compat', MEMHUB_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHUB_LLM_MODEL: 'x' });
+    try {
+      const { key, name } = projectKeyFor(linkedDir);
+      ctx.store.setProjectHub(ctx.store.getOrCreateProject(key, name).id, 'https://b.example');
+      const linked = ctx.resolveSession(ev({ hostSessionId: 'l1', cwd: linkedDir }));
+      expect(linked.ctx.userId).toBe('bob');
+      expect(ctx.store.getSession(linked.ctx.sessionId)!.userId).toBe('bob');
+      expect(ctx.resolveSession(ev({ hostSessionId: 'p1', cwd: plainDir })).ctx.userId).toBe('alice');
+    } finally { ctx.store.close(); }
   });
 });

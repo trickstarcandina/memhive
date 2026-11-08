@@ -16,6 +16,7 @@ import { Observer, type SessionCtx } from '../observer/observer.js';
 import { projectKeyFor } from '../shared/project-key.js';
 import { newId } from '../shared/ids.js';
 import type { HookEvent } from '../hooks/types.js';
+import type { Project } from '../store/types.js';
 import type { LlmProvider } from '../providers/types.js';
 import { SyncEngine } from '../sync/engine.js';
 import { defaultUser, loadCredentials } from '../sync/credentials.js';
@@ -52,17 +53,20 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   };
   const observer = new Observer({ store, provider, embedder, logger, reloadProvider });
   const userId = defaultUser(loadCredentials(home)) ?? 'local';
+  // Read per call: a login after the daemon started is picked up. With several hubs, the linked one decides.
+  const userFor = (project: Project): string => { const c = loadCredentials(home); return (project.hubUrl && c.hubs[project.hubUrl]?.user) || defaultUser(c) || 'local'; };
   const sync = new SyncEngine({ store, home, logger, embedDims: settings.embed?.dims ?? null, embedModel: settings.embed?.model ?? null });
   observer.onStored = (projectId) => sync.schedulePush(projectId);
   const ctx: DaemonContext = {
-    home, store, observer, embedder, settings, logger, userId, sync,
+    home, store, observer, embedder, settings, logger, userId, sync, userFor,
     resolveSession(ev: HookEvent) {
       let session = store.getSessionByHost(ev.host, ev.hostSessionId);
       // Existing session: reuse its project (no git spawns per event, no split on cwd change).
       let project = session ? store.getProject(session.projectId) : null;
       if (!project) { const { key, name } = projectKeyFor(ev.cwd); project = store.getOrCreateProject(key, name); }
-      if (!session) { session = { id: newId(), projectId: project.id, userId, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null }; store.upsertSession(session); }
-      const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId };
+      const user = session?.userId ?? userFor(project);
+      if (!session) { session = { id: newId(), projectId: project.id, userId: user, host: ev.host, hostSessionId: ev.hostSessionId, cwd: ev.cwd, startedAt: ev.at, endedAt: null, syncedAt: null }; store.upsertSession(session); }
+      const sctx: SessionCtx = { sessionId: session.id, projectId: project.id, projectName: project.name, userId: user };
       return { ctx: sctx, project };
     },
   };
