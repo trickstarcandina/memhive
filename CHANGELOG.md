@@ -8,16 +8,6 @@ After upgrading, re-run `memhive install`.
 
 ## [Unreleased]
 
-### Fixed
-
-- A pulled observation or summary that references a session of another project is quarantined, and `timeline` stays inside the anchor's project.
-- A pulled tombstone deletes only rows that came from the hub; rows recorded on this machine are kept, with one warning.
-- `memhive sync` and `memhive link` refuse an excluded project (`excludeProjects` or `.memhive.json`) instead of creating it and pulling teammates' rows into it.
-- Imported session paths and branch names are redacted like every other imported field.
-- The response cap derived from a hub's `body_limit` is bounded (32 MB).
-- Secret files (`credentials.json`, `daemon.json`, `settings.json`, the hub admin key, `export --force`) are written through an exclusively created temp file.
-- Rows removed by retention are remembered locally, so a hub reset does not pull them back.
-
 ## [0.2.0] - 2026-11-09
 
 ### Upgrading
@@ -75,6 +65,13 @@ After upgrading, re-run `memhive install`.
 
 ### Fixed
 
+- A pulled observation or summary that references a session of another project is quarantined, and `timeline` stays inside the anchor's project.
+- A pulled tombstone deletes only rows that came from the hub; rows recorded on this machine are kept, with one warning.
+- `memhive sync` and `memhive link` refuse an excluded project (`excludeProjects` or `.memhive.json`) instead of creating it and pulling teammates' rows into it.
+- Imported session paths and branch names are redacted like every other imported field.
+- The response cap derived from a hub's `body_limit` is bounded (32 MB).
+- Secret files (`credentials.json`, `daemon.json`, `settings.json`, the hub admin key, `export --force`) are written through an exclusively created temp file.
+- Rows removed by retention are remembered locally, so a hub reset does not pull them back.
 - Vector search fills its limit under selective filters (type, user, since).
 - The daemon finishes in-flight observer work (summaries, embedding backfill) before it shuts down, and two daemons never overlap after an upgrade.
 - `settings.json` and Codex `config.toml` are written atomically (temp file and rename); `config.toml` is backed up before the first edit.
