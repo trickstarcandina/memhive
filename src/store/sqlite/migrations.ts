@@ -72,4 +72,9 @@ export const SQLITE_MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS observations_short_id ON observations(short_id);
   CREATE INDEX IF NOT EXISTS sessions_unsynced ON sessions(project_id, synced_at);
   `,
+  // 8: an observation recorded again (near-duplicate) bumps the existing row instead of adding one.
+  `
+  ALTER TABLE observations ADD COLUMN seen_count INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE observations ADD COLUMN last_seen_at TEXT;
+  `,
 ];

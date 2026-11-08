@@ -2,7 +2,7 @@ export type ObservationType = 'decision' | 'bugfix' | 'feature' | 'refactor' | '
 export interface Project { id: string; key: string; name: string; hubUrl: string | null; createdAt: string }
 export interface Session { id: string; projectId: string; userId: string; host: string; hostSessionId: string; cwd: string; startedAt: string; endedAt: string | null; syncedAt: string | null; origin?: 'local' | 'hub'; branch?: string | null }   // origin defaults to 'local'; pulled sessions are 'hub'; branch is local only
 export interface Prompt { id: string; sessionId: string; text: string; createdAt: string }
-export interface Observation { id: string; projectId: string; sessionId: string; userId: string; type: ObservationType; title: string; subtitle: string; facts: string[]; narrative: string; concepts: string[]; filesRead: string[]; filesModified: string[]; createdAt: string; embeddingModel: string | null; origin: 'local' | 'hub'; syncedAt: string | null }
+export interface Observation { id: string; projectId: string; sessionId: string; userId: string; type: ObservationType; title: string; subtitle: string; facts: string[]; narrative: string; concepts: string[]; filesRead: string[]; filesModified: string[]; createdAt: string; embeddingModel: string | null; origin: 'local' | 'hub'; syncedAt: string | null; seenCount?: number; lastSeenAt?: string | null }   // seen*: local only, set by dedupe
 export interface Summary { id: string; projectId: string; sessionId: string; userId: string; request: string; learned: string; completed: string; nextSteps: string; createdAt: string; origin: 'local' | 'hub'; syncedAt: string | null }
 export interface SearchFilters { projectId: string; type?: ObservationType; userId?: string; since?: string; limit: number }
 export interface SearchHit { id: string; score: number }
@@ -29,6 +29,9 @@ export interface Store {
   prunePrompts(keep: number, endedBefore: string): number;
   insertObservations(obs: Observation[]): void;           // ignores ids that already exist
   getObservations(ids: string[]): Observation[];           // order = input order
+  /** A near-duplicate in the same project seen since `since`: same type and every title token, or cosine >= 0.92. */
+  findDuplicate(o: Pick<Observation, 'projectId' | 'type' | 'title'>, vec: number[] | null, since: string): string | null;
+  bumpSeen(id: string, at: string): void;                  // seen_count + 1, last_seen_at = at
   hasObservations(ids: string[]): Set<string>;             // the ids that exist
   hasSummaries(ids: string[]): Set<string>;
   transaction<T>(fn: () => T): T;                          // nests (savepoint); a throw rolls back only its own level

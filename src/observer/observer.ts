@@ -17,6 +17,7 @@ const IDLE_DROP_MS = 30 * 60 * 1000;
 // After a 401/403 the observer stays paused until settings give a new provider, or this long has passed (then one new try).
 const AUTH_RETRY_MS = 15 * 60 * 1000;
 const EMBED_MAX_FAILURES = 3;
+const DEDUPE_DAYS = 30;
 
 export const embeddingText = (o: Pick<Observation, 'title' | 'subtitle' | 'facts' | 'narrative'>) => [o.title, o.subtitle, ...o.facts, o.narrative].filter(Boolean).join('\n');
 
@@ -146,11 +147,20 @@ export class Observer {
     if (drafts === null) { logger.warn('observer output unparseable, batch dropped', { sessionId: ctx.sessionId, events: events.length }); return; }
     if (drafts.length === 0) return;
     const rows = drafts.slice(0, 20).map((d) => this.toRow(ctx, d));
-    store.insertObservations(rows);
+    // Vectors first, so a near-duplicate can be caught by meaning too; a failed embedding leaves the row to the backfill.
+    const vecs = await this.vectorsFor(rows);
+    const since = new Date(Date.now() - DEDUPE_DAYS * 864e5).toISOString();
+    let stored = 0;
+    for (const o of rows) {
+      const v = vecs.get(o.id) ?? null;
+      const dup = store.findDuplicate(o, v, since);
+      if (dup) { store.bumpSeen(dup, o.createdAt); continue; }
+      store.insertObservations([o]); stored++;
+      if (v) { try { store.setObservationEmbeddings([{ id: o.id, vec: v, model: this.deps.embedder!.model }]); } catch (e) { logger.warn('vector not stored, left for backfill', { error: String(e) }); } }
+    }
     s.turnObservations.push(...rows);
-    logger.info('observations stored', { sessionId: ctx.sessionId, count: rows.length });
-    await this.embed(rows);
-    this.onStored?.(ctx.projectId);
+    logger.info('observations stored', { sessionId: ctx.sessionId, count: stored, duplicates: rows.length - stored });
+    if (stored) this.onStored?.(ctx.projectId);
   }
 
   private toRow(ctx: SessionCtx, d: ObservationDraft): Observation {
@@ -185,6 +195,17 @@ export class Observer {
       if (!(await one(batch)) && batch.length > 1) for (const o of batch) await one([o]);
     }
     return { done, failed };
+  }
+
+  private async vectorsFor(rows: Observation[]): Promise<Map<string, number[]>> {
+    const out = new Map<string, number[]>(); const { embedder, logger } = this.deps;
+    if (!embedder) return out;
+    for (let i = 0; i < rows.length; i += 16) {
+      const batch = rows.slice(i, i + 16);
+      try { const vecs = await embedder.embed(batch.map(embeddingText)); batch.forEach((o, k) => out.set(o.id, vecs[k])); }
+      catch (e) { logger.warn('embedding failed, left for backfill', { error: String(e) }); }
+    }
+    return out;
   }
 
   private missing(limit: number): Observation[] {

@@ -7,13 +7,14 @@ import { toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
 
 type Row = Record<string, any>;
+const cosine = (a: number[], b: number[]) => { let d = 0, x = 0, y = 0; for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; x += a[i] * a[i]; y += b[i] * b[i]; } return x && y ? d / Math.sqrt(x * y) : 0; };
 const VEC_K_CAP = 2000;
 const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 const rowToProject = (r: Row): Project => ({ id: r.id, key: r.key, name: r.name, hubUrl: r.hub_url ?? null, createdAt: r.created_at });
 const rowToSession = (r: Row): Session => ({ id: r.id, projectId: r.project_id, userId: r.user_id, host: r.host, hostSessionId: r.host_session_id, cwd: r.cwd, startedAt: r.started_at, endedAt: r.ended_at ?? null, syncedAt: r.synced_at ?? null, origin: r.origin });
-const rowToObservation = (r: Row): Observation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: r.origin, syncedAt: r.synced_at ?? null });
+const rowToObservation = (r: Row): Observation => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, type: r.type, title: r.title, subtitle: r.subtitle, facts: pj(r.facts), narrative: r.narrative, concepts: pj(r.concepts), filesRead: pj(r.files_read), filesModified: pj(r.files_modified), createdAt: r.created_at, embeddingModel: r.embedding_model ?? null, origin: r.origin, syncedAt: r.synced_at ?? null, seenCount: Number(r.seen_count ?? 1), lastSeenAt: r.last_seen_at ?? null });
 const rowToSyncState = (r: Row): SyncState => ({ projectId: r.project_id, pullCursor: Number(r.pull_cursor), hubEpoch: r.hub_epoch ?? null, backoffUntil: r.backoff_until ?? null, backoffMs: r.backoff_ms ?? null, strikes: Number(r.strikes ?? 0), lastError: r.last_error ?? null, lastErrorAt: r.last_error_at ?? null, lastPushAt: r.last_push_at ?? null, lastPullAt: r.last_pull_at ?? null, quarantined: Number(r.quarantined ?? 0) });
 const SYNC_COLS: Record<keyof SyncStatePatch, string> = { backoffUntil: 'backoff_until', backoffMs: 'backoff_ms', strikes: 'strikes', lastError: 'last_error', lastErrorAt: 'last_error_at', lastPushAt: 'last_push_at', lastPullAt: 'last_pull_at' };
 const rowToSummary = (r: Row): Summary => ({ id: r.id, projectId: r.project_id, sessionId: r.session_id, userId: r.user_id, request: r.request, learned: r.learned, completed: r.completed, nextSteps: r.next_steps, createdAt: r.created_at, origin: r.origin, syncedAt: r.synced_at ?? null });
@@ -143,6 +144,22 @@ export class SqliteStore implements Store {
     const byId = new Map(rows.map((r) => [r.id, rowToObservation(r)]));
     return ids.map((id) => byId.get(id)).filter((o): o is Observation => !!o);
   }
+  findDuplicate(o: Pick<Observation, 'projectId' | 'type' | 'title'>, vec: number[] | null, since: string): string | null {
+    const q = toFtsQuery(o.title);
+    if (q) {
+      const r = this.db.prepare(`SELECT o.id FROM observations_fts JOIN observations o ON o.rowid = observations_fts.rowid
+        WHERE observations_fts MATCH ? AND o.project_id = ? AND o.type = ? AND COALESCE(o.last_seen_at, o.created_at) >= ? ORDER BY o.created_at DESC LIMIT 1`).get(`title : (${q})`, o.projectId, o.type, since) as Row | undefined;
+      if (r) return r.id;
+    }
+    if (!vec || !this.dims || vec.length !== this.dims) return null;
+    const near = this.db.prepare('SELECT id FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = 5 ORDER BY distance').all(Buffer.from(new Float32Array(vec).buffer), o.projectId) as Row[];
+    if (!near.length) return null;
+    const recent = new Set((this.db.prepare(`SELECT id FROM observations WHERE id IN (${near.map(() => '?').join(',')}) AND COALESCE(last_seen_at, created_at) >= ?`).all(...near.map((n) => n.id), since) as Row[]).map((r) => r.id));
+    const vecs = this.getObservationEmbeddings([...recent]);
+    for (const n of near) { const v = vecs.get(n.id); if (v && cosine(vec, v) >= 0.92) return n.id; }
+    return null;
+  }
+  bumpSeen(id: string, at: string): void { this.db.prepare('UPDATE observations SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?').run(at, id); }
   hasObservations(ids: string[]): Set<string> { return this.existing('observations', ids); }
   hasSummaries(ids: string[]): Set<string> { return this.existing('summaries', ids); }
   private existing(table: 'observations' | 'summaries', ids: string[]): Set<string> {
