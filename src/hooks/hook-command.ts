@@ -21,7 +21,8 @@ export async function runHook(args: string[], deps: Partial<HookDeps> = {}): Pro
     if (!adapter) { log.warn('unknown host', { host }); return 0; }
     const raw = await d.readStdin();
     if (!raw.trim()) { log.warn('empty stdin', { host, hostEvent }); return 0; }
-    if (raw.length > STDIN_LIMIT) { log.warn('stdin too large', { host, hostEvent, bytes: raw.length }); return 0; }
+    // Accepted deviation from spec 5: an event over 2 MB is dropped, not trimmed (the cut JSON cannot be parsed).
+    if (Buffer.byteLength(raw) > STDIN_LIMIT) { log.warn('stdin too large', { host, hostEvent, bytes: Buffer.byteLength(raw) }); return 0; }
     const payload = safeJsonParse(raw);
     if (payload === undefined) { log.warn('invalid JSON on stdin', { host, hostEvent, bytes: raw.length }); return 0; }
     const ev = adapter.parse(payload, d.now());

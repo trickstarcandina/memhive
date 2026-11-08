@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runHook } from '../../src/hooks/hook-command.js';
+import { readStdin, STDIN_LIMIT } from '../../src/hooks/stdin.js';
+import { PassThrough } from 'node:stream';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
@@ -57,5 +59,17 @@ describe('runHook', () => {
     expect(Date.now() - t0).toBeLessThan(900);
     expect(seenTimeout).toBe(1);
     await h.close();
+  });
+  it('readStdin keeps one byte past the limit so the caller can tell oversize from invalid JSON', async () => {
+    const input = new PassThrough();
+    const p = readStdin(STDIN_LIMIT, input, 1000);
+    input.end(Buffer.alloc(STDIN_LIMIT + 100, 'a'));
+    expect((await p).length).toBe(STDIN_LIMIT + 1);
+  });
+  it('readStdin gives up when the host never closes stdin', async () => {
+    const input = new PassThrough(); input.write('{"partial":');
+    const t0 = Date.now();
+    expect(await readStdin(STDIN_LIMIT, input, 100)).toBe('{"partial":');
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 });
