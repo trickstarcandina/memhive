@@ -178,3 +178,24 @@ describe('mcp hardening', () => {
     await plain.close(); await allowed.close();
   });
 });
+
+it('get_observations and timeline resolve ids only in the current project or allowProjects', async () => {
+  const home2 = mkdtempSync(path.join(tmpdir(), 'mh-'));
+  const ctx = createDaemonContext(home2, { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: 'http://127.0.0.1:9', MEMHIVE_LLM_MODEL: 'x' });
+  const d = await startDaemon(ctx, { port: 0 });
+  try {
+    const dc = new DaemonClient(d.info);
+    const foreign = (await dc.request<any>('POST', '/v1/memories', { projectKey: 'github.com/acme/secret-repo', text: 'the vault password rotates monthly', title: 'Vault rotation' })).observation.id as string;
+    const server = createMcpServer({ client: dc, cwd: home2 }); const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a);
+    const c = new Client({ name: 't', version: '0' }); await c.connect(b);
+    const get = async () => text(await c.callTool({ name: 'get_observations', arguments: { ids: [foreign.slice(-8)] } }));
+    expect(await get()).not.toContain('Vault rotation');
+    expect(await c.callTool({ name: 'timeline', arguments: { anchor_id: foreign.slice(-8) } })).toMatchObject({ isError: true });
+    ctx.settings.mcp.allowProjects = ['github.com/acme/*'];
+    expect(await get()).toContain('Vault rotation');
+    expect(text(await c.callTool({ name: 'timeline', arguments: { anchor_id: foreign.slice(-8) } }))).toContain('Vault rotation');
+    expect(await dc.request('GET', `/v1/observations?ids=${foreign}`).catch((e) => e.status)).toBe(400);   // no scope: refused
+    await c.close();
+  } finally { await d.close(); }
+});
+

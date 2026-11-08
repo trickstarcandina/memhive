@@ -30,8 +30,16 @@ function parseSince(v: string | null): string | undefined {
 
 const clamp = (v: string | null, dflt: number) => Math.min(Math.max(Number(v ?? dflt) || 0, 0), 50);
 
-function resolveIds(ctx: DaemonContext, raw: string): string[] {
-  return raw.split(',').map((s) => s.trim()).filter(Boolean).map((id) => ctx.store.resolveIdPrefix(id) ?? id);
+/**
+ * Which projects an id lookup may reach: project_key (plus, with scope=mcp, the projects settings.mcp.allowProjects names,
+ * the same gate as MCP search), or every project with all_projects=1 (CLI only). Neither: refused.
+ */
+function idScope(ctx: DaemonContext, q: URLSearchParams): { projects: Project[] | null } | { status: number; body: unknown } {
+  if (q.get('all_projects') === '1') return { projects: null };
+  const key = q.get('project_key'); if (!key) return err(400, 'missing_project', 'project_key or all_projects=1 required');
+  const here = ctx.store.getProjectByKey(key);
+  const allowed = q.get('scope') === 'mcp' ? ctx.store.listProjects().filter((p) => p.key !== key && matchesAny(ctx.settings.mcp.allowProjects, p.key)) : [];
+  return { projects: [...(here ? [here] : []), ...allowed] };
 }
 
 export async function handleRoute(ctx: DaemonContext, method: string, url: URL, body: unknown): Promise<{ status: number; body: unknown }> {
@@ -71,7 +79,8 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     if (typeof file !== 'string' || !nodePath.isAbsolute(file) || file.length > 4096) return err(400, 'bad_backup', 'path (absolute) required');
     let dir: string; try { dir = realpathSync(nodePath.dirname(file)); } catch { return err(400, 'bad_backup', `directory ${nodePath.dirname(file)} does not exist`); }
     const target = nodePath.join(dir, nodePath.basename(file)); const home = realpathSync(ctx.home);
-    if (target === home || !nodePath.relative(home, target).startsWith('..')) return err(400, 'bad_backup', `refusing a backup inside the memhive home (${ctx.home}); pick a path outside it`);
+    const rel = nodePath.relative(home, target);   // '..x.db' is a file in the home, not outside it
+    if (!(rel === '..' || rel.startsWith('..' + nodePath.sep) || nodePath.isAbsolute(rel))) return err(400, 'bad_backup', `refusing a backup inside the memhive home (${ctx.home}); pick a path outside it`);
     if (existsSync(target)) return err(409, 'exists', `${target} already exists`);
     try { closeSync(openSync(target, 'wx', 0o600)); } catch (e) { return err(400, 'bad_backup', `cannot create ${target}: ${(e as Error).message}`); }   // 0600 before any row is written
     try { store.backup(target); } catch (e) { rmSync(target, { force: true }); throw e; }
@@ -242,18 +251,20 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
     return ok({ ...out, propagates });
   }
 
-  if (method === 'GET' && path === '/v1/observations') {
-    const obsIds: string[] = []; const sumIds: string[] = [];
-    for (const id of (q.get('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
-      const o = store.resolveIdPrefix(id); const sm = o ? null : store.resolveSummaryIdPrefix(id);
-      if (sm) sumIds.push(sm); else obsIds.push(o ?? id);
+  if (method === 'GET' && (path === '/v1/observations' || path === '/v1/timeline')) {
+    const scope = idScope(ctx, q); if ('status' in scope) return scope;
+    const resolve = (raw: string) => {
+      const id = raw.trim().replace(/^#/, '');
+      if (!scope.projects) { const o = store.resolveIdPrefix(id); const sm = o ? null : store.resolveSummaryIdPrefix(id); return o ? { id: o, kind: 'observation' as const } : sm ? { id: sm, kind: 'summary' as const } : null; }
+      const hits = scope.projects.flatMap((p) => store.matchIdPrefix(p.id, id));
+      return hits.length === 1 ? hits[0] : null;   // none, or ambiguous: not found
+    };
+    if (path === '/v1/timeline') {
+      const a = resolve(q.get('anchor') ?? ''); if (!a || a.kind !== 'observation') return err(404, 'not_found', 'no such observation in this project');
+      return ok({ observations: store.timeline(a.id, clamp(q.get('before'), 5), clamp(q.get('after'), 5)) });
     }
-    return ok({ observations: store.getObservations(obsIds), summaries: store.getSummaries(sumIds) });
-  }
-
-  if (method === 'GET' && path === '/v1/timeline') {
-    const [anchor] = resolveIds(ctx, q.get('anchor') ?? ''); if (!anchor) return err(400, 'missing_anchor', 'anchor required');
-    return ok({ observations: store.timeline(anchor, clamp(q.get('before'), 5), clamp(q.get('after'), 5)) });
+    const hits = (q.get('ids') ?? '').split(',').filter((s) => s.trim()).slice(0, 100).map(resolve).filter((h): h is NonNullable<typeof h> => !!h);
+    return ok({ observations: store.getObservations(hits.filter((h) => h.kind === 'observation').map((h) => h.id)), summaries: store.getSummaries(hits.filter((h) => h.kind === 'summary').map((h) => h.id)) });
   }
 
   if (method === 'POST' && path === '/v1/memories') {

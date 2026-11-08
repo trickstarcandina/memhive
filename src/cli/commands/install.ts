@@ -80,8 +80,11 @@ export async function installCommand(args: string[], io: CliIo, opts: { home?: s
   let codexOk = true;
   if (hosts.has('codex')) {
     const r = installCodex(marketplaceRoot, env.CODEX_HOME ?? path.join(homedir(), '.codex'), run); codexOk = r.ok; for (const l of r.log) io.stdout(`  codex: ${l}\n`);
-    // Once memhive turned the hooks on, a reinstall (which finds them on) must not forget that.
-    if (r.hooksWereOn !== undefined) updateState(home, { codexHooksByMemhive: codexHooksByMemhive(home) === true || !r.hooksWereOn });
+    // Once memhive turned the hooks on, a reinstall (which finds them on) must not forget that. Hooks found on next to an
+    // earlier memhive plugin table with nothing recorded (a 0.1 install) may be memhive's own: unknown stays unknown.
+    const prev = codexHooksByMemhive(home);
+    const unknown = prev === undefined && r.hooksWereOn && r.pluginWasThere;
+    if (r.hooksWereOn !== undefined && !unknown) updateState(home, { codexHooksByMemhive: prev === true || !r.hooksWereOn });
   }
 
   io.stdout('\nChecking setup…\n');

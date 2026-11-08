@@ -75,15 +75,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
     description: 'Step 2 of 3. Show observations recorded before and after an anchor observation (same session), as an index.',
     inputSchema: { anchor_id: id, before: z.number().int().min(0).max(50).default(5), after: z.number().int().min(0).max(50).default(5) },
   }, async (a) => {
-    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}`);
+    const r = await rpc.request<{ observations: Observation[] }>('GET', `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}&scope=mcp&project_key=${encodeURIComponent(await projectKey())}`);
     return textResult(formatIndex(r.observations));
   });
 
   tool('get_observations', {
-    description: 'Step 3 of 3. Fetch full details for selected observation or session-summary ids (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
+    description: 'Step 3 of 3. Fetch full details for selected observation or session-summary ids of this project (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
     inputSchema: { ids: z.array(id).min(1).max(50) },
   }, async (a) => {
-    const r = await rpc.request<{ observations: Observation[]; summaries?: Summary[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}`);
+    const r = await rpc.request<{ observations: Observation[]; summaries?: Summary[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}&scope=mcp&project_key=${encodeURIComponent(await projectKey())}`);
     return textResult(formatFull(r.observations, r.summaries ?? []));
   });
 

@@ -112,6 +112,13 @@ describe('uninstall', () => {
     expect(readFileSync(cfg(b), 'utf8')).toContain('hooks = true');
     expect(r.out.join('')).toContain('it was on before memhive');
 
+    const d = fixture(); mkdirSync(d.env.CODEX_HOME, { recursive: true });   // 0.2 installed over a 0.1 install: still unknown
+    writeFileSync(cfg(d), '[features]\nhooks = true\n\n[plugins."memhive@memhive-local"]\nenabled = true\n');
+    expect(await install(d)).toBe(0);
+    r = io(); await uninstallCommand([], r.io, { home: d.home, env: d.env, run });
+    expect(readFileSync(cfg(d), 'utf8')).toContain('hooks = true');
+    expect(r.out.join('')).toContain('memhive did not record whether it turned it on');
+
     const c = fixture(); mkdirSync(c.env.CODEX_HOME, { recursive: true });   // installed by 0.1: nothing recorded
     writeFileSync(cfg(c), '[features]\nhooks = true\n');
     r = io(); await uninstallCommand([], r.io, { home: c.home, env: c.env, run });

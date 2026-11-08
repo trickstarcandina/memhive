@@ -36,7 +36,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
   --json  {"results": [observation or summary, each with "kind"]}
 `, ['type', 'user', 'since', 'limit', 'offset', 'project'], ['json', 'all-projects']),
   recent: spec('usage: memhive recent [--limit n] [--offset n] [--type t] [--user u] [--since 7d] [--project key | --all-projects] [--json]   (newest observations; --json as search)\n', ['limit', 'offset', 'type', 'user', 'since', 'project'], ['json', 'all-projects']),
-  show: spec('usage: memhive show <id...> [--json]   (full observations or session summaries; --json {"observations": [...], "summaries": [...]})\n', [], ['json']),
+  show: spec('usage: memhive show <id...> [--project key | --all-projects] [--json]   (full observations or session summaries of the current project; --json {"observations": [...], "summaries": [...]})\n', ['project'], ['json', 'all-projects']),
   edit: spec(`usage: memhive edit <id> [--title text] [--narrative text] [--pin | --unpin] [--project key] [--json]
   title and narrative: only your own rows, and the change stays on this machine; pin: any row of the project
   --json  {"observation": {...}}

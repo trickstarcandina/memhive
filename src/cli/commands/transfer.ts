@@ -52,10 +52,16 @@ export async function exportCommand(args: string[], io: CliIo, opts: { home?: st
     if (typeof flags.out === 'string') {
       const file = path.resolve(cwd, flags.out);
       if (existsSync(file) && flags.force !== true) { io.stderr(`memhive export: ${file} already exists (--force replaces it)\n`); return 1; }
-      if (flags.force !== true) writeNew(file, text);
-      else {
-        const tmp = `${file}.${process.pid}.tmp`; rmSync(tmp, { force: true });   // a crash leftover would make wx fail
-        writeNew(tmp, text); renameSync(tmp, file);   // replaces a file or symlink, never writes through it
+      const tmp = `${file}.${process.pid}.tmp`;
+      try {
+        if (flags.force !== true) writeNew(file, text);
+        else {
+          rmSync(tmp, { force: true });   // a crash leftover would make wx fail
+          writeNew(tmp, text); renameSync(tmp, file);   // replaces a file or symlink, never writes through it
+        }
+      } catch (e) {
+        if (flags.force === true) rmSync(tmp, { force: true });   // never leave a copy of the memory behind
+        io.stderr(`memhive export: cannot write ${file}: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}\n`); return 1;
       }
       io.stderr(`exported ${rows.length} rows of ${key} to ${flags.out}\n`);
     }

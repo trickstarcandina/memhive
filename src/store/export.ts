@@ -9,7 +9,7 @@ const iso = z.string().refine(isIso);
 const short = z.string().max(MAX_SHORT);
 const long = z.string().max(MAX_LONG);
 const list = z.array(z.string().max(MAX_ITEM)).max(MAX_LIST);
-const origin = z.enum(['local', 'hub']).default('local');
+const origin = z.enum(['local', 'hub']).default('hub');   // unknown provenance is not ours: no edit, no tombstone
 const user = z.string().min(1).max(200);
 
 export const ExportRowSchema = z.discriminatedUnion('kind', [

@@ -28,7 +28,8 @@ async function callWith(deps: Parameters<typeof createMcpServer>[0], name: strin
 }
 
 describe('mcp reconnect', () => {
-  const good = (seen: string[]) => ({ request: async (_m: string, p: string) => { seen.push(p); return { observations: [] }; } }) as any;
+  // get_observations first asks for the project key (its ids are scoped to the project); seen records the other calls.
+  const good = (seen: string[]) => ({ request: async (_m: string, p: string) => { if (p.startsWith('/v1/project?')) return { project: { key: 'k' } }; seen.push(p); return { observations: [] }; } }) as any;
   it('retries once on connection failure via reconnect', async () => {
     const seen: string[] = [];
     const dead = { request: async () => { throw new TypeError('fetch failed'); } } as any;

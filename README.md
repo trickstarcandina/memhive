@@ -114,7 +114,7 @@ Ids are UUID v7. Anywhere an id is accepted you can pass a unique prefix or the 
 | `memhive doctor [--no-ping] [--json]` | Check the setup; see [Doctor](#doctor). Exits 1 when a check fails. |
 | `memhive search <query> [--type t] [--user u] [--since 7d] [--limit n] [--offset n] [--project key\|--all-projects] [--json]` | Search observations and session summaries from the terminal. An empty query with `--since` or `--type` lists the newest observations under those filters. |
 | `memhive recent [--limit n] [--project key\|--all-projects] [--json]` | The newest observations of the project (same filters as `search`). |
-| `memhive show <id...> [--json]` | Full observations or session summaries. |
+| `memhive show <id...> [--project key\|--all-projects] [--json]` | Full observations or session summaries of the current project (or the one named). |
 | `memhive edit <id> [--title t] [--narrative t] [--pin\|--unpin] [--json]` | Change an observation. Title and narrative only for your own rows, and the change stays on this machine; any row of the project can be pinned. |
 | `memhive forget <id...> [--yes] [--force] [--project key] [--json]` | Delete observations or session summaries (full ids, prefixes or 8-char short ids) of the current project. Shows each row's title, author and date and asks first unless `--yes`. See [Forgetting a memory](#forgetting-a-memory). |
 | `memhive stats [--project key] [--json]` | Row counts per project, type and origin (own and team), pinned rows, DB size, last push and pull, and observer counters since the daemon started. |

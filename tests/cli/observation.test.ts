@@ -6,6 +6,12 @@ import { searchCommand } from '../../src/cli/commands/search.js';
 import { editCommand, showCommand } from '../../src/cli/commands/observation.js';
 import { forgetCommand } from '../../src/cli/commands/forget.js';
 import { daemonCommand } from '../../src/cli/commands/daemon.js';
+import { statsCommand } from '../../src/cli/commands/stats.js';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { healthProof } from '../../src/daemon/client.js';
+import { writeDaemonInfo } from '../../src/daemon/info.js';
+import { VERSION } from '../../src/shared/version.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import { obs, sess } from '../store/store-contract.js';
@@ -70,12 +76,36 @@ describe('search flags', () => {
 
 describe('show', () => {
   it('prints full rows by short id, --json, and exits 1 when nothing matches', async () => {
-    let r = io(); expect(await showCommand([`#${mine.id.slice(-8)}`], r.io, { home })).toBe(0);
+    let r = io(); expect(await showCommand([`#${mine.id.slice(-8)}`], r.io, { home, cwd })).toBe(0);
     expect(r.text()).toContain('Zebra parser fixed'); expect(r.text()).toContain('N');
-    r = io(); expect(await showCommand([mine.id, '--json'], r.io, { home })).toBe(0);
+    r = io(); expect(await showCommand([mine.id, '--json'], r.io, { home, cwd })).toBe(0);
     expect(JSON.parse(r.text())).toMatchObject({ observations: [{ id: mine.id }], summaries: [] });
-    r = io(); expect(await showCommand(['deadbeef'], r.io, { home })).toBe(1);
-    r = io(); expect(await showCommand([], r.io, { home })).toBe(2);
+    r = io(); expect(await showCommand(['deadbeef'], r.io, { home, cwd })).toBe(1);
+    r = io(); expect(await showCommand([], r.io, { home, cwd })).toBe(2);
+  });
+  it('is scoped to the current project unless --project or --all-projects', async () => {
+    let r = io(); expect(await showCommand([other.id.slice(-8)], r.io, { home, cwd })).toBe(1);
+    expect(r.text()).not.toContain('Zebra in another repo');
+    r = io(); expect(await showCommand([other.id.slice(-8), '--project', 'github.com/acme/other'], r.io, { home, cwd })).toBe(0);
+    expect(r.text()).toContain('Zebra in another repo');
+    r = io(); expect(await showCommand([other.id.slice(-8), '--all-projects'], r.io, { home, cwd })).toBe(0);
+  });
+  it('show and stats print a daemon error on one line and exit 1', async () => {
+    const h2 = mkHome(); const token = 'k'.repeat(32);
+    const srv = http.createServer((req, res) => {
+      const u = new URL(req.url!, 'http://x'); res.setHeader('content-type', 'application/json');
+      if (u.pathname === '/healthz') { res.end(JSON.stringify({ ok: true, version: VERSION, proof: healthProof(token, u.searchParams.get('nonce')!, process.pid) })); return; }
+      if (u.pathname === '/v1/project') { res.end(JSON.stringify({ project: { key: 'k' } })); return; }
+      res.statusCode = 500; res.end(JSON.stringify({ error: { code: 'internal', message: 'internal error' } }));
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      writeDaemonInfo(h2, { port: (srv.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString(), version: VERSION });
+      let r = io(); expect(await showCommand(['abcd1234'], r.io, { home: h2, cwd })).toBe(1);
+      expect(r.errText()).toBe('memhive show: internal error\n');
+      r = io(); expect(await statsCommand([], r.io, { home: h2 })).toBe(1);
+      expect(r.errText()).toBe('memhive stats: internal error\n');
+    } finally { srv.closeAllConnections(); await new Promise((r) => srv.close(r)); }
   });
 });
 

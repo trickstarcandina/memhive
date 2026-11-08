@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -41,6 +41,8 @@ describe('backup', () => {
     r = io(); expect(await backupCommand([file], r.io, { home: a.home, cwd: dir })).toBe(1);
     expect(r.err()).toContain('already exists');
     r = io(); expect(await backupCommand([path.join(a.home, 'logs', '..', 'copy.db')], r.io, { home: a.home })).toBe(1);
+    expect(r.err()).toContain('inside the memhive home');
+    r = io(); expect(await backupCommand([path.join(a.home, '..x.db')], r.io, { home: a.home })).toBe(1);   // a file in the home whose name starts with ..
     expect(r.err()).toContain('inside the memhive home');
     r = io(); expect(await backupCommand(['x.db', 'y.db'], r.io, { home: a.home })).toBe(2);
   });
@@ -94,6 +96,10 @@ describe('export and import', () => {
     r = io(); expect(await exportCommand(['--project', KEY, '--out', link], r.io, { home: a.home })).toBe(1);
     r = io(); expect(await exportCommand(['--project', KEY, '--out', link, '--force'], r.io, { home: a.home })).toBe(0);
     expect(readFileSync(victim, 'utf8')).toBe('keep'); expect(lstatSync(link).isSymbolicLink()).toBe(false);
+    const sub = path.join(dir, 'adir'); mkdirSync(sub);
+    r = io(); expect(await exportCommand(['--project', KEY, '--out', sub, '--force'], r.io, { home: a.home })).toBe(1);
+    expect(r.err()).toMatch(/^memhive export: cannot write .*adir: E[A-Z]+\n$/);
+    expect(readdirSync(dir).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
   it('cleans imported rows like pulled ones: secrets redacted, private blocks and control characters gone', async () => {
     const c = { home: mkHome() }; const cc = createDaemonContext(c.home, env); const hc = await startDaemon(cc, { port: 0 });
@@ -102,6 +108,7 @@ describe('export and import', () => {
       const file = path.join(mkHome(), 'evil.jsonl');
       writeFileSync(file, [
         { kind: 'session', id: sid2, userId: 'mallory\u001b[2J', host: 'claude-code', hostSessionId: 'h', startedAt: now },
+        { kind: 'observation', id: '0190bbbb-0000-7000-8000-000000000003', sessionId: sid2, userId: 'u', type: 'discovery', title: 'no origin', facts: [], createdAt: now },
         { kind: 'observation', id: oid, sessionId: sid2, userId: 'mallory\u001b[31m', type: 'discovery', title: 'T <private>hidden</private>', facts: ['key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH'], narrative: 'token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH', createdAt: now, origin: 'hub' },
       ].map((l) => JSON.stringify(l)).join('\n') + '\n');
       expect(await importCommand([file, '--project', KEY], io().io, { home: c.home })).toBe(0);
@@ -110,6 +117,7 @@ describe('export and import', () => {
       expect(o.narrative + o.facts.join(' ')).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
       expect(o.title).not.toContain('hidden');
       expect(o.origin).toBe('hub');   // without --sync the file's origin is kept
+      expect(cc.store.getObservations(['0190bbbb-0000-7000-8000-000000000003'])[0].origin).toBe('hub');   // none given: not ours
     } finally { await hc.close(); }
   });
   it('md groups by session; bad input is refused', async () => {

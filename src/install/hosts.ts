@@ -49,16 +49,17 @@ function writeCodexConfig(link: string, content: string): void {
   writeFileAtomic(cfg, content, mode);
 }
 
-/** hooksWereOn: [features] hooks was already true before this install (so memhive did not turn it on). */
-export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): { log: string[]; ok: boolean; hooksWereOn?: boolean } {
+/** hooksWereOn: [features] hooks was already true before this install; pluginWasThere: an earlier memhive install had enabled the plugin. */
+export function installCodex(marketplaceRoot: string, codexHome: string, run: RunFn = defaultRun): { log: string[]; ok: boolean; hooksWereOn?: boolean; pluginWasThere?: boolean } {
   const log: string[] = [];
   const cfg = path.join(codexHome, 'config.toml');
   const manual = () => log.push(`Do it by hand: codex plugin marketplace add ${marketplaceRoot} ; codex plugin add ${PLUGIN_ID} ; then in ${cfg} set [features] hooks = true and [plugins."${PLUGIN_ID}"] enabled = true`);
   run('codex', ['plugin', 'marketplace', 'remove', MARKETPLACE_NAME]);
   if (!tryRun(run, 'codex', ['plugin', 'marketplace', 'add', marketplaceRoot], log) || !tryRun(run, 'codex', ['plugin', 'add', PLUGIN_ID], log)) { manual(); return { log, ok: false }; }
-  let hooksWereOn = false;
+  let hooksWereOn = false; let pluginWasThere = false;
   try {
     let content = existsSync(cfg) ? readFileSync(cfg, 'utf8') : '';
+    pluginWasThere = hasTomlTable(content, `[plugins."${PLUGIN_ID}"]`);
     try { hooksWereOn = (parse(content) as { features?: { hooks?: unknown } }).features?.hooks === true; } catch { /* setTomlBooleanChecked reports it */ }
     content = setTomlBooleanChecked(content, '[features]', 'hooks', true);
     content = setTomlBooleanChecked(content, `[plugins."${PLUGIN_ID}"]`, 'enabled', true);
@@ -69,7 +70,7 @@ export function installCodex(marketplaceRoot: string, codexHome: string, run: Ru
   }
   log.push(`updated ${cfg}: [features] hooks = true, [plugins."${PLUGIN_ID}"] enabled = true`);
   log.push('Restart Codex and trust the memhive hooks when prompted.');
-  return { log, ok: true, hooksWereOn };
+  return { log, ok: true, hooksWereOn, pluginWasThere };
 }
 /** resetHooks: memhive turned [features] hooks on (set it back to false); false: it was on before; undefined: unknown, left alone. */
 export function uninstallCodex(codexHome: string, run: RunFn = defaultRun, resetHooks?: boolean): string[] {

@@ -59,9 +59,9 @@ describe('daemon', () => {
     const s = await client.request<{ observations: any[] }>('GET', `/v1/search?q=sqlite&project_key=${encodeURIComponent(key)}`);
     expect(s.observations[0].title).toBe('Chose SQLite');
     const id8 = s.observations[0].id.slice(0, 8);
-    const g = await client.request<{ observations: any[] }>('GET', `/v1/observations?ids=${id8}`);
+    const g = await client.request<{ observations: any[] }>('GET', `/v1/observations?ids=${id8}&project_key=${encodeURIComponent(key)}`);
     expect(g.observations[0].id).toBe(s.observations[0].id);
-    const t = await client.request<{ observations: any[] }>('GET', `/v1/timeline?anchor=${id8}&before=2&after=2`);
+    const t = await client.request<{ observations: any[] }>('GET', `/v1/timeline?anchor=${id8}&before=2&after=2&project_key=${encodeURIComponent(key)}`);
     expect(t.observations).toHaveLength(1);
   });
   it('save_memory stores a manual observation', async () => {

@@ -2,6 +2,7 @@ import type { CliIo } from '../index.js';
 import { parseArgs } from '../args.js';
 import { resolvePaths } from '../../shared/paths.js';
 import type { ProjectStats } from '../../store/types.js';
+import { DaemonError } from '../../daemon/client.js';
 import { daemonFor, printJson } from './search.js';
 
 export interface StatsResult {
@@ -16,7 +17,9 @@ export async function statsCommand(args: string[], io: CliIo, opts: { home?: str
   const home = opts.home ?? resolvePaths().home;
   const { flags } = parseArgs(args, 'stats');
   const client = await daemonFor(home, io); if (!client) return 1;
-  const r = await client.request<StatsResult>('GET', `/v1/stats${typeof flags.project === 'string' ? `?project_key=${encodeURIComponent(flags.project)}` : ''}`);
+  let r: StatsResult;
+  try { r = await client.request<StatsResult>('GET', `/v1/stats${typeof flags.project === 'string' ? `?project_key=${encodeURIComponent(flags.project)}` : ''}`); }
+  catch (e) { if (e instanceof DaemonError) { io.stderr(`memhive stats: ${e.message}\n`); return 1; } throw e; }
   if (flags.json) { printJson(io, r); return 0; }
   io.stdout(`database ${(r.db_bytes / 1024 / 1024).toFixed(1)} MB\n`);
   if (!r.projects.length) io.stdout(typeof flags.project === 'string' ? `no project ${flags.project}\n` : 'no projects yet\n');
