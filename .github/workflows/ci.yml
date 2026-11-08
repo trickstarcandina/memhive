@@ -63,3 +63,13 @@ jobs:
       - run: npm ci
       - run: npx vitest run tests/hub tests/sync
         env: { TEST_DATABASE_URL: 'postgres://postgres@localhost:5432/memhive', PGPASSWORD: memhive }
+      # Coverage of the whole suite with Postgres; reported, not gated.
+      - run: npm run build
+      - name: coverage
+        id: coverage
+        run: |
+          npm run test:coverage | tee coverage.txt
+          summary=$(sed -n '/Coverage summary/,/^=*$/p' coverage.txt | grep -E 'Statements|Branches|Functions|Lines')
+          { echo 'summary<<EOF'; echo "$summary"; echo EOF; } >> "$GITHUB_OUTPUT"
+          { echo '### Coverage'; echo '```'; echo "$summary"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        env: { TEST_DATABASE_URL: 'postgres://postgres@localhost:5432/memhive', PGPASSWORD: memhive }
