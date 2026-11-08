@@ -1,16 +1,88 @@
-# memhive
+<div align="center">
 
-memhive gives coding agents long-term memory. It watches sessions in Claude Code and Codex, distills what happened into short observations (decisions, bugfixes, config changes, and so on), and feeds the relevant ones back into the next session. Memory stays on your machine by default and can be shared through a team hub later.
+<h1>memhive</h1>
 
-## Install
+<p><strong>Long-term memory for coding agents.</strong><br>
+Claude Code and Codex remember past sessions: personal by default, shared through a team hub when you want it.</p>
+
+<p>
+<a href="https://www.npmjs.com/package/memhive"><img alt="npm version" src="https://img.shields.io/npm/v/memhive?logo=npm&color=cb3837"></a>
+<a href="https://npm-stat.com/charts.html?package=memhive"><img alt="Downloads per month" src="https://img.shields.io/npm/dm/memhive?label=downloads&color=blue"></a>
+<a href="https://npm-stat.com/charts.html?package=memhive"><img alt="Total downloads" src="https://img.shields.io/npm/dt/memhive?label=total&color=blue"></a>
+<a href="https://www.npmjs.com/package/memhive?activeTab=code"><img alt="Unpacked size" src="https://img.shields.io/npm/unpacked-size/memhive"></a>
+</p>
+
+<p>
+<img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-plugin-d97757">
+<img alt="Codex" src="https://img.shields.io/badge/Codex-plugin-412991">
+<img alt="MCP" src="https://img.shields.io/badge/MCP-server-555555">
+<a href="./package.json"><img alt="Node.js version" src="https://img.shields.io/node/v/memhive?logo=node.js&logoColor=white&color=339933"></a>
+</p>
+
+<p>
+<a href="https://github.com/trickstarcandina/memhive/actions/workflows/ci.yml"><img alt="CI workflow" src="https://img.shields.io/github/actions/workflow/status/trickstarcandina/memhive/ci.yml?branch=main&label=ci&logo=githubactions&logoColor=white"></a>
+<a href="https://github.com/trickstarcandina/memhive/actions/workflows/publish.yml"><img alt="Publish workflow" src="https://img.shields.io/github/actions/workflow/status/trickstarcandina/memhive/publish.yml?label=publish&logo=githubactions&logoColor=white"></a>
+<a href="./LICENSE"><img alt="License" src="https://img.shields.io/npm/l/memhive?color=yellow"></a>
+</p>
+
+<p>
+<a href="https://www.npmjs.com/package/memhive"><b>npm</b></a> ·
+<a href="https://github.com/trickstarcandina/memhive/releases"><b>Releases</b></a> ·
+<a href="#configuration"><b>Configuration</b></a> ·
+<a href="#team-hub"><b>Team hub</b></a> ·
+<a href="#troubleshooting"><b>Troubleshooting</b></a>
+</p>
+
+</div>
+
+**memhive** watches your Claude Code and Codex sessions, distills what happened into short
+observations (decisions, bugfixes, config changes and so on), and feeds the relevant ones back
+into the next session. Your agent stops re-learning the same codebase every morning.
+
+## Features
+
+- **Automatic capture**: hooks record prompts and tool use; an LLM turns them into typed observations
+- **Context at session start**: recent and relevant memory is injected, within a token budget
+- **Hybrid search**: SQLite full-text search plus optional vector search, merged with reciprocal rank fusion
+- **MCP tools**: the agent can `search`, browse a `timeline`, fetch full records and `save_memory` itself
+- **Any provider**: Anthropic or any OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM, ...) for the observer and embeddings
+- **Privacy first**: `<private>` blocks and secrets are stripped before anything is stored; raw tool output never touches disk
+- **Team hub**: link a project to a self-hosted hub (Postgres + pgvector) to share memory with your team
+- **Local by default**: one SQLite file in `~/.memhive`, no account, no cloud
+
+The project is **pre-1.0**: settings and the hub protocol can still change between minor versions.
+
+## Quick start
+
+Requires **Node.js 22** or newer.
 
 ```sh
-npm install -g memhive && memhive install
+npm install -g memhive
+memhive install
 ```
 
-`memhive install` asks which hosts to wire up (Claude Code, Codex) and which observer provider to use. Flags: `--host claude-code,codex`, `--provider anthropic|openai-compat`, `--yes` to skip prompts.
+`memhive install` asks which hosts to wire up (Claude Code, Codex) and which observer provider to use.
+Flags: `--host claude-code,codex`, `--provider anthropic|openai-compat`, `--yes` to skip prompts.
+
+Start a new session in Claude Code or Codex and work as usual. From the second session on, the agent
+starts with what it learned before. Check the setup at any time:
+
+```sh
+memhive doctor
+memhive search "auth middleware"
+```
 
 ## How it works
+
+```mermaid
+flowchart LR
+  A[Claude Code / Codex] -- hooks --> D[memhive daemon]
+  D -- batched events --> L[LLM observer]
+  L -- observations --> S[(SQLite + FTS + vectors)]
+  S -- context at session start --> A
+  S <-- MCP search / timeline --> A
+  S <-. push / pull .-> H[(Team hub<br>Postgres + pgvector)]
+```
 
 - **Hooks.** Claude Code and Codex call `memhive hook <host> <event>` on session start, each prompt, each tool use, stop and session end. Hook commands always exit 0, so they never block the agent.
 - **Daemon.** The first hook starts a local daemon (`memhive daemon status|start|stop|run`). It owns the SQLite database (`~/.memhive/memhive.db`) and a per-session event buffer.
@@ -147,6 +219,51 @@ Hub-side search is full-text only, because the hub runs no embedder. Client sear
 - Logs are in `~/.memhive/logs/` (`hook.log`, `daemon.log`, and others). Set `MEMHIVE_DEBUG=1` for more detail.
 - If session context is missing, check that `memhive daemon status` reports the daemon running. Hooks start it automatically on the next session.
 
+## Contributing
+
+```sh
+git clone https://github.com/trickstarcandina/memhive.git
+cd memhive
+npm install
+npm run typecheck
+npm test          # unit and integration tests
+npm run build     # bundles dist/memhive.cjs
+```
+
+The Postgres hub tests run when `TEST_DATABASE_URL` points to a pgvector database whose name contains `test`.
+
+Releases are published to npm by the [`publish` workflow](./.github/workflows/publish.yml) with
+[provenance](https://docs.npmjs.com/generating-provenance-statements): bump `version` in `package.json`
+and `src/shared/version.ts`, push, then publish a GitHub release tagged `v<version>`.
+
+## Security
+
+Please report vulnerabilities privately through
+[GitHub security advisories](https://github.com/trickstarcandina/memhive/security/advisories/new), not in public issues.
+
 ## License
 
-MIT
+[MIT](./LICENSE)
+
+## Stats
+
+Weekly downloads from npmjs.com, redrawn every day by the [`stats` workflow](./.github/workflows/stats.yml),
+with a dashed line for each release. Click the chart for npm-stat's daily breakdown.
+
+<div align="center">
+
+<a href="https://npm-stat.com/charts.html?package=memhive">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/trickstarcandina/memhive/stats/downloads-dark.svg">
+    <img alt="npm downloads per week" src="https://raw.githubusercontent.com/trickstarcandina/memhive/stats/downloads-light.svg" width="800">
+  </picture>
+</a>
+
+<a href="https://star-history.com/#trickstarcandina/memhive&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=trickstarcandina/memhive&type=Date&theme=dark">
+    <img alt="GitHub stars over time" src="https://api.star-history.com/svg?repos=trickstarcandina/memhive&type=Date" width="800">
+  </picture>
+</a>
+
+</div>
