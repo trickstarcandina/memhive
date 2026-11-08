@@ -96,6 +96,22 @@ describe('push failure handling', () => {
     expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(0);
     expect(t.store.listUnsynced('sessions', t.project.id, 10)).toHaveLength(0);
   });
+  it('a 404 (proxy, wrong path, old hub) keeps rows and backs off', async () => {
+    const t = await setup({ dims: null, fetchImpl: failPush(404) });
+    addObs(t, 2, null);
+    expect(await t.engine.push(t.project)).toBeNull();
+    expect(await t.engine.push(t.project)).toBeNull();
+    expect(t.pushes()).toBe(1);
+    expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(2);
+  });
+  it('a bare proxy 400/403 without a hub error body keeps rows', async () => {
+    for (const status of [400, 403]) {
+      const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).endsWith('/v1/sync/push') ? new Response('<html>Forbidden</html>', { status }) : inner(url, init) });
+      addObs(t, 1, null);
+      expect(await t.engine.push(t.project)).toBeNull();
+      expect(t.store.listUnsynced('observations', t.project.id, 10)).toHaveLength(1);
+    }
+  });
   it('a 5xx keeps rows and backs off; a manual sync (force) still tries', async () => {
     const t = await setup({ dims: null, fetchImpl: failPush(500) });
     addObs(t, 2, null);

@@ -100,7 +100,8 @@ export class SyncEngine implements SyncHooks {
         if (e.status === 413 && hubObs[0]?.embedding) {
           try { result = await this.send(client, project, { ...body, observations: [noVec(hubObs[0])] }); }
           catch (e2) { if (!(e2 instanceof HubError) || e2.status !== 413) { this.failed(project, 'push', e2); return round === 0 ? null : total; } result = this.giveUp(project, body, e2); }
-        } else if (e.status === 408 || e.status === 429 || e.status >= 500) {
+        } else if (e.status === 404 || e.code === 'http_error' || e.status === 408 || e.status === 429 || e.status >= 500) {
+          // 404 and a 4xx without a hub error body come from a proxy, a wrong path prefix or an old hub: dropping the batch would lose rows.
           // shortcut: backoff is per daemon process and resets on restart, persist it if hubs stay down for hours
           const delayMs = Math.min((off?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
           this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs });
@@ -121,7 +122,7 @@ export class SyncEngine implements SyncHooks {
     return total;
   }
 
-  /** The hub refused the body itself (4xx other than 401, or one row over the size limit): every row in it is reported rejected so it is marked synced, not resent forever. */
+  /** The hub itself refused the body (a 4xx with a hub error body, other than 401/404, or one row over the size limit): every row in it is reported rejected so it is marked synced, not resent forever. */
   private giveUp(project: Project, body: PushBody, e: HubError): PushResult {
     const reason = e.status === 413 ? 'too_large' : e.code;
     this.deps.logger.warn('hub refused a push batch; its rows will not be retried', { hub: project.hubUrl, status: e.status, code: e.code, rows: body.sessions.length + body.observations.length + body.summaries.length });
