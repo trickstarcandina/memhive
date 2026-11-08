@@ -6,7 +6,6 @@ import {
   readdirSync,
   mkdtempSync,
   readFileSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -17,6 +16,7 @@ import { backupCommand, exportCommand, importCommand } from '../../src/cli/comma
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 import { obs, sess } from '../store/store-contract.js';
 import { deadUrl } from '../helpers/closed-port.js';
+import { expectMode } from '../helpers/posix.js';
 
 const mkHome = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
 const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
@@ -102,7 +102,7 @@ describe('backup', () => {
     expect(await backupCommand(['snap.db'], r.io, { home: a.home, cwd: dir })).toBe(0);
     const file = path.join(dir, 'snap.db');
     expect(r.out()).toContain(`backup written to ${file}`);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expectMode(file, 0o600);
     const db = new Database(file, { readonly: true });
     expect((db.prepare('SELECT COUNT(*) c FROM observations').get() as { c: number }).c).toBe(2);
     db.close();
@@ -125,7 +125,7 @@ describe('export and import', () => {
     const out = path.join(mkHome(), 'app.jsonl');
     let r = io();
     expect(await exportCommand(['--project', KEY, '--out', out], r.io, { home: a.home })).toBe(0);
-    expect(statSync(out).mode & 0o777).toBe(0o600);
+    expectMode(out, 0o600);
     const lines = readFileSync(out, 'utf8')
       .trim()
       .split('\n')
@@ -195,7 +195,7 @@ describe('export and import', () => {
     expect(readFileSync(out, 'utf8')).toBe('old');
     r = io();
     expect(await exportCommand(['--project', KEY, '--out', out, '--force'], r.io, { home: a.home })).toBe(0);
-    expect(statSync(out).mode & 0o777).toBe(0o600);
+    expectMode(out, 0o600);
     expect(readFileSync(out, 'utf8')).toContain('"kind":"project"');
     const victim = path.join(dir, 'victim');
     writeFileSync(victim, 'keep');

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { it, expect } from 'vitest';
@@ -6,6 +6,7 @@ import { serveCommand } from '../../src/cli/commands/serve.js';
 import { keyCommand } from '../../src/cli/commands/key.js';
 import { main } from '../../src/cli/index.js';
 import { pgTestDb } from '../helpers/pg.js';
+import { expectMode } from '../helpers/posix.js';
 
 const cap = () => {
   const o = { out: '', err: '' };
@@ -109,7 +110,7 @@ it('serve writes the initial admin key to a 0600 file, not stdout', async () => 
   });
   expect(first.code).toBe(0);
   expect(me).toBe(200);
-  expect(statSync(file).mode & 0o777).toBe(0o600);
+  expectMode(file, 0o600);
   expect(readFileSync(file, 'utf8')).toMatch(/^mh_[A-Za-z0-9_-]{43}\n$/);
   expect(first.out).toContain(file);
   expect(first.out).not.toMatch(/mh_/);

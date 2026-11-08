@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createLogger } from '../../src/shared/logger.js';
+import { expectMode, itPosix } from '../helpers/posix.js';
 
 describe('logger', () => {
   it('appends JSON lines and skips debug unless MEMHIVE_DEBUG', () => {
@@ -43,12 +44,12 @@ describe('logger robustness', () => {
     log.info('kept');
     expect(readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8')).toContain('"msg":"kept"');
   });
-  it.skipIf(process.platform === 'win32')('tightens a log file left 0644 by an older build', () => {
+  itPosix('tightens a log file left 0644 by an older build', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     mkdirSync(path.join(home, 'logs'), { recursive: true });
     writeFileSync(path.join(home, 'logs', 'hook.log'), 'old\n', { mode: 0o644 });
     createLogger(home, 'hook', {}).info('x');
-    expect(statSync(path.join(home, 'logs', 'hook.log')).mode & 0o777).toBe(0o600);
+    expectMode(path.join(home, 'logs', 'hook.log'), 0o600);
   });
 });
 

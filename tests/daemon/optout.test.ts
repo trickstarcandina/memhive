@@ -14,6 +14,7 @@ import { pausedUntil, pauseReader, writePause } from '../../src/shared/optout.js
 import { projectKeyFor } from '../../src/shared/project-key.js';
 import type { HookEvent } from '../../src/hooks/types.js';
 import { deadUrl } from '../helpers/closed-port.js';
+import { expectMode } from '../helpers/posix.js';
 
 const env = (extra: Record<string, string> = {}) => ({
   MEMHIVE_LLM_PROVIDER: 'openai-compat',
@@ -159,7 +160,7 @@ describe('opt-out', () => {
     expect(await pauseCommand(['1h'], io, { home })).toBe(0);
     expect(JSON.parse(readFileSync(path.join(home, 'state.json'), 'utf8')).pausedUntil).toMatch(/^\d{4}-/);
     expect(() => statSync(path.join(home, 'settings.json'))).toThrow();
-    expect(statSync(path.join(home, 'state.json')).mode & 0o777).toBe(0o600);
+    expectMode(path.join(home, 'state.json'), 0o600);
     const until = pausedUntil(home)!;
     expect(until - Date.now()).toBeGreaterThan(36e5 - 5000);
     const ctx = createDaemonContext(home, env());

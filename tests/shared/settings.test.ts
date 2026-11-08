@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync, chmodS
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../../src/shared/settings.js';
+import { expectMode } from '../helpers/posix.js';
 
 describe('settings', () => {
   it('returns defaults when no file', () => {
@@ -13,7 +14,7 @@ describe('settings', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     saveSettings(home, { ...DEFAULT_SETTINGS, contextTokens: 999 });
     expect(loadSettings(home, {}).contextTokens).toBe(999);
-    expect(statSync(path.join(home, 'settings.json')).mode & 0o777).toBe(0o600);
+    expectMode(path.join(home, 'settings.json'), 0o600);
   });
   it('tightens the mode of an existing looser file on save', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
@@ -21,7 +22,7 @@ describe('settings', () => {
     writeFileSync(file, '{}');
     chmodSync(file, 0o644);
     saveSettings(home, DEFAULT_SETTINGS);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expectMode(file, 0o600);
   });
   it('defaults the model per provider', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
@@ -152,7 +153,7 @@ describe('settings', () => {
     const ino = statSync(file).ino;
     saveSettings(home, { ...DEFAULT_SETTINGS, llm: { ...DEFAULT_SETTINGS.llm, apiKey: 'sk-secret' } });
     expect(statSync(file).ino).not.toBe(ino); // a fresh 0600 file renamed over the old one; the 0644 inode never held the key
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expectMode(file, 0o600);
     expect(loadSettings(home, {}).llm.apiKey).toBe('sk-secret');
     expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });

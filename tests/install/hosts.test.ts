@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { detectHosts, installClaudeCode, installCodex, uninstallCodex, type RunFn } from '../../src/install/hosts.js';
+import { expectMode } from '../helpers/posix.js';
 
 const calls: string[] = [];
 const ok: RunFn = (c, a) => {
@@ -74,7 +75,7 @@ it('installCodex keeps a backup of config.toml, replaces it atomically and keeps
   expect(installCodex('/m', home, ok).ok).toBe(true);
   expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n');
   expect(statSync(cfg).ino).not.toBe(ino); // renamed into place, not rewritten in place
-  expect(statSync(cfg).mode & 0o777).toBe(0o640);
+  expectMode(cfg, 0o640);
   uninstallCodex(home, ok);
   expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n'); // the first backup is never overwritten
   expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);

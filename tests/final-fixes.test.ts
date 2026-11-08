@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, readFileSync, statSync, existsSync, chmodSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, chmodSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -15,8 +15,8 @@ import { createLogger } from '../src/shared/logger.js';
 import { setHomeWarningSink } from '../src/shared/paths.js';
 import { saveSettings, DEFAULT_SETTINGS } from '../src/shared/settings.js';
 import { sess, obs } from './store/store-contract.js';
+import { describePosix, modeOf } from './helpers/posix.js';
 
-const mode = (p: string) => statSync(p).mode & 0o777;
 const tmp = () => mkdtempSync(path.join(tmpdir(), 'mh-'));
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -149,25 +149,25 @@ describe('prompt sanitizing', () => {
   });
 });
 
-describe('file modes', () => {
+describePosix('file modes', () => {
   it('home 0700, logs 0700, db 0600, settings 0600', () => {
     const home = path.join(tmp(), 'mh-home');
     const ctx = createDaemonContext(home, {});
     createLogger(home, 'x', {}).info('hi');
-    expect(mode(home)).toBe(0o700);
-    expect(mode(path.join(home, 'logs'))).toBe(0o700);
+    expect(modeOf(home)).toBe(0o700);
+    expect(modeOf(path.join(home, 'logs'))).toBe(0o700);
     ctx.store.close();
     saveSettings(home, DEFAULT_SETTINGS);
-    expect(mode(path.join(home, 'settings.json'))).toBe(0o600);
+    expect(modeOf(path.join(home, 'settings.json'))).toBe(0o600);
     expect(existsSync(path.join(home, 'memhive.db'))).toBe(true);
-    expect(mode(path.join(home, 'memhive.db'))).toBe(0o600);
+    expect(modeOf(path.join(home, 'memhive.db'))).toBe(0o600);
   });
   it('tightens an existing loose home', () => {
     const home = tmp();
     chmodSync(home, 0o755);
     writeFileSync(path.join(home, 'settings.json'), '{}');
     createDaemonContext(home, {}).store.close();
-    expect(mode(home)).toBe(0o700);
+    expect(modeOf(home)).toBe(0o700);
   });
   it('leaves the mode of a shared directory MEMHIVE_HOME points at, warns, and keeps memhive files private', () => {
     const home = tmp();
@@ -178,7 +178,7 @@ describe('file modes', () => {
     const ctx = createDaemonContext(home, {}); // migrate writes, so the WAL files exist while the store is open
     createLogger(home, 'x', {}).info('hi');
     saveSettings(home, DEFAULT_SETTINGS);
-    expect(mode(home)).toBe(0o755);
+    expect(modeOf(home)).toBe(0o755);
     expect(warnings.join('')).toMatch(/readable by other users/);
     for (const f of [
       'memhive.db',
@@ -188,8 +188,8 @@ describe('file modes', () => {
       'logs/x.log',
       'logs/daemon.log',
     ])
-      if (existsSync(path.join(home, f))) expect([f, mode(path.join(home, f))]).toEqual([f, 0o600]);
-    expect(mode(path.join(home, 'logs'))).toBe(0o700);
+      if (existsSync(path.join(home, f))) expect([f, modeOf(path.join(home, f))]).toEqual([f, 0o600]);
+    expect(modeOf(path.join(home, 'logs'))).toBe(0o700);
     expect(existsSync(path.join(home, 'memhive.db-wal'))).toBe(true);
     ctx.store.close();
   });

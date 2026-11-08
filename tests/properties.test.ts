@@ -17,6 +17,7 @@ import { PostgresHubStore } from '../src/hub/store/postgres.js';
 import { obs } from './store/store-contract.js';
 import { newId } from '../src/shared/ids.js';
 import type { Summary } from '../src/store/types.js';
+import { describePosix } from './helpers/posix.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 // Hostile text: FTS/tsquery operators, quotes, combining marks, emoji, NUL and other controls, line terminators, markdown.
@@ -201,7 +202,7 @@ describe('setTomlBooleanChecked on random TOML', () => {
   });
 });
 
-describe.skipIf(process.platform === 'win32')('rendered hook command through sh -c', () => {
+describePosix('rendered hook command through sh -c', () => {
   it('node and bundle paths with quotes, spaces, $, backticks and newlines reach the program unchanged', () => {
     const work = mkdtempSync(path.join(tmpdir(), 'mh-shq-'));
     const printer = path.join(work, 'argv.cjs');

@@ -1,16 +1,17 @@
 import { it, expect } from 'vitest';
-import { mkdtempSync, statSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadCredentials, saveCredentials, normalizeHubUrl, defaultUser } from '../../src/sync/credentials.js';
+import { expectMode } from '../helpers/posix.js';
 
 it('round trips with 0600 file in a 0700 dir, atomically', () => {
   const home = path.join(mkdtempSync(path.join(tmpdir(), 'mh-')), 'sub');
   expect(loadCredentials(home)).toEqual({ hubs: {} });
   saveCredentials(home, { hubs: { 'https://hub': { key: 'mh_x', user: 'alice' } } });
   expect(loadCredentials(home).hubs['https://hub'].user).toBe('alice');
-  expect(statSync(path.join(home, 'credentials.json')).mode & 0o777).toBe(0o600);
-  expect(statSync(home).mode & 0o777).toBe(0o700);
+  expectMode(path.join(home, 'credentials.json'), 0o600);
+  expectMode(home, 0o700);
   expect(readdirSync(home)).toEqual(['credentials.json']);
   expect(defaultUser(loadCredentials(home))).toBe('alice');
   expect(defaultUser({ hubs: { a: { key: 'k', user: 'u', authFailed: true } } })).toBeNull();
