@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parse } from 'smol-toml';
-import { mulberry32, int, pick, chars, ALNUM, type Rng } from './helpers/prng.js';
+import { mulberry32, seeded, int, pick, chars, ALNUM, type Rng } from './helpers/prng.js';
 import { pgTestDb } from './helpers/pg.js';
 import { toFtsQuery } from '../src/store/sqlite/fts-query.js';
 import { setTomlBooleanChecked } from '../src/install/toml.js';
@@ -76,7 +76,7 @@ describe('toFtsQuery against a real FTS5 table', () => {
       "CREATE VIRTUAL TABLE t USING fts5(x, tokenize='unicode61'); INSERT INTO t VALUES ('hello world'), ('Đăng nhập lỗi'), ('near and or not');"
     );
     const q = db.prepare('SELECT count(*) c FROM t WHERE t MATCH ?');
-    const r = mulberry32(0xf75);
+    const r = seeded(0xf75);
     for (let i = 0; i < 3000; i++) {
       const input = hostile(r);
       for (const op of [' ', ' OR '] as const) {
@@ -111,7 +111,7 @@ describe.skipIf(!pg)('toTsQuery against real to_tsquery', () => {
         syncedAt: null,
       };
       await s.upsertSessions([a]);
-      const r = mulberry32(0x75);
+      const r = seeded(0x75);
       for (let i = 0; i < 400; i++) {
         const input = hostile(r);
         await expect(
@@ -175,7 +175,7 @@ describe('setTomlBooleanChecked on random TOML', () => {
     return r() < 0.3 ? s.replace(/\n/g, '\r\n') : s;
   };
   it('output parses and equals the input with exactly features.hooks changed, or the call throws', () => {
-    const r = mulberry32(0x7041);
+    const r = seeded(0x7041);
     let edited = 0;
     for (let i = 0; i < 2000; i++) {
       const input = doc(r);
@@ -206,7 +206,7 @@ describe.skipIf(process.platform === 'win32')('rendered hook command through sh 
     const work = mkdtempSync(path.join(tmpdir(), 'mh-shq-'));
     const printer = path.join(work, 'argv.cjs');
     writeFileSync(printer, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
-    const r = mulberry32(0x540);
+    const r = seeded(0x540);
     const nasty = [
       "'",
       ' ',
@@ -261,7 +261,7 @@ describe.skipIf(process.platform === 'win32')('rendered hook command through sh 
 
 describe('normalizeRemote fuzz', () => {
   it('every spelling of one repo gives one key, never null', () => {
-    const r = mulberry32(0x6e7);
+    const r = seeded(0x6e7);
     const name = () => chars(r, ALNUM + '-_', int(r, 1, 6)) + (r() < 0.3 ? '.' + chars(r, ALNUM, 2) : '');
     for (let i = 0; i < 2000; i++) {
       const host = chars(r, 'abcdefghijklmnopqrstuvwxyz', int(r, 2, 8)) + pick(r, ['.com', '.org', '.example.io', '']);
@@ -288,7 +288,11 @@ describe('normalizeRemote fuzz', () => {
 });
 
 describe('formatters and context with control characters in stored fields', () => {
-  const r = mulberry32(0xf8);
+  // each it() reseeds, so a case found in a shuffled run reproduces in a default one
+  let r = mulberry32(0);
+  const seed = (n: number) => {
+    r = seeded(n);
+  };
   const field = () => hostile(r, int(r, 0, 8));
   const row = () =>
     obs({
@@ -322,6 +326,7 @@ describe('formatters and context with control characters in stored fields', () =
   // a CommonMark thematic break or setext underline (3+ of one of - * _, or a run of =)
   const rule = (l: string) => /^ {0,3}([-*_])([ \t]*\1){2,}[ \t]*$/.test(l) || /^ {0,3}=+[ \t]*$/.test(l);
   it('formatFull and formatIndex: data never starts a heading, rule or fence line', () => {
+    seed(0xf8);
     for (let i = 0; i < 500; i++) {
       const rows = Array.from({ length: int(r, 1, 4) }, row);
       const sums = Array.from({ length: int(r, 0, 2) }, summary);
@@ -346,6 +351,7 @@ describe('formatters and context with control characters in stored fields', () =
   });
 
   it('buildContext keeps rows on one line and stays within budget', () => {
+    seed(0xb17d);
     for (let i = 0; i < 500; i++) {
       const rows = Array.from({ length: int(r, 0, 12) }, row).map((o) => ({ ...o, pinned: r() < 0.2 }));
       const budget = int(r, 100, 1500);

@@ -79,7 +79,7 @@ const clip = (s: string, n: number) => {
 };
 // A list item made only of rule characters ("  - ---") is a CommonMark thematic break, which reads as a section boundary.
 const item = (s: string, n: number) => {
-  const t = clip(s, n);
+  const t = clip(s, n).trim();
   return /^[-*_= \t]+$/.test(t) ? `\\${t}` : t;
 };
 
@@ -129,7 +129,10 @@ export function buildContext(input: ContextInput): string {
       // Facts only for local rows: pulled rows stay a one-line title, to keep text others wrote out of the prompt.
       const facts =
         shown < FACT_ROWS && o.origin === 'local'
-          ? o.facts.slice(0, FACTS_PER_ROW).map((f) => `  - ${item(f, 160)}`)
+          ? o.facts
+              .filter((f) => oneLine(f).trim()) // a blank fact renders nothing
+              .slice(0, FACTS_PER_ROW)
+              .map((f) => `  - ${item(f, 160)}`)
           : [];
       const ok = add(line, ...facts) || add(line);
       if (ok) shown++;

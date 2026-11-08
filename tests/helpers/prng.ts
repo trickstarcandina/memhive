@@ -1,3 +1,5 @@
+import { onTestFailed } from 'vitest';
+
 // Seeded so a failure reproduces; print the seed or case in the assertion message.
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -15,3 +17,9 @@ export const int = (r: Rng, lo: number, hi: number) => lo + Math.floor(r() * (hi
 export const pick = <T>(r: Rng, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
 export const chars = (r: Rng, set: string, n: number) => Array.from({ length: n }, () => pick(r, [...set])).join('');
 export const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+/** A fresh PRNG for the current test; its seed is printed if the test fails. Call inside it(). */
+export function seeded(seed: number): Rng {
+  onTestFailed(() => console.error(`property test failed with PRNG seed 0x${seed.toString(16)}`));
+  return mulberry32(seed);
+}

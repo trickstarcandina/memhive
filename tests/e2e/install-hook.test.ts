@@ -101,7 +101,11 @@ describe.skipIf(!existsSync(BUNDLE) || process.platform === 'win32')('install, t
         let err = '';
         c.stdout.on('data', (x) => (out += x));
         c.stderr.on('data', (x) => (err += x));
-        c.on('close', (code) => resolve({ code, out, err }));
+        const kill = setTimeout(() => c.kill('SIGKILL'), 10_000);
+        c.on('close', (code) => {
+          clearTimeout(kill);
+          resolve({ code, out, err });
+        });
         c.stdin.end(
           JSON.stringify({
             session_id: 'cx-install',
@@ -116,6 +120,13 @@ describe.skipIf(!existsSync(BUNDLE) || process.platform === 'win32')('install, t
       expect(JSON.stringify(JSON.parse(r.out))).toContain('memhive ·');
     } finally {
       await d.close();
+      // a hook that missed the in-process daemon would have started its own: never leave it running
+      try {
+        const other = JSON.parse(readFileSync(path.join(home, 'daemon.json'), 'utf8')).pid;
+        if (other && other !== process.pid) process.kill(other, 'SIGKILL');
+      } catch {
+        /* none */
+      }
     }
     expect(spawnSync('sh', ['-n', '-c', entry.command]).status).toBe(0);
   });

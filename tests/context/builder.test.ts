@@ -203,6 +203,11 @@ describe('buildContext', () => {
     expect(c).not.toContain('qa5');
     expect(c).not.toContain('qa6');
   });
+  it('a blank fact renders nothing, and no stray backslash', () => {
+    const o = obs({ projectId: 'p', sessionId: 's', title: 'blank facts', facts: ['   ', '\t', ' --- ', 'real fact'] });
+    const lines = buildContext({ ...base, observations: [o] }).split('\n');
+    expect(lines.filter((l) => l.startsWith('  - '))).toEqual(['  - \\---', '  - real fact']);
+  });
   it('CJK and other non-ASCII text are budgeted at 3 chars per token', () => {
     expect(estimateTokens('a'.repeat(40))).toBe(10);
     expect(estimateTokens('数据库连接池的配置已经更改'.repeat(3))).toBe(13);

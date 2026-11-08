@@ -53,6 +53,18 @@ const daemonPid = (): number | null => {
     return null;
   }
 };
+// the lock holds the pid from the moment the daemon starts, before daemon.json exists
+const lockPid = (): number | null => {
+  const n = Number(readFileSync(path.join(dirs.MEMHIVE_HOME, 'daemon.lock'), { encoding: 'utf8', flag: 'r' }).trim());
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+const safe = <T>(f: () => T): T | null => {
+  try {
+    return f();
+  } catch {
+    return null;
+  }
+};
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -100,7 +112,9 @@ describe.skipIf(!existsSync(BUNDLE))('built bundle round trip', () => {
   });
   afterAll(async () => {
     // never leave the detached daemon behind, even when an assertion failed
-    for (const p of [pid, daemonPid()]) if (p && alive(p)) process.kill(p, 'SIGKILL');
+    const pids = new Set([pid, daemonPid(), safe(lockPid)].filter((p): p is number => !!p && p !== process.pid));
+    for (const p of pids) if (alive(p)) process.kill(p, 'SIGKILL');
+    await waitFor(() => [...pids].every((p) => !alive(p)), { timeout: 5000, what: `daemon ${[...pids]} gone` });
     await new Promise<void>((r) => llm.close(() => r()));
   });
 
@@ -148,6 +162,9 @@ describe.skipIf(!existsSync(BUNDLE))('built bundle round trip', () => {
       env: env as Record<string, string>,
       stderr: 'pipe',
     });
+    // drain stderr: an unread pipe fills up and stalls the child; shown when a call below fails
+    let mcpErr = '';
+    transport.stderr?.on('data', (d) => (mcpErr += d));
     const client = new Client({ name: 'e2e', version: '0' });
     await client.connect(transport);
     try {
@@ -159,6 +176,8 @@ describe.skipIf(!existsSync(BUNDLE))('built bundle round trip', () => {
       const full = text(await client.callTool({ name: 'get_observations', arguments: { ids: [id] } }));
       expect(full).toContain('Hooks reached the daemon.');
       expect(full).toContain('<<<narrative');
+    } catch (e) {
+      throw new Error(`${(e as Error).message}\nmcp stderr:\n${mcpErr}`);
     } finally {
       await client.close();
     }
