@@ -6,6 +6,7 @@ import { newId } from '../shared/ids.js';
 import { OBSERVATION_TYPES, type Observation, type ObservationType, type SearchFilters } from '../store/types.js';
 import { projectKeyFor } from '../shared/project-key.js';
 import { embeddingText } from '../observer/observer.js';
+import { redactSecrets, sanitizePrompt } from '../hooks/sanitize.js';
 
 const ok = (body: unknown, status = 200) => ({ status, body });
 const err = (status: number, code: string, message: string) => ({ status, body: { error: { code, message } } });
@@ -77,13 +78,16 @@ export async function handleRoute(ctx: DaemonContext, method: string, url: URL, 
 
   if (method === 'POST' && path === '/v1/memories') {
     const b = (body ?? {}) as { projectKey?: string; text?: string; title?: string; type?: string };
-    if (!b.projectKey || !b.text?.trim()) return err(400, 'bad_memory', 'projectKey and text required');
+    const clean = (v: string) => redactSecrets(sanitizePrompt(v));
+    const text = typeof b.text === 'string' ? clean(b.text) : '';
+    const title = typeof b.title === 'string' ? clean(b.title) : '';
+    if (!b.projectKey || !text) return err(400, 'bad_memory', 'projectKey and text required');
     const project = store.getProjectByKey(b.projectKey) ?? store.getOrCreateProject(b.projectKey, b.projectKey.split('/').pop() ?? b.projectKey);
     const type = (b.type && OBSERVATION_TYPES.includes(b.type as ObservationType) ? b.type : 'discovery') as ObservationType;
     const now = new Date().toISOString();
     let session = store.getSessionByHost('manual', project.id);
     if (!session) { session = { id: newId(), projectId: project.id, userId: ctx.userId, host: 'manual', hostSessionId: project.id, cwd: '', startedAt: now, endedAt: null, syncedAt: null }; store.upsertSession(session); }
-    const o: Observation = { id: newId(), projectId: project.id, sessionId: session.id, userId: ctx.userId, type, title: (b.title ?? b.text).trim().slice(0, 200), subtitle: '', facts: [b.text.trim()], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: now, embeddingModel: null, origin: 'local', syncedAt: null };
+    const o: Observation = { id: newId(), projectId: project.id, sessionId: session.id, userId: ctx.userId, type, title: (title || text).slice(0, 200), subtitle: '', facts: [text], narrative: '', concepts: [], filesRead: [], filesModified: [], createdAt: now, embeddingModel: null, origin: 'local', syncedAt: null };
     store.insertObservations([o]);
     if (ctx.embedder) { try { const [v] = await ctx.embedder.embed([embeddingText(o)]); store.setObservationEmbedding(o.id, v, ctx.embedder.model); } catch { /* backfill later */ } }
     ctx.sync?.schedulePush(project.id);

@@ -9,6 +9,8 @@ import { VERSION } from '../shared/version.js';
 import { OBSERVATION_TYPES, type Observation } from '../store/types.js';
 import { formatFull, formatIndex } from './format.js';
 
+const id = z.string().max(64).regex(/^[0-9a-f-]+$/i);
+
 export function createMcpServer(deps: { client: DaemonClient; cwd: string }): McpServer {
   const server = new McpServer({ name: 'memhub', version: VERSION });
   const projectKey = async () => (await deps.client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(deps.cwd)}`)).project.key;
@@ -16,7 +18,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
 
   server.registerTool('search', {
     description: 'Step 1 of 3. Search past observations for this project. Returns a compact index (ids, types, titles). Follow with timeline and get_observations.',
-    inputSchema: { query: z.string(), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().optional(), since: z.string().optional().describe('ISO date or relative like 7d, 12h'), project: z.string().optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
+    inputSchema: { query: z.string().max(2000), type: z.enum(OBSERVATION_TYPES).optional(), user: z.string().optional(), since: z.string().optional().describe('ISO date or relative like 7d, 12h'), project: z.string().optional().describe('project key; defaults to the current repo'), limit: z.number().int().min(1).max(100).default(20) },
   }, async (a) => {
     const q = new URLSearchParams({ q: a.query, project_key: a.project ?? (await projectKey()), limit: String(a.limit) });
     if (a.type) q.set('type', a.type);
@@ -28,7 +30,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
 
   server.registerTool('timeline', {
     description: 'Step 2 of 3. Show observations recorded before and after an anchor observation (same session), as an index.',
-    inputSchema: { anchor_id: z.string(), before: z.number().int().min(0).max(50).default(5), after: z.number().int().min(0).max(50).default(5) },
+    inputSchema: { anchor_id: id, before: z.number().int().min(0).max(50).default(5), after: z.number().int().min(0).max(50).default(5) },
   }, async (a) => {
     const r = await deps.client.request<{ observations: Observation[] }>('GET', `/v1/timeline?anchor=${encodeURIComponent(a.anchor_id)}&before=${a.before}&after=${a.after}`);
     return textResult(formatIndex(r.observations));
@@ -36,7 +38,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
 
   server.registerTool('get_observations', {
     description: 'Step 3 of 3. Fetch full details for selected observation ids (full ids, unique prefixes or 8-char short ids). Batch several ids per call.',
-    inputSchema: { ids: z.array(z.string()).min(1).max(50) },
+    inputSchema: { ids: z.array(id).min(1).max(50) },
   }, async (a) => {
     const r = await deps.client.request<{ observations: Observation[] }>('GET', `/v1/observations?ids=${encodeURIComponent(a.ids.join(','))}`);
     return textResult(formatFull(r.observations));
@@ -44,7 +46,7 @@ export function createMcpServer(deps: { client: DaemonClient; cwd: string }): Mc
 
   server.registerTool('save_memory', {
     description: 'Save a note for future sessions of this project (a decision, a gotcha, a convention).',
-    inputSchema: { text: z.string().min(1), title: z.string().optional(), type: z.enum(OBSERVATION_TYPES).default('discovery') },
+    inputSchema: { text: z.string().min(1).max(20000), title: z.string().max(2000).optional(), type: z.enum(OBSERVATION_TYPES).default('discovery') },
   }, async (a) => {
     const r = await deps.client.request<{ observation: Observation }>('POST', '/v1/memories', { projectKey: await projectKey(), text: a.text, title: a.title, type: a.type });
     return textResult(`Saved #${shortId(r.observation.id)} · ${r.observation.type} · ${r.observation.title.replace(/\s+/g, ' ')}`);
