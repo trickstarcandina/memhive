@@ -18,7 +18,7 @@ export function resolvePaths(home = process.env.MEMHUB_HOME ?? path.join(homedir
 }
 
 // Names memhub writes in its home and logs dir; a dir holding anything else is not ours to tighten.
-const OWN_ENTRY = /^(?:memhub\.db(?:-wal|-shm|-journal)?|settings\.json|credentials\.json|daemon\.(?:json|lock)|logs|marketplace|[\w-]+\.log(?:\.1)?)$|\.tmp$/;
+const OWN_ENTRY = /^(?:memhub\.db(?:-wal|-shm|-journal)?|settings\.json|credentials\.json|daemon\.(?:json|lock(?:\.break)?)|logs|marketplace|[\w-]+\.log(?:\.1|\.rotate)?)$|\.tmp$/;
 
 const warnedDirs = new Set<string>();
 let warnSink = (msg: string): void => { process.stderr.write(msg); };

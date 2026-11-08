@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createLogger } from '../../src/shared/logger.js';
@@ -19,6 +19,16 @@ describe('logger', () => {
     const log = createLogger(home, 'hook', {}, { maxBytes: 100 });
     for (let i = 0; i < 10; i++) log.info('x'.repeat(40));
     expect(existsSync(path.join(home, 'logs', 'hook.log.1'))).toBe(true);
+  });
+  it('another process holding the rotation lock means no rotation here (no clobbered .1)', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    mkdirSync(path.join(home, 'logs'), { recursive: true });
+    writeFileSync(path.join(home, 'logs', 'hook.log.1'), 'old rotated\n');
+    writeFileSync(path.join(home, 'logs', 'hook.log.rotate'), String(process.pid));
+    const log = createLogger(home, 'hook', {}, { maxBytes: 100 });
+    for (let i = 0; i < 10; i++) log.info('x'.repeat(40));
+    expect(readFileSync(path.join(home, 'logs', 'hook.log.1'), 'utf8')).toBe('old rotated\n');
+    expect(readFileSync(path.join(home, 'logs', 'hook.log'), 'utf8').split('\n').length).toBeGreaterThan(10);
   });
 });
 
