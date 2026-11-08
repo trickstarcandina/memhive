@@ -17,18 +17,21 @@ const headerKey = (line: string) => { const m = stripComment(line).trim().match(
 export function setTomlBoolean(content: string, tableHeader: string, key: string, value: boolean): string {
   const want = headerKey(tableHeader)!;
   const eol = content.includes('\r\n') ? '\r\n' : '\n';   // keep the file's line endings
-  const line = `${key} = ${value ? 'true' : 'false'}${eol === '\r\n' ? '\r' : ''}`;   // lines are split on \n only
+  const line = `${key} = ${value ? 'true' : 'false'}`;   // lines are split on \n only, so each keeps its own trailing \r
   const lines = content.split('\n');
   const start = lines.findIndex((l) => headerKey(l) === want);
   if (start === -1) {
     const trimmed = content.replace(/\s+$/, '');
-    return `${trimmed}${trimmed ? eol + eol : ''}${tableHeader}${eol}${line.replace(/\r$/, '')}${eol}`;
+    return `${trimmed}${trimmed ? eol + eol : ''}${tableHeader}${eol}${line}${eol}`;
   }
   let end = start + 1;
   while (end < lines.length && !/^\s*\[/.test(lines[end])) end++;
   const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*=`);
   const idx = lines.findIndex((l, i) => i > start && i < end && re.test(stripComment(l)));
-  if (idx === -1) lines.splice(start + 1, 0, line); else lines[idx] = line;
+  const cr = (l: string) => (l.endsWith('\r') ? '\r' : '');
+  if (idx !== -1) lines[idx] = line + cr(lines[idx]);
+  else if (start === lines.length - 1) { lines[start] += eol === '\r\n' && !cr(lines[start]) ? '\r' : ''; lines.push(line); }   // header was the last line, with no EOL
+  else lines.splice(start + 1, 0, line + cr(lines[start]));
   return lines.join('\n');
 }
 
