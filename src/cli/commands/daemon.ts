@@ -6,6 +6,7 @@ import { readDaemonInfo } from '../../daemon/info.js';
 import { DaemonClient } from '../../daemon/client.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
 import { createDaemonContext, startDaemon, DaemonAlreadyRunning } from '../../daemon/server.js';
+import { DatabaseNewerThanBinary } from '../../store/sqlite/store.js';
 
 export async function daemonCommand(args: string[], io: CliIo, opts: { home?: string } = {}): Promise<number> {
   const home = opts.home ?? resolvePaths().home;
@@ -13,7 +14,11 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
   if (sub === 'run') {
     let h;
     try { h = await startDaemon(createDaemonContext(home)); }
-    catch (e) { if (e instanceof DaemonAlreadyRunning) return 0; throw e; }
+    catch (e) {
+      if (e instanceof DaemonAlreadyRunning) return 0;
+      if (e instanceof DatabaseNewerThanBinary) { io.stderr(`memhive: ${e.message}\n`); return 1; }
+      throw e;
+    }
     let stopping = false;
     const stop = () => { if (stopping) return; stopping = true; void h.close().catch(() => {}).then(() => process.exit(0)); };   // close() flushes the observer
     process.on('SIGTERM', stop); process.on('SIGINT', stop);

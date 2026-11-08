@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'nod
 import { ensureHomeDir, resolvePaths } from '../shared/paths.js';
 import { safeJsonParse } from '../shared/json.js';
 
-export interface DaemonInfo { port: number; pid: number; token: string; startedAt: string }
+export interface DaemonInfo { port: number; pid: number; token: string; startedAt: string; version?: string }   // version: absent before 0.2
 
 export function readDaemonInfo(home: string): DaemonInfo | null {
   const p = resolvePaths(home).daemonInfo;

@@ -17,6 +17,7 @@ import { Observer, type SessionCtx } from '../observer/observer.js';
 import { projectKeyFor, type ProjectInfo } from '../shared/project-key.js';
 import { envDisabled, matchesAny, pauseReader } from '../shared/optout.js';
 import { newId } from '../shared/ids.js';
+import { VERSION } from '../shared/version.js';
 import type { HookEvent } from '../hooks/types.js';
 import type { Project } from '../store/types.js';
 import type { LlmProvider } from '../providers/types.js';
@@ -39,7 +40,8 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
   const settings = loadSettings(home, env);
   const logger = createLogger(home, 'daemon', env);
   const store = new SqliteStore(resolvePaths(home).db, { dims: settings.embed?.dims ?? null, model: settings.embed?.model ?? null, warn: (m, d) => logger.warn(m, d) });
-  store.migrate();
+  // DatabaseNewerThanBinary lands here: logged for doctor and the log reader, then the daemon exits with it.
+  try { store.migrate(); } catch (e) { store.close(); logger.error('cannot open the database', { error: e instanceof Error ? e.message : String(e) }); throw e; }
   // Degraded sqlite-vec drops every vector, so do not pay for embedding calls; rows stay NULL for a later backfill.
   const embedder = store.vectorsDegraded ? null : createEmbedder(settings);
   let provider: LlmProvider;
@@ -138,7 +140,7 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
   const server = createJsonServer(async (method, url, body) => {
     if (url.pathname === '/healthz') {
       const nonce = url.searchParams.get('nonce') ?? '';
-      return { status: 200, body: { ok: true, proof: healthProof(token, nonce, process.pid) } };   // pid is bound in the proof, not disclosed
+      return { status: 200, body: { ok: true, version: VERSION, proof: healthProof(token, nonce, process.pid) } };   // pid is bound in the proof, not disclosed
     }
     touch();
     if (method === 'POST' && url.pathname === '/v1/shutdown') { setTimeout(closeSafe, 10); return { status: 200, body: {} }; }
@@ -148,7 +150,7 @@ export async function startDaemon(ctx: DaemonContext, opts: { port?: number; idl
   const port = () => (server.address() as AddressInfo | null)?.port ?? -1;
   try { await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(opts.port ?? 0, '127.0.0.1', resolve); }); }
   catch (e) { rmSync(lock, { force: true }); throw e; }
-  const info: DaemonInfo = { port: (server.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString() };
+  const info: DaemonInfo = { port: (server.address() as AddressInfo).port, pid: process.pid, token, startedAt: new Date().toISOString(), version: VERSION };
   writeDaemonInfo(ctx.home, info);
   touch();
   ctx.logger.info('daemon started', { port: info.port });

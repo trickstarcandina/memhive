@@ -5,6 +5,7 @@ import { readDaemonInfo } from '../../daemon/info.js';
 import { DaemonClient } from '../../daemon/client.js';
 import { createEmbedder, createProvider } from '../../providers/factory.js';
 import { VERSION } from '../../shared/version.js';
+import { DatabaseNewerThanBinary, schemaStatus } from '../../store/sqlite/store.js';
 import { envDisabled, matchesAny, pausedUntil } from '../../shared/optout.js';
 import { projectKeyFor } from '../../shared/project-key.js';
 
@@ -29,6 +30,10 @@ export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: s
       if (emb) { const [v] = await emb.embed(['ping']); line(v.length === emb.dims, `embedder ping: ${v.length} dims`); }
     } catch (e) { line(false, `embedder ping failed: ${e instanceof Error ? e.message : e}`); }
   }
+  try {
+    const st = schemaStatus(resolvePaths(home).db);
+    if (st && st.version > st.known) line(false, `database: ${new DatabaseNewerThanBinary(st.version, st.known).message}`);
+  } catch (e) { line(false, `database unreadable: ${e instanceof Error ? e.message : e}`); }
   const until = envDisabled(env) ? Infinity : pausedUntil(home);
   if (until !== null) io.stdout(`info capture ${envDisabled(env) ? 'disabled by MEMHIVE_DISABLED' : until === Infinity ? 'paused until `memhive resume`' : `paused until ${new Date(until).toISOString()}`}\n`);
   const here = projectKeyFor(opts.cwd ?? process.cwd());
@@ -36,6 +41,7 @@ export async function doctorCommand(_args: string[], io: CliIo, opts: { home?: s
   const info = readDaemonInfo(home);
   const alive = info ? await new DaemonClient(info).health() : false;
   line(true, alive ? `daemon running on port ${info!.port}` : 'daemon not running (starts on first hook)');
+  if (alive && info!.version !== VERSION) io.stdout(`info daemon is memhive ${info!.version ?? '< 0.2'}, this CLI is ${VERSION}; the next hook or command restarts it\n`);
   if (alive) {
     try {
       const st = await new DaemonClient(info!).request<{ observerAuthFailed?: boolean; pushBlocked?: string[]; hubErrors?: Array<{ hub: string; error: string }> }>('GET', '/v1/status', undefined, 2000);

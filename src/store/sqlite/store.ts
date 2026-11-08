@@ -28,6 +28,22 @@ function filterSql(f: SearchFilters, alias: string): { sql: string; params: unkn
   return { sql: parts.join(' AND '), params };
 }
 
+/** An older binary on a database a newer memhive already migrated: running on would misread or corrupt it. */
+export class DatabaseNewerThanBinary extends Error {
+  constructor(public readonly found: number, public readonly known: number) {
+    super(`the memhive database has schema version ${found}, but this memhive only knows up to ${known}; it was opened by a newer memhive. Upgrade memhive (npm install -g memhive) instead of running an older one.`);
+    this.name = 'DatabaseNewerThanBinary';
+  }
+}
+/** Read-only schema check for doctor: never migrates. */
+export function schemaStatus(file: string): { version: number; known: number } | null {
+  if (!fs.existsSync(file)) return null;
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try { return { version: Number((db.prepare('SELECT MAX(version) v FROM schema_migrations').get() as Row | undefined)?.v ?? 0), known: SQLITE_MIGRATIONS.length }; }
+  catch { return { version: 0, known: SQLITE_MIGRATIONS.length }; }
+  finally { db.close(); }
+}
+
 export class SqliteStore implements Store {
   private db: Database.Database;
   private dims: number | null;
@@ -58,6 +74,8 @@ export class SqliteStore implements Store {
   migrate(): void {
     this.db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
     const applied = new Set(this.db.prepare('SELECT version FROM schema_migrations').all().map((r: any) => r.version as number));
+    const newest = Math.max(0, ...applied);
+    if (newest > SQLITE_MIGRATIONS.length) throw new DatabaseNewerThanBinary(newest, SQLITE_MIGRATIONS.length);
     SQLITE_MIGRATIONS.forEach((sql, i) => {
       const v = i + 1;
       if (applied.has(v)) return;
