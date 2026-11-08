@@ -2,17 +2,17 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Logger } from '../shared/logger.js';
 import { createJsonServer } from '../daemon/http.js';
-import { hashApiKey, generateApiKey, RateLimiter } from './auth.js';
+import { hashApiKey, generateApiKey, RateLimiter, AuthThrottle, remember } from './auth.js';
 import { handleHubRoute } from './routes.js';
 import type { HubStore } from './store/types.js';
 import { SqliteHubStore } from './store/sqlite.js';
 import { PostgresHubStore } from './store/postgres.js';
 import { VERSION } from '../shared/version.js';
 
-export interface HubConfig { port: number; host?: string; embeddingModel: string | null; embeddingDims: number | null; bodyLimit: number }   // host defaults to loopback
+export interface HubConfig { port: number; host?: string; trustProxy?: boolean; embeddingModel: string | null; embeddingDims: number | null; bodyLimit: number }   // host defaults to loopback
 
 export function hubConfigFromEnv(env: NodeJS.ProcessEnv): HubConfig {
-  return { port: Number(env.PORT ?? 7777) || 7777, host: env.HOST || '127.0.0.1', embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
+  return { port: Number(env.PORT ?? 7777) || 7777, host: env.HOST || '127.0.0.1', trustProxy: env.MEMHIVE_TRUST_PROXY === '1', embeddingModel: env.MEMHIVE_EMBED_MODEL || null, embeddingDims: env.MEMHIVE_EMBED_DIMS ? Number(env.MEMHIVE_EMBED_DIMS) || null : null, bodyLimit: Number(env.MEMHIVE_HUB_BODY_LIMIT ?? 2 * 1024 * 1024) || 2 * 1024 * 1024 };
 }
 
 export function createHubStore(env: NodeJS.ProcessEnv): HubStore {
@@ -33,39 +33,34 @@ export async function ensureAdminKey(store: HubStore, persist: (raw: string) => 
   return k.raw;
 }
 
-const AUTH_FAIL_LIMIT = 30;   // failed auths per minute, all keys together, before unknown keys get 429 without a DB lookup
-const AUTH_FAIL_WINDOW_MS = 60_000;
 const BAD_KEY_CACHE = 256;   // recently refused key hashes answered 401 without a DB lookup
 const BAD_KEY_TTL_MS = 60_000;
 const GOOD_KEY_CACHE = 1024;
-/** Insertion-ordered map trimmed to max entries: the oldest go first. */
-const remember = <V>(m: Map<string, V>, k: string, v: V, max: number) => { m.delete(k); m.set(k, v); if (m.size > max) m.delete(m.keys().next().value!); };
 const bearer = (headers: Record<string, unknown>) => /^Bearer\s+(mh_[A-Za-z0-9_-]+)$/.exec(String(headers.authorization ?? ''))?.[1] ?? null;
 
 export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Promise<{ port: number; host: string; close(): Promise<void> }> {
   const limiter = new RateLimiter(60, 60_000);
-  // Failed auth is throttled so a flood of bad keys cannot tie up the DB pool. Keys that authenticated before still reach the
-  // store during a flood (so the team keeps working and a revoke still applies); only never-seen keys are turned away.
-  const fails = { start: 0, count: 0 };
+  // Failed auth is throttled per client so a flood of bad keys cannot tie up the DB pool. Keys that authenticated before still
+  // reach the store during a flood (a revoke still applies); only never-seen keys from the flooding client are turned away.
+  const throttle = new AuthThrottle(30, 60_000, 10_000);
   const bad = new Map<string, number>(); const good = new Map<string, true>();
-  const failed = (hash: string | null, now = Date.now()) => {
-    if (now - fails.start >= AUTH_FAIL_WINDOW_MS) { fails.start = now; fails.count = 0; }
-    fails.count++; if (hash) { good.delete(hash); remember(bad, hash, now + BAD_KEY_TTL_MS, BAD_KEY_CACHE); }
-  };
+  const clientOf = new WeakMap<object, string>();   // req.headers -> client address, set before the shared server runs
   // The key is checked before the body is read, so an unknown or revoked key never makes the hub buffer a body.
   const authed = new WeakMap<object, { keyId: string; userName: string }>();
   const authorize = async (url: URL, headers: Record<string, unknown>): Promise<boolean> => {
     if (url.pathname === '/healthz') return true;
     const raw = bearer(headers); const hash = raw ? hashApiKey(raw) : null;
-    if (hash && (bad.get(hash) ?? 0) > Date.now()) { failed(null); return false; }
+    if (hash && (bad.get(hash) ?? 0) > Date.now()) return false;   // a cache hit costs nothing, so it does not count against the client
     const auth = hash ? await store.authenticate(hash) : null;
-    if (auth) { authed.set(headers, auth); remember(good, hash!, true, GOOD_KEY_CACHE); } else failed(hash);
-    return !!auth;
+    if (auth) { authed.set(headers, auth); remember(good, hash!, true, GOOD_KEY_CACHE); return true; }
+    throttle.failed(clientOf.get(headers) ?? '');
+    if (hash) { good.delete(hash); remember(bad, hash, Date.now() + BAD_KEY_TTL_MS, BAD_KEY_CACHE); }
+    return false;
   };
-  const throttled = (url: URL, headers: Record<string, unknown>, now = Date.now()): number => {
-    if (url.pathname === '/healthz' || now - fails.start >= AUTH_FAIL_WINDOW_MS || fails.count < AUTH_FAIL_LIMIT) return 0;
-    const raw = bearer(headers); if (raw && good.has(hashApiKey(raw))) return 0;
-    return Math.max(1, Math.ceil((fails.start + AUTH_FAIL_WINDOW_MS - now) / 1000));
+  // Behind a trusted proxy the client is the last X-Forwarded-For entry (the one that proxy appended; earlier ones are client-supplied).
+  const client = (req: IncomingMessage): string => {
+    const xff = cfg.trustProxy ? String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean).pop() : undefined;
+    return xff ?? req.socket.remoteAddress ?? '';
   };
   const server = createJsonServer(async (method, url, body, headers) => {
     if (url.pathname === '/healthz') return { status: 200, body: { ok: true, version: VERSION } };
@@ -77,11 +72,17 @@ export async function startHub(store: HubStore, cfg: HubConfig, log: Logger): Pr
   // The throttle answers before the shared JSON server runs (it has no way to set retry-after), so it never touches the store.
   const [inner] = server.listeners('request') as Array<(req: IncomingMessage, res: ServerResponse) => void>;
   server.removeAllListeners('request');
+  const reply = (res: ServerResponse, status: number, code: string, message: string, headers: Record<string, string> = {}) => {
+    res.writeHead(status, { 'content-type': 'application/json', connection: 'close', ...headers }); res.end(JSON.stringify({ error: { code, message } }));
+  };
   server.on('request', (req: IncomingMessage, res: ServerResponse) => {
-    const wait = throttled(new URL(req.url ?? '/', 'http://127.0.0.1'), req.headers);
+    // A throw here would escape every handler and kill the process, before any auth.
+    let url: URL; try { url = new URL(req.url ?? '/', 'http://127.0.0.1'); } catch { return reply(res, 400, 'bad_url', 'malformed request URL'); }
+    const who = client(req); clientOf.set(req.headers, who);
+    const raw = url.pathname === '/healthz' ? null : bearer(req.headers);
+    const wait = url.pathname === '/healthz' || (raw && good.has(hashApiKey(raw))) ? 0 : throttle.wait(who);
     if (!wait) return inner.call(server, req, res);
-    res.writeHead(429, { 'content-type': 'application/json', 'retry-after': String(wait), connection: 'close' });
-    res.end(JSON.stringify({ error: { code: 'rate_limited', message: 'too many failed authentications' } }));
+    reply(res, 429, 'rate_limited', 'too many failed authentications', { 'retry-after': String(wait) });
   });
   const host = cfg.host ?? '127.0.0.1';
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(cfg.port, host, resolve); });

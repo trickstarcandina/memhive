@@ -166,13 +166,14 @@ Hub settings are environment variables:
 | `MEMHIVE_EMBED_DIMS` | unset | Vector size the hub expects. Compose sets `1024`. |
 | `MEMHIVE_HUB_BODY_LIMIT` | `2097152` (2 MB) | Maximum request body, in bytes. Pull pages are capped to the same size. |
 | `MEMHIVE_RESET_VECTORS` | unset | `1` drops stored vectors when `MEMHIVE_EMBED_DIMS` changed (see below). |
+| `MEMHIVE_TRUST_PROXY` | unset | `1` reads the client address for the auth throttle from `X-Forwarded-For`. |
 | `MEMHIVE_HOME` | `~/.memhive` | Directory for hub logs and the initial admin key. Compose sets `/data`. |
 | `MEMHIVE_ADMIN_KEY_FILE` | `$MEMHIVE_HOME/hub-admin-key` | Where the first start writes the admin key. |
 | `MEMHIVE_PRINT_ADMIN_KEY` | unset | `1` also prints the first admin key on stdout. |
 
 `POSTGRES_PASSWORD` is required: compose refuses to start without it. Compose reads it from `docker/.env` and passes it to the hub as `PGPASSWORD`, outside the connection URL, so any characters work.
 
-The hub limits each key to 60 requests per minute. After 30 failed authentications in a minute (all keys together), keys the hub has not seen succeed get `429` with `retry-after` until the minute ends, without a database lookup; keys that authenticated before keep working. For per-client limits, rate-limit at the proxy.
+The hub limits each key to 60 requests per minute. After 30 failed authentications in a minute from one client address, that client gets `429` with `retry-after` for keys the hub has not seen succeed, until the minute ends, without a database lookup; keys that authenticated before keep working, and other clients are not affected. Behind a reverse proxy every request comes from the proxy's address, so set `MEMHIVE_TRUST_PROXY=1` to take the client address from the last `X-Forwarded-For` entry (the one your proxy appends). Set it only when the hub is reachable through that proxy alone, since otherwise clients can forge the header.
 
 ### Add members
 

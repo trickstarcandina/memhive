@@ -98,7 +98,7 @@ describe('createHubStore', () => {
   it('throws without DATABASE_URL and on unknown scheme', () => {
     expect(() => createHubStore({})).toThrow(/DATABASE_URL/);
     expect(() => createHubStore({ DATABASE_URL: 'mysql://x' })).toThrow(/postgres|sqlite/);
-    expect(hubConfigFromEnv({ PORT: '8080', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '8' })).toEqual({ port: 8080, host: '127.0.0.1', embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
+    expect(hubConfigFromEnv({ PORT: '8080', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '8' })).toEqual({ port: 8080, host: '127.0.0.1', trustProxy: false, embeddingModel: 'm', embeddingDims: 8, bodyLimit: 2 * 1024 * 1024 });
     expect(hubConfigFromEnv({ HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
   });
 });
@@ -227,19 +227,37 @@ describe('hub isolated servers', () => {
     await st.createUser('u'); const k = generateApiKey(); await st.createApiKey('u', 'l', k.hash);
     const late = generateApiKey(); await st.createApiKey('u', 'late', late.hash);
     let lookups = 0; const auth = st.authenticate.bind(st); st.authenticate = (h: string) => { lookups++; return auth(h); };
-    const h = await startHub(st, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 }, silent);
-    const me = (key: string) => fetch(`http://127.0.0.1:${h.port}/v1/me`, { headers: { authorization: `Bearer ${key}` } });
+    const h = await startHub(st, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000, trustProxy: true }, silent);
+    const me = (key: string, ip = '10.0.0.1') => fetch(`http://127.0.0.1:${h.port}/v1/me`, { headers: { authorization: `Bearer ${key}`, 'x-forwarded-for': `6.6.6.6, ${ip}` } });
     expect((await me(k.raw)).status).toBe(200);
-    const same = generateApiKey().raw; for (let i = 0; i < 5; i++) expect((await me(same)).status).toBe(401);
-    expect(lookups).toBe(2);   // a repeated bad key is answered from the negative cache
+    const same = generateApiKey().raw; for (let i = 0; i < 40; i++) expect((await me(same)).status).toBe(401);
+    expect(lookups).toBe(2);   // a repeated bad key is answered from the negative cache, and cache hits do not count as failures
     lookups = 0; const statuses: number[] = [];
     for (let i = 0; i < 40; i++) statuses.push((await me(generateApiKey().raw)).status);
-    expect(statuses.filter((x) => x === 401)).toHaveLength(25); expect(statuses.slice(25).every((x) => x === 429)).toBe(true);
-    expect(lookups).toBe(25);   // 5 failures were counted already; nothing past the limit reached the store
+    expect(statuses.filter((x) => x === 401)).toHaveLength(29); expect(statuses.slice(29).every((x) => x === 429)).toBe(true);
+    expect(lookups).toBe(29);   // 1 failure was counted already; nothing past the limit reached the store
     const t = await me(generateApiKey().raw); expect(t.status).toBe(429); expect(Number(t.headers.get('retry-after'))).toBeGreaterThan(0);
     expect((await t.json() as any).error.code).toBe('rate_limited');
-    expect((await me(k.raw)).status).toBe(200);    // a key seen before keeps working during the flood
-    expect((await me(late.raw)).status).toBe(429);  // trade-off: a key never seen waits out the window
+    expect((await me(k.raw)).status).toBe(200);    // a key seen before keeps working for the flooding client
+    expect((await me(late.raw)).status).toBe(429);  // trade-off: a key never seen from that client waits out the window
+    expect((await me(late.raw, '10.0.0.2')).status).toBe(200);   // another client is not throttled by the flood
+    expect((await fetch(`http://127.0.0.1:${h.port}/healthz`, { headers: { 'x-forwarded-for': '10.0.0.1' } })).status).toBe(200);
+    await h.close();
+  });
+  it('without MEMHIVE_TRUST_PROXY a forged X-Forwarded-For does not dodge the throttle', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null }); await st.migrate();
+    const h = await startHub(st, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 }, silent);
+    const statuses: number[] = [];
+    for (let i = 0; i < 31; i++) statuses.push((await fetch(`http://127.0.0.1:${h.port}/v1/me`, { headers: { authorization: `Bearer ${generateApiKey().raw}`, 'x-forwarded-for': `10.1.0.${i}` } })).status);
+    expect(statuses.at(-1)).toBe(429);
+    await h.close();
+  });
+  it('an unparsable request URL gets 400 and the hub stays up', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null }); await st.migrate();
+    const h = await startHub(st, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 }, silent);
+    const { request } = await import('node:http');
+    const status = await new Promise<number>((resolve, reject) => { const r = request({ host: '127.0.0.1', port: h.port, path: '//', method: 'GET' }, (res) => { res.resume(); resolve(res.statusCode!); }); r.on('error', reject); r.end(); });
+    expect(status).toBe(400);
     expect((await fetch(`http://127.0.0.1:${h.port}/healthz`)).status).toBe(200);
     await h.close();
   });
