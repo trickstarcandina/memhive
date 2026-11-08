@@ -13,7 +13,7 @@
   },
   "type": "module",
   "bin": {
-    "memhive": "./dist/memhive.cjs"
+    "memhive": "dist/memhive.cjs"
   },
   "files": [
     "dist",
