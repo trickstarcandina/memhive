@@ -108,7 +108,17 @@ describe('redactSecrets', () => {
     expect(redactSecrets('api_key: XyZ123abc')).toBe('api_key: ' + R);
     expect(redactSecrets('token: Abcdefghij\nnext: 1')).toBe('token: ' + R + '\nnext: 1');
     expect(redactSecrets('secret: Abc123;')).toBe('secret: ' + R + ';');
-    for (const c of ['token: null', 'secret: Foo | null;', 'f(token: Token)', 'token: Token,', 'token: string[]', 'token: bigint;']) expect(redactSecrets(c)).toBe(c);
+    for (const c of ['token: null', 'secret: Foo | null;', 'f(token: Token)', 'f(a, token: Token = t)', 'token: string[]', 'token: bigint;']) expect(redactSecrets(c)).toBe(c);
+  });
+  it('redacts a bare identifier or unknown generic outside parameter context (false positive beats a leak)', () => {
+    expect(redactSecrets('password: Config;')).toBe('password: ' + R + ';');
+    expect(redactSecrets('token: Token,')).toBe('token: ' + R + ',');
+    expect(redactSecrets('password: Pass<word>;')).toBe('password: ' + R + ';');
+    expect(redactSecrets('password: Pass<word, more>')).toBe('password: ' + R);
+    expect(redactSecrets('password: Pass<word, more>;')).toBe('password: ' + R + ';');
+  });
+  it('treats a well-known generic as a type whole, also at end of line', () => {
+    for (const c of ['password: Map<string, number>', 'token: Promise<Map<string, number>>', 'token: Record<string, string>\nnext']) expect(redactSecrets(c)).toBe(c);
   });
   it('accepts only balanced, digit-free generics and arrays as types', () => {
     for (const c of ['password: hunter2<3', 'password: Hunter<3', 'password: Pass<word>', 'token: abcd1[]']) expect(redactSecrets(c)).toBe(c.slice(0, c.indexOf(':') + 2) + R);

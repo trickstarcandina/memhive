@@ -38,33 +38,32 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
 ];
 // Keyword-anchored, no nested quantifiers: scanning stays linear (ReDoS). Quoted values are
-// escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token.
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|([^\s"'`,;(){}]{4,}))/gi;
+// escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token,
+// and a bounded `<...>` group (`Map<string, number>`) stays inside the token so it is judged and redacted whole.
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
-// After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env secret:
-// a primitive keyword, a digit-free array (`Foo[]`), a `|` union of those, or - in member/param
-// context (followed by `;`, `,`, `=`, `)` or `|`) - a digit-free identifier or a balanced generic
-// with a digit-free base (`Map<string, number>`). A bare word at end of line is a value.
+// After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env secret
+// (a false positive is cheaper than a leaked secret): a primitive keyword, a digit-free array (`Foo[]`),
+// a `|` union of those, a well-known generic (`Map<string, number>`), an identifier in a union (`Foo | null`),
+// or - inside a parameter list (`f(a, token: Token)`) - a digit-free identifier or generic.
 const TS_PRIMITIVE = /^(?:string|number|boolean|any|unknown|object|null|undefined|never|void|bigint|symbol)(?:\[\])*$/;
 const TS_ARRAY = /^[A-Za-z_$][A-Za-z_$.]*(?:\[\])+$/;
 const TS_IDENT = /^[A-Za-z_$][A-Za-z_$.]*$/;
 // Disjoint delimiters keep this linear; one level of nesting (`Promise<Map<a, b>>`) is enough.
-const TS_GENERIC = /^[A-Za-z_$][A-Za-z_$.]*<[^<>\n]*(?:<[^<>\n]*>[^<>\n]*)*>(?:\[\])*/;
+const TS_GENERIC = /^[A-Za-z_$][A-Za-z_$.]*<[^<>\n]*(?:<[^<>\n]*>[^<>\n]*)*>(?:\[\])*$/;
+const KNOWN_GENERIC = /^(?:Array|ReadonlyArray|Map|ReadonlyMap|Set|ReadonlySet|WeakMap|WeakSet|Record|Promise|Partial|Required|Readonly|Pick|Omit|Exclude|Extract|NonNullable|ReturnType|Awaited|Iterable|AsyncIterable)</;
 const TYPE_FOLLOW = /^[ \t]*(?:[;,|<>=)}\]]|\r?\n|$)/;
-const MEMBER_FOLLOW = /^[ \t]*[;,=)|]/;
+const PARAM_FOLLOW = /^[ \t]*[,=)]/;
+const PARAM_BEFORE = /[(,][ \t]*[\w$]*$/;
 
-function looksLikeType(bare: string, follow: string): boolean {
-  if (bare.includes('<')) {
-    // The bare token stops at ',' so `Map<string, number>` arrives split; match it against the follow text.
-    const text = bare + follow;
-    const m = TS_GENERIC.exec(text);
-    return !!m && m[0].length >= bare.length && MEMBER_FOLLOW.test(text.slice(m[0].length));
-  }
+function looksLikeType(bare: string, follow: string, before: string): boolean {
   if (!TYPE_FOLLOW.test(follow)) return false;
+  const inParams = PARAM_BEFORE.test(before) && PARAM_FOLLOW.test(follow);
+  if (bare.includes('<')) return TS_GENERIC.test(bare) && (KNOWN_GENERIC.test(bare) || inParams);
   const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_ARRAY.test(p);
   if (bare.includes('|')) return bare.split('|').every(typeLike);
-  return typeLike(bare) || (TS_IDENT.test(bare) && MEMBER_FOLLOW.test(follow));
+  return typeLike(bare) || (TS_IDENT.test(bare) && (inParams || /^[ \t]*\|/.test(follow)));
 }
 
 export function redactSecrets(text: string): string {
@@ -76,7 +75,7 @@ export function redactSecrets(text: string): string {
     if (!bare || REFERENCE.test(bare)) return m;
     if (str[offset + m.length] === '(') return m; // call, e.g. getToken()
     if (COUNT_KEY.test(str.slice(Math.max(0, offset - 12), offset) + name)) return m;
-    if (sep === ':' && looksLikeType(bare, str.slice(offset + m.length, offset + m.length + 64))) return m;
+    if (sep === ':' && looksLikeType(bare, str.slice(offset + m.length, offset + m.length + 64), str.slice(Math.max(0, offset - 64), offset))) return m;
     return `${name}${pre}<redacted>`;
   });
 }
