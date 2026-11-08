@@ -29,7 +29,7 @@ export interface Store {
   prunePrompts(keep: number, endedBefore: string): number;
   insertObservations(obs: Observation[]): void;           // ignores ids that already exist
   getObservations(ids: string[]): Observation[];           // order = input order
-  /** A near-duplicate in the same project seen since `since`: same type and every title token, or cosine >= 0.92. */
+  /** A local-origin near-duplicate in the project seen since `since`: same type and title tokens Jaccard >= 0.8, or cosine >= 0.92. */
   findDuplicate(o: Pick<Observation, 'projectId' | 'type' | 'title'>, vec: number[] | null, since: string): string | null;
   bumpSeen(id: string, at: string): void;                  // seen_count + 1, last_seen_at = at
   hasObservations(ids: string[]): Set<string>;             // the ids that exist

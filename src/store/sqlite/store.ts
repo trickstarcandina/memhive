@@ -3,12 +3,13 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import type { Observation, Project, Prompt, QuarantineRow, SearchFilters, SearchHit, Session, Store, Summary, SyncState, SyncStatePatch, SyncTable } from '../types.js';
 import { SQLITE_MIGRATIONS } from './migrations.js';
-import { toFtsQuery } from './fts-query.js';
+import { ftsTokens, toFtsQuery } from './fts-query.js';
 import { newId } from '../../shared/ids.js';
 
 type Row = Record<string, any>;
 const cosine = (a: number[], b: number[]) => { let d = 0, x = 0, y = 0; for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; x += a[i] * a[i]; y += b[i] * b[i]; } return x && y ? d / Math.sqrt(x * y) : 0; };
 const VEC_K_CAP = 2000;
+const DEDUPE_JACCARD = 0.8;
 const j = (v: unknown) => JSON.stringify(v ?? []);
 const pj = (v: unknown): string[] => { try { const a = JSON.parse(String(v)); return Array.isArray(a) ? a : []; } catch { return []; } };
 
@@ -145,16 +146,24 @@ export class SqliteStore implements Store {
     return ids.map((id) => byId.get(id)).filter((o): o is Observation => !!o);
   }
   findDuplicate(o: Pick<Observation, 'projectId' | 'type' | 'title'>, vec: number[] | null, since: string): string | null {
-    const q = toFtsQuery(o.title);
-    if (q) {
-      const r = this.db.prepare(`SELECT o.id FROM observations_fts JOIN observations o ON o.rowid = observations_fts.rowid
-        WHERE observations_fts MATCH ? AND o.project_id = ? AND o.type = ? AND COALESCE(o.last_seen_at, o.created_at) >= ? ORDER BY o.created_at DESC LIMIT 1`).get(`title : (${q})`, o.projectId, o.type, since) as Row | undefined;
-      if (r) return r.id;
+    // Only this machine's own rows are candidates: a pushed hub row whose title holds every likely token must not be able
+    // to swallow the local user's future observations.
+    const mine = `o.project_id = ? AND o.origin = 'local' AND COALESCE(o.last_seen_at, o.created_at) >= ?`;
+    const words = ftsTokens(o.title);
+    if (words.length) {
+      // Two-way match: the title token sets must overlap with Jaccard >= 0.8, so neither side can be a mere superset.
+      const cands = this.db.prepare(`SELECT o.id, o.title FROM observations_fts JOIN observations o ON o.rowid = observations_fts.rowid
+        WHERE observations_fts MATCH ? AND o.type = ? AND ${mine} ORDER BY bm25(observations_fts) LIMIT 20`).all(`title : (${toFtsQuery(o.title, ' OR ')})`, o.type, o.projectId, since) as Row[];
+      const a = new Set(words);
+      for (const c of cands) {
+        const b = ftsTokens(c.title); const inter = b.filter((t) => a.has(t)).length;
+        if (inter / (a.size + b.length - inter) >= DEDUPE_JACCARD) return c.id;
+      }
     }
     if (!vec || !this.dims || vec.length !== this.dims) return null;
-    const near = this.db.prepare('SELECT id FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = 5 ORDER BY distance').all(Buffer.from(new Float32Array(vec).buffer), o.projectId) as Row[];
+    const near = this.db.prepare('SELECT id FROM vec_observations WHERE embedding MATCH ? AND project_id = ? AND k = 20 ORDER BY distance').all(Buffer.from(new Float32Array(vec).buffer), o.projectId) as Row[];
     if (!near.length) return null;
-    const recent = new Set((this.db.prepare(`SELECT id FROM observations WHERE id IN (${near.map(() => '?').join(',')}) AND COALESCE(last_seen_at, created_at) >= ?`).all(...near.map((n) => n.id), since) as Row[]).map((r) => r.id));
+    const recent = new Set((this.db.prepare(`SELECT o.id FROM observations o WHERE o.id IN (${near.map(() => '?').join(',')}) AND ${mine}`).all(...near.map((n) => n.id), o.projectId, since) as Row[]).map((r) => r.id));
     const vecs = this.getObservationEmbeddings([...recent]);
     for (const n of near) { const v = vecs.get(n.id); if (v && cosine(vec, v) >= 0.92) return n.id; }
     return null;

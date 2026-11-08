@@ -25,8 +25,26 @@ describe('observation dedupe', () => {
     const rows = t.store.listRecentObservations(t.p.id, 10);
     expect(rows).toHaveLength(1); expect(rows[0].seenCount).toBe(2); expect(rows[0].lastSeenAt).not.toBeNull();
   });
+  it('a hub-origin row with a superset title never suppresses a local insert (text or vector)', async () => {
+    const embedder = { model: 'm', dims: 2, embed: vi.fn(async (x: string[]) => x.map(() => [1, 0])) };
+    const t = setup([reply([{ type: 'decision', title: 'Use pnpm workspaces' }])], embedder);
+    const hubSess = sess(t.p.id, { userId: 'mallory', origin: 'hub' }); t.store.upsertSession(hubSess);
+    const bait = obs({ projectId: t.p.id, sessionId: hubSess.id, userId: 'mallory', origin: 'hub', type: 'decision', title: 'Use pnpm workspaces' });
+    t.store.insertObservations([bait]); t.store.setObservationEmbedding(bait.id, [1, 0], 'm');
+    await t.run();
+    expect(t.store.countObservations(t.p.id)).toBe(2);
+    expect(t.store.getObservations([bait.id])[0].seenCount).toBe(1);
+  });
+  it('two local titles with Jaccard >= 0.8 dedupe; a superset below 0.8 does not', async () => {
+    const t = setup([reply([{ type: 'decision', title: 'Use the pnpm workspaces for monorepo builds' }]), reply([{ type: 'decision', title: 'pnpm' }])]);
+    t.store.insertObservations([obs({ projectId: t.p.id, sessionId: t.s.id, type: 'decision', title: 'Use pnpm workspaces for monorepo builds' })]);
+    await t.run();   // 6 of 7 tokens shared: 0.86
+    expect(t.store.countObservations(t.p.id)).toBe(1);
+    await t.run();   // 'pnpm' alone is inside the old title, but 1/6
+    expect(t.store.countObservations(t.p.id)).toBe(2);
+  });
   it('another type, a title with new words, or an old row is not a duplicate', async () => {
-    const t = setup([reply([{ type: 'bugfix', title: 'Use pnpm workspaces' }, { type: 'decision', title: 'Use pnpm workspaces and turbo' }])]);
+    const t = setup([reply([{ type: 'bugfix', title: 'Use pnpm workspaces' }, { type: 'decision', title: 'Use pnpm workspaces and turbo caching' }])]);
     t.store.insertObservations([obs({ projectId: t.p.id, sessionId: t.s.id, type: 'decision', title: 'Use pnpm workspaces' }), obs({ projectId: t.p.id, sessionId: t.s.id, type: 'bugfix', title: 'Use pnpm workspaces', createdAt: new Date(Date.now() - 40 * 864e5).toISOString() })]);
     await t.run();
     expect(t.store.countObservations(t.p.id)).toBe(4);
