@@ -30,23 +30,101 @@ export function stripPrivate(text: string, state: PrivateState = { depth: 0 }): 
 }
 
 export function sanitizePrompt(text: string): string {
-  return truncate(redactSecrets(stripPrivate(text)).trim(), 16000);
+  return truncate(redactCapped(stripPrivate(text)).trim(), 16000);
 }
 
+// Covered: PEM private keys (any label, PGP `KEY BLOCK` too, and base64 PEM as in Kubernetes Secrets), vendor
+// tokens (Anthropic/OpenAI `sk-`, Stripe incl. `whsec_`, Google `AIza`/`ya29.`/`GOCSPX-`, GitHub, GitLab, npm,
+// HuggingFace, AWS `AKIA`/`ASIA`, Slack tokens, `xapp-` and webhooks, SendGrid, Twilio, Discord, Telegram, Azure SAS
+// `sig=`, memhive `mh_`), JWTs, Authorization headers of any scheme, URL userinfo (password or token-only), `?key=`
+// query values, Cookie headers, CLI credentials (`curl -u`, `mysql -p`, `sshpass -p`, `docker login -p`,
+// `--password`), netrc lines, and `name = value` / `name: value` / `.env` / `x["name"] = value` assignments whose
+// name holds a secret keyword.
+// Every rule starts at a literal prefix, `\b` or a lookbehind, and no quantifier nests: scanning stays linear (ReDoS).
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+  // base64 of `-----BEGIN` (`tls.key`, `ssh-privatekey`); certificates go too, a cheap false positive.
+  /\bLS0tLS1CRUdJTi[A-Za-z0-9+/=]{26,}/g,
   /\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}/g,
-  /\b(?:ghp|gho|ghs)_[A-Za-z0-9]{20,}/g,
+  /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g,
+  /\bwhsec_[A-Za-z0-9]{16,}/g,
+  /\bAIza[\w-]{35}/g,
+  /\bya29\.[\w-]{20,}/g,
+  /\bGOCSPX-[\w-]{20,}/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /\bglpat-[\w-]{20,}/g,
+  /\bnpm_[A-Za-z0-9]{30,}/g,
+  /\bhf_[A-Za-z0-9]{30,}/g,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+  /\bx(?:ox[abprs]|app)-[A-Za-z0-9-]{10,}/g,
+  /\bSK[0-9a-f]{32}\b/g,
   /\bmh_[A-Za-z0-9_-]{20,}/g,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
+  // The lookbehinds let a run of segment characters start at most one match, so a failed scan is never repeated.
+  /(?<![\w-])eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g,
+  /(?<![\w.-])SG\.[\w-]{20,}\.[\w-]{20,}/g,
+  /(?<![\w-])[MNO][A-Za-z\d]{23,28}\.[\w-]{6}\.[\w-]{27,}/g,
+  // No `\b`: Telegram URLs glue the token to `bot`.
+  /(?<!\d)\d{8,10}:AA[\w-]{33}(?![\w-])/g,
 ];
+// One alternation, one pass over the text instead of one per rule; the leftmost match wins, as in sequential order.
+const SECRET_ANY = new RegExp(SECRET_PATTERNS.map((r) => r.source).join('|'), 'g');
+// Group 1 is kept, so the reader still sees what was there: scheme, user and host stay, only the password goes.
+// URL userinfo rules; they only run when the text holds a `://`, which skips three full passes on most text.
+const URL_PATTERNS: RegExp[] = [
+  // `host:3000/@vite/client` is a port then a path, not a password, in both rules below.
+  // The password may hold `@`: it runs lazily to the `@` whose host part ends at a URL, JSON or code delimiter. The
+  // lookbehind gives a scheme one start per run, and the atomic `(?=(?=(x))\2@)` precheck finds an `@` without
+  // backtracking. Quotes end the password, so a later JSON field is never swallowed.
+  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)(?!\d{1,5}(?:[/?#]|$))(?=(?=([^\s/@"'`]{0,256}))\2@)[^\s"'`]{1,256}?(?=@[^\s@/"'`,;)>\]}]{0,253}(?:[\s/?#"'`,;)>\]}]|$))/gi,
+  // Fail-closed fallback: no host terminator found (a long host, a `/` in the password), so redact up to the first `@`.
+  // The scan stops at the next `://`, so hostile `a://b:` runs cost a few chars per start, not the whole window.
+  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)(?!\d{1,5}(?:[/?#]|$))(?=((?:[^\s@"'`,;)>\]}:]|:(?!\/\/)){1,256}))\2(?=@)/gi,
+  // Token-only userinfo (`https://TOKEN@host`); 20+ chars keeps `git@` and `user@` out.
+  /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/)(?=([^\s:/@"'`]{20,256}))\2(?=@)/gi,
+];
+const PREFIXED_PATTERNS: RegExp[] = [
+  // Any scheme, any case; the scheme word stays. Digest carries its secret in later fields, so it goes to end of line.
+  /\b((?:proxy-)?authorization["']?[ \t]{0,64}[:=][ \t]{0,64}["']?(?:bearer|basic|token)[ \t]{1,64})[^\s"'\\]+/gi,
+  /\b((?:proxy-)?authorization["']?[ \t]{0,64}[:=][ \t]{0,64}["']?digest[ \t]{1,64})[^\r\n]+/gi,
+  /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/g,
+  /(https:\/\/hooks\.slack\.com\/services\/)[\w/-]+/g,
+  /([?&]sig=)[^&\s"'#]+/g,
+  /([?&](?:api[_-]?)?key=)[\w%.~+/=-]{20,}/gi,
+  // Needs a `name=value` pair, so `cookie: string` (a TS type) is left alone. The bounded, colon-free name keeps
+  // repeated `cookie:` linear; the value runs to end of line, so quoted and later cookies go too.
+  /\b((?:set-)?cookie[ \t]{0,5}:[ \t]{0,5})[^\s=;,"':]{1,256}=[^\r\n]*/gi,
+  // `mysql -p db` prompts, so only the glued `-pVALUE` form is a password there. The gap up to the first `-p` is a
+  // tempered scan that also stops at the next command word, so repeated command words never rescan the window.
+  /\b((?:mysql(?:dump|admin)?|mariadb)\b(?:(?!\s-p|mysql|mariadb)[^\n;&|]){0,200}\s-p)(?=[^\s-])[^\s"';&|]+/g,
+  /\b((?:sshpass|(?:docker|podman)[ \t]+login)\b(?:(?!\s-p|sshpass|docker|podman)[^\n;&|]){0,200}\s-p[ \t]*)(?=[^\s-])[^\s"';&|]+/g,
+  /(\s--password[ \t]+)(?=[^\s-])[^\s"';&|]+/g,
+  // netrc: a space-separated `password` counts only in netrc token order (`machine h login u password v`,
+  // `machine h password v`), so auth prose (`login with Google, then password reset`) stays.
+  // A token ending in `;` or `,` is prose punctuation, not a netrc value (`login flow; password field`).
+  /\b((?:machine[ \t]+[^\s;,]+[ \t]+)?(?:login|machine)[ \t]+[^\s;,]+[ \t]+password[ \t]+)\S+/g,
+  // PHP `define('DB_PASSWORD', 'v')` (wp-config.php); only names that hold a secret word.
+  /(\bdefine\([ \t]*(['"])[A-Z0-9_]{0,60}(?:PASSWORD|KEY|SALT|SECRET|TOKEN)[A-Z0-9_]{0,20}\2[ \t]*,[ \t]*['"])[^'"\n]*/g,
+];
+// `curl -u user:pw`, `-uuser:pw`, `--user=user:pw`. A numeric `uid:gid`, or a `-u` inside a `docker|podman
+// run|exec|create`, `su`, `sudo`, `git push` (upstream), `rsync` or `scp` command segment (group 1 stops at `; & |`, a newline or a nested `curl`), is a user, not
+// a credential.
+const USER_FLAG = /(\b(?:(?:docker|podman)[ \t]+(?:run|exec|create)|su|sudo|git[ \t]+push|rsync|scp)\b(?:(?!curl\b)[^\n;&|])*)|((?:^|\s)(?:-u|--user)(?:[ \t]{1,5}|=)?["']?)(?!-)([^\s"':]+:[^\s"']+)/gm;
 // Keyword-anchored, no nested quantifiers: scanning stays linear (ReDoS). Quoted values are
 // escape-aware (unclosed quote redacts to end of line); bare values run to the end of the token,
 // and a bounded `<...>` group (`Map<string, number>`) stays inside the token so it is judged and redacted whole.
-const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key)[\w.-]{0,40})(["']?\s{0,5}([:=])\s{0,5})(?:("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
+// `pass` needs a word end so `passed`/`passing` are not keys; `auth` must start a word part (not `oauth2`, `OAuth`)
+// and skips `author*`/`authority`/`authent*` but keeps `authorization`. Ambiguous names like `auth: foo` are
+// redacted: a false positive is cheaper than a leak. A closing `"]` / `']` lets `env["NAME"] = v` through, and a
+// spaced `[...]` before the separator lets an `aws configure` prompt (`Secret Access Key [None]: v`) through. Spaces
+// around the separator stay on one line, so a YAML parent key (`auth:` then a newline) never takes its child.
+// A JSON-escaped quote (`\"`, a JSON document inside a JSON string) opens a value redacted to end of line: the
+// escape depth cannot be known, so guessing where the value closes would fail open.
+const SECRET_ASSIGN = /((?:secret|token|passw(?:or)?d|pass(?:phrase)?(?![a-z])|pwd|api[_-]?key|private[_-]?key|credential|(?<![a-z])auth(?!or(?!i[sz])|ent)|access[_-]?key|signing[_-]?key|encryption[_-]?key|cookie|session[_-]?id|dsn|conn(?:ection)?[_-]?str(?:ing)?|mnemonic|seed[_-]?phrase|database[_-]?url|(?<![a-z])secret[ \t]+access[ \t]+key)[\w.-]{0,40})(\\?["']?\]?(?:[ \t]+\[[^\]\n]{0,40}\])?[ \t]{0,5}([:=])[ \t]{0,5})(?:(\\"[^\n]*)|("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|$))|('(?:[^'\\\n]|\\.)*(?:'|(?=\n)|$))|((?:<[^<>\n]{0,200}>|[^\s"'`,;(){}]){4,}))/gi;
+// An auth scheme word whose credential an earlier rule already redacted.
+const SCHEME_WORD = /^(?:bearer|basic|digest|token)$/i;
+// A TS class member or constructor parameter (`private auth: AuthService`) is a declaration, so a PascalCase value is its type.
+const TS_MODIFIER = /\b(?:private|public|protected|readonly|override|declare)[ \t]+(?:readonly[ \t]+)?[\w$]*$/;
 // Only a full reference path counts: `$VAR`, `${VAR}`, `process.env.X`, `config.token`.
 const REFERENCE = /^\$\{?[A-Z_][A-Z0-9_]*\}?$|^(?:process\.env|import\.meta\.env|os\.environ|this|config|env)(?:\.\w+|\[['"]\w+['"]\])+$/i;
 // After `name:` a bare value counts as a TS type only when it cannot plausibly be a YAML/.env/log secret
@@ -111,7 +189,7 @@ function typeArgsOk(bare: string): boolean {
 
 function looksLikeType(bare: string, follow: string, before: string): boolean {
   if (!TYPE_FOLLOW.test(follow)) return false;
-  const inParams = () => PARAM_FOLLOW.test(follow) && inParamList(before);
+  const inParams = () => (PARAM_FOLLOW.test(follow) && inParamList(before)) || TS_MODIFIER.test(before);
   if (bare.includes('<')) return TS_GENERIC.test(bare) && typeArgsOk(bare) && (KNOWN_GENERIC.test(bare) || inParams());
   const typeLike = (p: string) => TS_PRIMITIVE.test(p) || TS_ARRAY.test(p);
   if (bare.includes('|')) return bare.split('|').every(typeLike);
@@ -123,11 +201,16 @@ function looksLikeType(bare: string, follow: string, before: string): boolean {
 
 export function redactSecrets(text: string): string {
   let out = text;
-  for (const re of SECRET_PATTERNS) out = out.replace(re, '<redacted>');
-  return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
+  out = out.replace(SECRET_ANY, '<redacted>');
+  if (out.includes('://')) for (const re of URL_PATTERNS) out = out.replace(re, '$1<redacted>');
+  for (const re of PREFIXED_PATTERNS) out = out.replace(re, '$1<redacted>');
+  out = out.replace(USER_FLAG, (m, cmd: string | undefined, pre: string, value: string) => (cmd || /^\d+:\d+$/.test(value) ? m : `${pre}<redacted>`));
+  return out.replace(SECRET_ASSIGN, (m, name: string, pre: string, sep: string, edq: string | undefined, dq: string | undefined, sq: string | undefined, bare: string | undefined, offset: number, str: string) => {
+    if (edq) return `${name}${pre}\\"<redacted>`;
     const q = dq ? '"' : sq ? "'" : '';
     if (q) return `${name}${pre}${q}<redacted>${q}`;
     if (!bare || REFERENCE.test(bare)) return m;
+    if (SCHEME_WORD.test(bare) && /^[ \t]+<redacted>/.test(str.slice(offset + m.length, offset + m.length + 80))) return m;
     if (str[offset + m.length] === '(') return m; // call, e.g. getToken()
     if (COUNT_KEY.test(str.slice(Math.max(0, offset - 12), offset) + name)) return m;
     if (sep === ':' && looksLikeType(bare, str.slice(offset + m.length, offset + m.length + 64), str.slice(Math.max(0, offset - 64), offset))) return m;
@@ -159,12 +242,16 @@ function dropPartialTail(s: string): string {
   return s.slice(0, headEnd(s, stop));
 }
 
+// Hard pre-cap bounds the scan. Redact a slightly wider window first, so a secret straddling the cap
+// is matched whole, then cap and drop the cut trailing token; callers truncate last so nothing is a fragment.
+function redactCapped(s: string): string {
+  if (s.length <= PRE_CAP) return redactSecrets(s);
+  return dropPartialTail(redactSecrets(s.slice(0, headEnd(s, PRE_CAP + 1024))).slice(0, PRE_CAP));
+}
+
 function sanitizeString(s: string, max: number, state: PrivateState): string {
   const noImages = stripPrivate(s, state).replace(DATA_IMAGE, (m) => `<image elided bytes=${m.length - m.indexOf(',') - 1}>`);
-  // Hard pre-cap bounds the scan. Redact a slightly wider window first, so a secret straddling the cap
-  // is matched whole, then cap and drop the cut trailing token; truncate last so nothing is a fragment.
-  if (noImages.length <= PRE_CAP) return truncate(redactSecrets(noImages), max);
-  return truncate(dropPartialTail(redactSecrets(noImages.slice(0, headEnd(noImages, PRE_CAP + 1024))).slice(0, PRE_CAP)), max);
+  return truncate(redactCapped(noImages), max);
 }
 
 /** Pass one `state` to every part of one host payload (input and output) so a private block can span them. */

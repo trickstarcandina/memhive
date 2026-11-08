@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { stripPrivate, sanitizeToolPayload, sanitizePrompt, redactSecrets } from '../../src/hooks/sanitize.js';
 
+// A parallel test run can stall one sample; a second sample filters that out, while a quadratic rule stays far over.
+function timeMs(fn: () => void): number {
+  const once = () => { const t = performance.now(); fn(); return performance.now() - t; };
+  const first = once();
+  return first < 300 ? first : Math.min(first, once());
+}
+
 describe('stripPrivate', () => {
   it('removes closed private blocks, case-insensitive, multiline', () => {
     expect(stripPrivate('a <private>\nsecret\n</PRIVATE> b')).toBe('a  b');
@@ -84,6 +91,19 @@ describe('sanitizeToolPayload', () => {
 
 describe('sanitizePrompt', () => {
   it('strips private and trims', () => expect(sanitizePrompt('  hi <private>x</private> ')).toBe('hi'));
+  it('caps the scanned prompt before redaction, so a 2 MB prompt costs no more than 256 KB', () => {
+    const big = ('cookie:'.repeat(9) + ' ').repeat(33_000);
+    const t = performance.now();
+    const out = sanitizePrompt(big);
+    expect(performance.now() - t).toBeLessThan(300);
+    expect(out.length).toBeLessThan(16200);
+    expect(out).toContain('<elided');
+  });
+  it('leaves no fragment of a secret straddling the prompt pre-cap', () => {
+    const secret = 'sk-ant-' + 'abcdefghij'.repeat(4);
+    const out = sanitizePrompt('x '.repeat((256 * 1024 - 10) / 2) + secret + ' tail');
+    expect(out).not.toMatch(/sk-ant|abcdefgh|<reda(?!cted>)/);
+  });
 });
 
 describe('redactSecrets', () => {
@@ -96,7 +116,7 @@ describe('redactSecrets', () => {
     ['AKIAABCDEFGHIJKLMNOP', R],
     ['xoxb-1234567890-abcdef', R],
     ['mh_abcdefghijklmnopqrstuvwx', R],
-    ['Authorization: Bearer abc.def-123456', 'Authorization: ' + R],
+    ['Authorization: Bearer abc.def-123456', 'Authorization: Bearer ' + R],
     ['-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY----- after', R + ' after'],
     ['DB_PASSWORD=hunter2hunter', 'DB_PASSWORD=' + R],
     ['{"api_key": "abc"}', '{"api_key": "' + R + '"}'],
@@ -208,5 +228,254 @@ describe('redactSecrets', () => {
     const out = sanitizeToolPayload('x'.repeat(190) + ' ' + secret + ' ' + 'y'.repeat(600), 300) as string;
     expect(out).not.toMatch(/abcdefgh/);
     expect(out).toContain('<redacted');
+  });
+});
+
+// [input, secret core that must disappear, text that must survive]
+const LEAK_FIXTURES: [string, string, string[]][] = [
+  ['postgres://admin:S3cr3tPw@db.internal:5432/prod', 'S3cr3tPw', ['postgres://admin:', '@db.internal:5432/prod']],
+  ['uri mongodb+srv://user:pw0rdXyz@cluster/db end', 'pw0rdXyz', ['mongodb+srv://user:', '@cluster/db end']],
+  ['redis://:redisPw99@host:6379', 'redisPw99', ['redis://:', '@host:6379']],
+  ['amqp://u:amqpPass1@h', 'amqpPass1', ['amqp://u:', '@h']],
+  ['git clone https://user:tok12345678@github.com/x/y.git', 'tok12345678', ['git clone https://user:', '@github.com/x/y.git']],
+  ['DB_PASS=hunter2hunter2', 'hunter2hunter2', ['DB_PASS=']],
+  ['MYSQL_PWD=abc12345', 'abc12345', ['MYSQL_PWD=']],
+  ['CREDENTIALS=credVal1234', 'credVal1234', ['CREDENTIALS=']],
+  ['AUTH=authVal1234', 'authVal1234', ['AUTH=']],
+  ['ACCESS_KEY=accessVal99', 'accessVal99', ['ACCESS_KEY=']],
+  ['AWS_SESSION_TOKEN=FwoGZXIvYXdzEJr', 'FwoGZXIvYXdzEJr', ['AWS_SESSION_TOKEN=']],
+  ['MNEMONIC="abandon ability able about above absent"', 'abandon ability', ['MNEMONIC=']],
+  ['DATABASE_URL=postgres://u:pwSecret1@h/db', 'pwSecret1', ['DATABASE_URL=']],
+  ['jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop ok', 'abcdefghijklmnop', ['jwt ', ' ok']],
+  ['-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF0pgpbody\n-----END PGP PRIVATE KEY BLOCK----- after', 'lQOYBF0pgpbody', [' after']],
+  ['-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXk', []],
+  ['-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHzBJBgkqhk\n-----END ENCRYPTED PRIVATE KEY-----', 'MIIFHzBJBgkqhk', []],
+  ['stripe sk_live_' + '4eC39HqLyjWDarjt', '4eC39HqLyjWDarjt', ['stripe ']],
+  ['sk_test_' + 'abcdefghijklmnop12', 'abcdefghijklmnop12', []],
+  ['rk_live_' + 'abcdefghijklmnop34', 'abcdefghijklmnop34', []],
+  ['key AIza' + 'SyA1234567890abcdefghijklmnopqrstuv', 'SyA1234567890abcdefghij', ['key ']],
+  ['glpat-' + 'abcdefghij1234567890', 'abcdefghij1234567890', []],
+  ['npm_' + 'abcdefghijklmnopqrstuvwxyz1234', 'abcdefghijklmnopqrstuvwxyz1234', []],
+  ['hf_' + 'abcdefghijklmnopqrstuvwxyz1234', 'abcdefghijklmnopqrstuvwxyz1234', []],
+  ['ghu_' + 'abcdefghijklmnopqrstuvwx', 'abcdefghijklmnopqrstuvwx', []],
+  ['ghr_' + 'abcdefghijklmnopqrstuvwx', 'abcdefghijklmnopqrstuvwx', []],
+  ['ASIA' + 'ABCDEFGHIJKLMNOP', 'ABCDEFGHIJKLMNOP', []],
+  ['hook https://hooks.slack.com/services/T0000/B0000/XXXXXXXXXXXXXXXX', 'XXXXXXXXXXXXXXXX', ['hook ']],
+  ['SG.' + 'abcdefghijklmnopqrst' + '.' + 'uvwxyzABCDEFGHIJKLMN', 'abcdefghijklmnopqrst', []],
+  ['SK' + '0123456789abcdef0123456789abcdef', '0123456789abcdef', []],
+  ['sk-proj-' + 'abcdefghijklmnopqrstuvwx', 'abcdefghijklmnopqrstuvwx', []],
+  ['Authorization: Basic dXNlcjpwYXNz', 'dXNlcjpwYXNz', ['Authorization: ']],
+  ['Cookie: session=abc123def456; other=1', 'abc123def456', ['Cookie: ']],
+  ['Set-Cookie: sid=sidValue1234; Path=/', 'sidValue1234', ['Set-Cookie: ']],
+  ['X-Api-Key: xapikey12345', 'xapikey12345', ['X-Api-Key: ']],
+  ['curl -u admin:curlPw99 https://api.example.com/x', 'curlPw99', ['curl -u ', ' https://api.example.com/x']],
+  ['curl -H "Authorization: Basic dXNlcjpwYXNz" https://x', 'dXNlcjpwYXNz', ['curl -H "Authorization: ', '" https://x']],
+  ['passphrase: correcthorse1', 'correcthorse1', ['passphrase: ']],
+  ['client_secret=clientSec123', 'clientSec123', ['client_secret=']],
+  ['session_id: sess1234abcd', 'sess1234abcd', ['session_id: ']],
+  ['dsn = "https://k@sentry.io/1"', 'k@sentry', ['dsn = "']],
+  ['connection_string: Server=x;Pwd=y1234', 'Server=x', ['connection_string: ']],
+  ['signing_key=signKey1234', 'signKey1234', ['signing_key=']],
+  ['encryption-key: encKey12345', 'encKey12345', ['encryption-key: ']],
+  ['authToken: authTok123456', 'authTok123456', ['authToken: ']],
+  ['cookie: sid="abc123quoted"; x=1', 'abc123quoted', ['cookie: ']],
+  ['Cookie: a=1; session="q u o t e d value"', 'q u o t e d', ['Cookie: ']],
+  ['postgres://admin:pa/ss1234@db.internal/prod', 'pa/ss1234', ['postgres://admin:', '@db.internal/prod']],
+  ['postgres://admin:p@ss1234@db.internal/prod', 'p@ss1234', ['postgres://admin:', '@db.internal/prod']],
+  ['https://u:pw12345678@host/p?e=a@b.com', 'pw12345678', ['https://u:', '@host/p?e=a@b.com']],
+  ['curl -uadmin:attachedPw1 https://x', 'attachedPw1', ['curl -u', ' https://x']],
+  ['-u admin:startPw99 https://x', 'startPw99', [' https://x']],
+  ['curl --user=admin:userEqPw1 https://x', 'userEqPw1', ['curl --user=']],
+  ['curl -u 1000:numericPw2 https://x', 'numericPw2', ['curl -u ']],
+  ['Authorization:\tBasic dXNlcjpwYXNz', 'dXNlcjpwYXNz', ['Authorization:']],
+  ['password=\\"unterminatedA\\', 'unterminatedA', ['password=']],
+  ['password=\\"unterminatedB\\\nnext: 1', 'unterminatedB', ['password=', '\nnext: 1']],
+  ['password=\\"a\\\\\\"leakedtail\\"', 'leakedtail', ['password=']],
+  ['{"value": "MNEMONIC=\\"abandon ability\\""}', 'abandon', ['{"value": "MNEMONIC=\\"']],
+  ['{\\"user\\": \\"app\\", \\"password\\": \\"hunter2xyz\\"}', 'hunter2xyz', ['\\"user\\": \\"app\\"']],
+];
+
+describe('redactSecrets coverage (H1)', () => {
+  it.each(LEAK_FIXTURES)('redacts %s', (input, core, keep) => {
+    const out = redactSecrets(input);
+    expect(out).not.toContain(core);
+    expect(out).toContain('<redacted>');
+    for (const k of keep) expect(out).toContain(k);
+    expect(redactSecrets(out)).toBe(out);
+  });
+  it('keeps scheme, user and host of a connection string', () => {
+    expect(redactSecrets('postgres://admin:S3cr3tPw@db.internal:5432/prod')).toBe('postgres://admin:<redacted>@db.internal:5432/prod');
+  });
+  it('redacts a .env file read through a tool payload', () => {
+    const out = JSON.stringify(sanitizeToolPayload({ content: 'DB_PASS=hunter2hunter2\nDATABASE_URL=postgres://u:pw@h/db' }));
+    expect(out).not.toMatch(/hunter2|:pw@/);
+  });
+  it('leaves prose and non-secret look-alikes alone', () => {
+    for (const c of [
+      'the password field is required', 'password hunter2', 'Basic authentication is supported', 'author: Jane Doe',
+      'authority: high', 'authentication: required', 'passed: 3, passing tests', 'https://example.com:8080/path',
+      'ssh://git@github.com:22/x', 'docker run -u 1000:1000 img', 'docker run --rm -u www-data:www-data img', 'podman run -u app:app img', 'curl --user-agent foo https://x', 'cookie: string;', 'sessionId: string', 'API_URL=https://api.example.com',
+      'eyJ is the start of a JWT', 'Ask the SK team', 'the AIza prefix',
+    ]) expect(redactSecrets(c)).toBe(c);
+  });
+  it('is idempotent on every fixture', () => {
+    for (const [i] of LEAK_FIXTURES) expect(redactSecrets(redactSecrets(i))).toBe(redactSecrets(i));
+  });
+  it('stays linear on 256 KB inputs aimed at the new rules', () => {
+    for (const unit of ['eyJ', 'eyJa-', 'eyJaaaaaaaa.', '://a:b@', 'x://a:', 'Basic ', 'Authorization: Basic ', 'SG.a-', 'cookie: a', 'token=\\"a', 'token=\\"\\\\', 'cookie:', 'cookie:a', 'a://b:', 'x://a:@h', 'x://a:p@', ' -u a:', '-ua', ' docker -u a:b', ' ', 'Authorization: ', 'Authorization:      ', ' -u a', 'a.', 'pass', 'auth: ']) {
+      const s = unit.repeat(Math.ceil(256 * 1024 / unit.length));
+      const t = performance.now();
+      redactSecrets(s);
+      expect(performance.now() - t, unit).toBeLessThan(200);
+    }
+  });
+  it('runs under 300 ms on 2 MB adversarial inputs', () => {
+    const N = 2 * 1024 * 1024;
+    const fill = (u: string) => u.repeat(Math.ceil(N / u.length)).slice(0, N);
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    const words = ['alpha', 'beta', 'token', 'password', 'gamma', 'secret', 'map', 'key', 'url', 'auth'];
+    let random = '';
+    while (random.length < N) random += words[Math.floor(rnd() * words.length)] + ' ';
+    const inputs: [string, string][] = [
+      ['random words', random],
+      ['secret: Map<', fill('secret: Map<')],
+      ['password: <<<', 'password: ' + '<'.repeat(N)],
+      ['token=', fill('token=')],
+      ['eyJ', fill('eyJ')],
+      ['://a:b@', fill('://a:b@')],
+      ['Basic ', fill('Basic ')],
+      ['cookie:', fill('cookie:')],
+      ['password=\\"', fill('password=\\"')],
+      ['password=\\"a\\', fill('password=\\"a\\')],
+      ['spaces', ' '.repeat(N)],
+      ['a://b:', fill('a://b:')],
+      [' -u a:', fill(' -u a:')],
+      [' -u a:b', fill(' -u a:b')],
+      [' docker -u a:b', fill(' docker -u a:b')],
+      ['NFD Vietnamese', fill('Tiếng Việt có dấu mật khẩu '.normalize('NFD'))],
+      ['no whitespace', 'a'.repeat(N)],
+    ];
+    for (const [name, s] of inputs) expect(timeMs(() => redactSecrets(s)), name).toBeLessThan(300);
+  });
+});
+
+const P = 'Zx9Yw8Vu7Ts6Rq5P';
+// Review round 1 (M1-M8, m1-m4): each row reproduces a leak the reviewer found.
+const REVIEW_FIXTURES: [string, string, string[]][] = [
+  // M1: the docker/su exemption must not cover the rest of the line.
+  [`# see docker docs; curl -u admin:${P} https://api.x.com`, P, ['# see docker docs; curl -u ', ' https://api.x.com']],
+  [`cd /srv/docker && curl --user admin:${P} https://x`, P, ['cd /srv/docker && curl --user ']],
+  [`su - deploy && curl -u admin:${P} https://x`, P, ['su - deploy && curl -u ']],
+  [`docker exec web curl -u admin:${P} http://x`, P, ['docker exec web curl -u ']],
+  // M2: minified JSON, adjacent fields, long `/` passwords, no host terminator.
+  [`{"db":"postgres://u:${P}@db.internal","note":"${'x'.repeat(300)}"}`, P, ['postgres://u:', '@db.internal","note":"']],
+  [`{"db":"postgres://u:${P}@db.internal","list":[${Array(150).fill(1).join(',')}]}`, P, ['@db.internal","list":[1,1']],
+  [`["postgres://u:${P}@h","a@b"]`, P, ['postgres://u:', '@h","a@b"]']],
+  ['connect to mysql://root:Q1w2/E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7@db.internal:3306/app now', 'E3r4T5y6U7i8O9p0', ['mysql://root:', '@db.internal:3306/app now']],
+  [`postgres://u:${P}@${'h'.repeat(300)}`, P, ['postgres://u:']],
+  ['git clone https://oauth2:Tq9Wx8Ve7Ur6Ys5@gitlab.com/x/y.git', 'Tq9Wx8Ve7Ur6Ys5', ['https://oauth2:', '@gitlab.com/x/y.git']],
+  // M3 + m1: any scheme, any case, wide whitespace; the scheme word stays.
+  [`curl -H "authorization: bearer ${P}"`, P, ['authorization: bearer ', '"']],
+  [`curl -H "Authorization: token ${P}" https://api.github.com`, P, ['Authorization: token ', '" https://api.github.com']],
+  ['Authorization: Digest username="u", response="6629fae49393a05397450978507c4ef1"', '6629fae49393a053', ['Authorization: Digest ']],
+  ['Authorization:        Basic dXNlcjpQcTlXeDhWZTc=', 'dXNlcjpQcTlXeDhWZTc', ['Basic ']],
+  ['Authorization      : Basic dXNlcjpQcTlXeDhWZTc=', 'dXNlcjpQcTlXeDhWZTc', ['Basic ']],
+  ['Authorization:\t\t\t\t\t\tBasic dXNlcjpQcTlXeDhWZTc=', 'dXNlcjpQcTlXeDhWZTc', ['Basic ']],
+  [`Proxy-Authorization: Bearer ${P}`, P, ['Proxy-Authorization: Bearer ']],
+  // M4: bracket-indexed assignments.
+  ['os.environ["OPENAI_API_KEY"] = "Tq9Wx8Ve7Ur6Ys5"', 'Tq9Wx8Ve7Ur6Ys5', ['os.environ["OPENAI_API_KEY"] = "']],
+  ["os.environ['MY_TOKEN']='Tq9Wx8Ve7Ur6Ys5'", 'Tq9Wx8Ve7Ur6Ys5', ["os.environ['MY_TOKEN']='"]],
+  [`ENV['DB_PASSWORD'] = '${P}'`, P, ["ENV['DB_PASSWORD'] = '"]],
+  [`process.env["API_TOKEN"] = "${P}"`, P, ['process.env["API_TOKEN"] = "']],
+  [`settings['password'] = '${P}'`, P, ["settings['password'] = '"]],
+  // M5: CLI password flags.
+  [`mysql -u root -p${P} db`, P, ['mysql -u root -p', ' db']],
+  [`mysqldump -uroot -p${P} db`, P, ['mysqldump -uroot -p']],
+  [`sshpass -p ${P} ssh host`, P, ['sshpass -p ', ' ssh host']],
+  [`docker login -u me -p ${P}`, P, ['docker login -u me -p ']],
+  [`tool --password ${P} --verbose`, P, ['tool --password ', ' --verbose']],
+  // M6: base64 PEM in a Kubernetes Secret.
+  ['data:\n  username: YWRtaW4=\n  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Fo', 'TFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Fo', ['username: YWRtaW4=', 'tls.key: ']],
+  // M7: more vendor shapes.
+  ['use xapp-1-A0123456789-1234567890123-abcdef0123456789abcdef here', 'abcdef0123456789abcdef', ['use ', ' here']],
+  [`client.login("MTE5ODc2NTQzMjEwOTg3NjU0Mw.GaBcDe.${P}oNmLkJiHgFeDcBa12345")`, P, ['client.login("', '")']],
+  ['bot = Bot("123456789:AAEhBP0av18cwWZwCMwnEAAPMs1y_9xyzAB")', 'AAEhBP0av18cwWZwCMwnEAAPMs1y', ['bot = Bot("', '")']],
+  ['https://api.telegram.org/bot123456789:AAEhBP0av18cwWZwCMwnEAAPMs1y_9xyzAB/sendMessage', 'AAEhBP0av18cwWZwCMwnEAAPMs1y', ['https://api.telegram.org/bot', '/sendMessage']],
+  ['https://acct.blob.core.windows.net/c/f?sv=2020-08-04&ss=b&sig=Tq9Wx8Ve7Ur6Ys5Ab%2Bcd%3D&se=2027', 'Tq9Wx8Ve7Ur6Ys5Ab', ['https://acct.blob.core.windows.net/c/f?sv=2020-08-04&ss=b&sig=', '&se=2027']],
+  [`tok ya29.a0AfH6SMB${P}oNmLkJiHgFeDcBa`, P, ['tok ']],
+  [`client_sec=GOCSPX-${P}oNmLk`, P, []],
+  [`STRIPE_WEBHOOK=whsec_${P}oNmLkJ`, P, ['STRIPE_WEBHOOK=']],
+  ['https://maps.x.com/api?key=Tq9Wx8Ve7Ur6Ys5Ab12345&z=1', 'Tq9Wx8Ve7Ur6Ys5Ab', ['https://maps.x.com/api?key=', '&z=1']],
+  ['git clone https://Tq9Wx8Ve7Ur6Ys5Ab12345@github.com/x/y.git', 'Tq9Wx8Ve7Ur6Ys5Ab', ['git clone https://', '@github.com/x/y.git']],
+  // M8: netrc shape only.
+  ['machine github.com login thang password Tq9Wx8Ve7Ur6Ys5', 'Tq9Wx8Ve7Ur6Ys5', ['machine github.com login thang password ']],
+];
+
+describe('redactSecrets review round 1', () => {
+  it.each(REVIEW_FIXTURES)('redacts %s', (input, core, keep) => {
+    const out = redactSecrets(input);
+    expect(out).not.toContain(core);
+    expect(out).toContain('<redacted>');
+    for (const k of keep) expect(out).toContain(k);
+    expect(redactSecrets(out)).toBe(out);
+  });
+  it('keeps the scheme word of an Authorization header', () => {
+    expect(redactSecrets(`Authorization: Bearer ${P}`)).toBe('Authorization: Bearer <redacted>');
+    expect(redactSecrets(`authorization: bearer ${P}`)).toBe('authorization: bearer <redacted>');
+  });
+  it('leaves user:group flags, port and dir flags, prompts and TS injection alone', () => {
+    for (const c of [
+      'docker run -u 1000:1000 img', 'docker run --rm -u www-data:www-data img', 'podman run -u app:app img', 'sudo -u 1000:1000 id',
+      'mysql -u root -p mydb', 'mkdir -p /tmp/x', 'docker run -p 8080:80 img', 'ssh -p 2222 host', 'docker login --password-stdin',
+      '  private auth: AuthService;\n  readonly authGuard: AuthGuard;',
+      'constructor(private auth: AuthService, private readonly tokenService: TokenService) {}',
+      'auth:\n  enabled: true', 'OAuth: on', 'Enter your password below', 'https://example.com/?key=short',
+      'git clone https://github.com/x/y.git', 'ssh://git@github.com/x', 'LS0tLS1CRUdJTi',
+    ]) expect(redactSecrets(c)).toBe(c);
+  });
+  it('stays under 300 ms on 2 MB inputs aimed at the round-1 rules', () => {
+    const N = 2 * 1024 * 1024;
+    for (const unit of ['mysql ', 'mysql -p', 'sshpass ', 'docker login ', 'docker run ', 'login password ', 'login ', 'machine ',
+      'authorization: ', 'authorization: bearer ', 'Authorization:' + ' '.repeat(70), 'a://bbbbbbbbbbbbbbbbbbbbbbbb', 'a://b:c@x',
+      'a://b:', 'a://b:c/', '?key=', '&sig=', '1234567890:', 'M' + 'a'.repeat(30), 'LS0tLS1CRUdJTi', 'x["token"]', 'private auth: A, ',
+      ' -u 1:1', 'docker run -u a:b ', 'su -u a:b; ', '--password ']) {
+      const s = unit.repeat(Math.ceil(N / unit.length)).slice(0, N);
+      expect(timeMs(() => redactSecrets(s)), unit).toBeLessThan(300);
+    }
+  });
+});
+
+describe('redactSecrets review round 2', () => {
+  it.each([
+    [`sudo curl -u admin:${P} x`, P, ['sudo curl -u ']],
+    [`x && curl -u admin:${P} x`, P, ['x && curl -u ']],
+    [`git push -u origin:main && curl -u admin:${P} x`, P, ['git push -u origin:main && curl -u ']],
+    [`machine h password ${P}`, P, ['machine h password ']],
+    [`define('DB_PASSWORD', '${P}');`, P, ["define('DB_PASSWORD', '", "');"]],
+    [`define("AUTH_KEY", "${P}")`, P, ['define("AUTH_KEY", "', '")']],
+    ['AWS Secret Access Key [None]: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', 'wJalrXUtnFEMI', ['AWS Secret Access Key [None]: ']],
+    [`postgres://u:${P}@h`, P, ['postgres://u:', '@h']],
+  ] as [string, string, string[]][])('redacts %s', (input, core, keep) => {
+    const out = redactSecrets(input);
+    expect(out).not.toContain(core);
+    for (const k of keep) expect(out).toContain(k);
+    expect(redactSecrets(out)).toBe(out);
+  });
+  it('leaves ports, user:group flags and auth prose alone', () => {
+    for (const c of [
+      'http://localhost:3000/@vite/client', 'GET http://localhost:5173/@fs/home/x/src/main.ts 200', 'https://registry.npmjs.org:443/@types/node',
+      'http://127.0.0.1:8787/api/users/@me', 'https://example.com:8080/path?email=a@b.c', 'postgres://localhost:5432/db?user=a@b',
+      'git push -u origin:main', 'rsync -u src:dst/ ./', 'sudo -u postgres:postgres psql', 'scp -u a:b x',
+      'login with Google, then password reset email', 'Use login flow; password field must be 8 chars',
+      'login page redirects; password strength meter added', 'tokens[i] = next;', "define('WP_DEBUG', true);",
+    ]) expect(redactSecrets(c)).toBe(c);
+  });
+  it('stays under 300 ms on 2 MB inputs aimed at the round-2 rules', () => {
+    const N = 2 * 1024 * 1024;
+    for (const unit of ['http://a:1/@', 'a://b:12', 'define("KEY", ', "define('A_KEY'", 'login a password ', 'machine a login b ', 'secret access key [x]: ', 'sudo ', 'git push ']) {
+      const s = unit.repeat(Math.ceil(N / unit.length)).slice(0, N);
+      expect(timeMs(() => redactSecrets(s)), unit).toBeLessThan(300);
+    }
   });
 });
