@@ -5,6 +5,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { SqliteStore } from '../../src/store/sqlite/store.js';
 import { Observer } from '../../src/observer/observer.js';
+import { ProviderError } from '../../src/providers/types.js';
 import { createDaemonContext } from '../../src/daemon/server.js';
 import { handleRoute } from '../../src/daemon/routes.js';
 import { obs, sess } from './store-contract.js';
@@ -103,6 +104,16 @@ describe('embeddings: backfill', () => {
     await o.backfill({ batch: 10, minIntervalMs: 0 });
     expect(embed.mock.calls.length).toBe(calls);   // failed alone 3 times: skipped from now on
     expect(await o.embedMissing(10)).toBe(0);
+    s.close();
+  });
+  it('an embedder outage (transport error) books no failures and stops at the first batch', async () => {
+    const s = new SqliteStore(':memory:', { dims: 2, model: 'm' }); s.migrate(); seed(s, 40);
+    let up = false;
+    const embed = vi.fn(async (t: string[]) => { if (!up) throw new ProviderError('connect ECONNREFUSED', 'transport'); return t.map(() => [1, 0]); });
+    const o = new Observer({ store: s, provider: { complete: async () => '' }, embedder: { model: 'm', dims: 2, embed }, logger: silent });
+    for (let i = 0; i < 4; i++) await o.backfill({ batch: 64, minIntervalMs: 0 });
+    expect(embed).toHaveBeenCalledTimes(4);   // one call per run, no row-by-row retries
+    up = true; expect(await o.embedMissing(100)).toBe(40);   // nobody was skipped
     s.close();
   });
   it('/v1/embed with rebuild drops vectors and embeds everything again', async () => {

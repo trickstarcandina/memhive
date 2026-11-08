@@ -2,6 +2,7 @@ import type { CliIo } from '../index.js';
 import { resolvePaths } from '../../shared/paths.js';
 import { loadCredentials, normalizeHubUrl } from '../../sync/credentials.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
+import { daemonUnavailableMessage } from '../daemon-unavailable.js';
 import { DaemonClient, DaemonError } from '../../daemon/client.js';
 import { SYNC_IN_BACKGROUND, SYNC_WAIT_MS, isTimeout } from './sync.js';
 
@@ -14,7 +15,7 @@ export async function linkCommand(args: string[], io: CliIo, opts: { home?: stri
     if (!loadCredentials(home).hubs[hubUrl]) { io.stderr(`not logged in to ${hubUrl}; run: memhive login ${hubUrl}\n`); return 1; }
   }
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
-  if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
+  if (!info) { io.stderr(daemonUnavailableMessage(home)); return 1; }
   const daemon = new DaemonClient(info);
   try {
     const r = await daemon.request<{ project: { key: string; hubUrl: string | null } }>('POST', '/v1/projects/link', { cwd, hubUrl });

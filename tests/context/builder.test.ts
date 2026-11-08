@@ -117,4 +117,10 @@ describe('buildContext', () => {
     expect(c).toMatch(/older pinned observation\(s\) did not fit/);
     expect(estimateTokens(c)).toBeLessThanOrEqual(400);
   });
+  it('relative file paths count as under cwd only when the row was recorded from inside it', () => {
+    const mk = (sessionCwd: string | null) => ({ ...obs({ projectId: 'p', sessionId: 's', filesModified: ['src/a.ts'], createdAt: at(1) }), branch: null, sessionCwd });
+    const sc = (o: any) => contextScore(o, { cwd: '/repo/web' }, now.getTime());
+    expect(sc(mk('/repo/web'))).toBeGreaterThan(sc(mk('/repo/api')) * 1.29);
+    expect(sc(mk(null))).toBe(sc(mk('/repo/api')));
+  });
 });

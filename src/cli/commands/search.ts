@@ -2,6 +2,7 @@ import type { CliIo } from '../index.js';
 import { parseArgs } from '../args.js';
 import { resolvePaths } from '../../shared/paths.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
+import { daemonUnavailableMessage } from '../daemon-unavailable.js';
 import { DaemonClient, DaemonError } from '../../daemon/client.js';
 import { formatIndex } from '../../mcp/format.js';
 import type { Observation, SearchResult } from '../../store/types.js';
@@ -14,7 +15,7 @@ export async function searchCommand(args: string[], io: CliIo, opts: { home?: st
   const limit = flags.limit === undefined ? 20 : typeof flags.limit === 'string' ? Number(flags.limit) : NaN;   // bare --limit is true, and Number(true) is 1
   if (!Number.isInteger(limit) || limit < 1) { io.stderr('memhive search: --limit must be a positive integer\nusage: memhive search <query> [--type t] [--user u] [--since 7d] [--limit n]\n'); return 2; }
   const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
-  if (!info) { io.stderr('memhive: daemon unavailable\n'); return 1; }
+  if (!info) { io.stderr(daemonUnavailableMessage(home)); return 1; }
   const client = new DaemonClient(info);
   let key: string;
   try { key = (await client.request<{ project: { key: string } }>('GET', `/v1/project?cwd=${encodeURIComponent(cwd)}`)).project.key; }

@@ -197,6 +197,7 @@ export class Observer {
     const { embedder, store, logger } = this.deps;
     if (!embedder || rows.length === 0) return { done: 0, failed: 0 };
     let done = 0; let failed = 0;
+    let down = false;   // transport, auth or quota: the embedder is down, not the rows, so nothing is booked against them
     const one = async (batch: Observation[]): Promise<boolean> => {
       try {
         const vecs = await embedder.embed(batch.map(embeddingText));
@@ -204,16 +205,20 @@ export class Observer {
         for (const o of batch) this.embedFailures.delete(o.id);
         done += batch.length; return true;
       } catch (e) {
-        if (batch.length === 1) { failed++; this.embedFailures.set(batch[0].id, (this.embedFailures.get(batch[0].id) ?? 0) + 1); }
+        if (e instanceof ProviderError && ['transport', 'auth', 'quota'].includes(e.kind)) down = true;
         logger.warn('embedding failed, left for backfill', { error: String(e), rows: batch.length });
         return false;
       }
     };
-    for (let i = 0; i < rows.length; i += 16) {
+    const bump = (id: string) => { failed++; this.embedFailures.set(id, (this.embedFailures.get(id) ?? 0) + 1); };
+    for (let i = 0; i < rows.length && !down; i += 16) {
       const batch = rows.slice(i, i + 16);
+      if (await one(batch) || down) continue;
       // Retry a failed batch row by row, so only the rows that fail on their own count towards being skipped.
-      if (!(await one(batch)) && batch.length > 1) for (const o of batch) await one([o]);
+      if (batch.length === 1) bump(batch[0].id);
+      else for (const o of batch) { if (await one([o])) continue; if (down) break; bump(o.id); }
     }
+    if (down) failed++;   // makes the backfill stop until the next trigger
     return { done, failed };
   }
 

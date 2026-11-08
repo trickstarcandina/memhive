@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { writeFileAtomic } from '../shared/atomic.js';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -38,8 +38,9 @@ export function uninstallClaudeCode(run: RunFn = defaultRun): string[] {
 }
 
 /** The host's own config: keep a one-time backup of the user's original, then replace it atomically with its mode kept. */
-function writeCodexConfig(cfg: string, content: string): void {
+function writeCodexConfig(link: string, content: string): void {
   let mode: number | undefined;
+  const cfg = existsSync(link) ? realpathSync(link) : link;   // a dotfile-managed symlink stays a symlink: write its target
   if (existsSync(cfg)) {
     mode = statSync(cfg).mode & 0o777;
     if (!existsSync(`${cfg}.memhive-bak`)) copyFileSync(cfg, `${cfg}.memhive-bak`);

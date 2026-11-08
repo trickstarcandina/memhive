@@ -5,6 +5,7 @@ import { resolvePaths } from '../../shared/paths.js';
 import { isOurDaemon, readDaemonInfo } from '../../daemon/info.js';
 import { DaemonClient } from '../../daemon/client.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
+import { daemonUnavailableMessage } from '../daemon-unavailable.js';
 import { createDaemonContext, startDaemon, DaemonAlreadyRunning } from '../../daemon/server.js';
 import { DatabaseNewerThanBinary } from '../../store/sqlite/store.js';
 
@@ -27,7 +28,7 @@ export async function daemonCommand(args: string[], io: CliIo, opts: { home?: st
   }
   if (sub === 'start') {
     const info = await ensureDaemon(home, { wait: true, waitMs: 5000 });
-    if (!info) { io.stderr('memhive: daemon failed to start (see logs/daemon.log)\n'); return 1; }
+    if (!info) { io.stderr(daemonUnavailableMessage(home)); return 1; }
     io.stdout(`memhive daemon running on port ${info.port} (pid ${info.pid})\n`); return 0;
   }
   const info = readDaemonInfo(home);

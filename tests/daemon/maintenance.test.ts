@@ -65,3 +65,12 @@ it('a fresh daemon with default settings never deletes rows', async () => {
   expect(ctx.store.countObservations(p.id)).toBe(3);
   ctx.store.close();
 });
+
+it('retention deletes at most maxChunks x 500 rows per call', () => {
+  const store = new SqliteStore(':memory:', { dims: null }); store.migrate();
+  const p = store.getOrCreateProject('k', 'n'); const a = sess(p.id); store.upsertSession(a);
+  store.insertObservations(Array.from({ length: 1200 }, () => obs({ projectId: p.id, sessionId: a.id, createdAt: new Date(Date.now() - 400 * DAY).toISOString() })));
+  const cut = { discovery: new Date(Date.now() - 365 * DAY).toISOString() };
+  expect(store.deleteExpired(cut, 1)).toBe(500); expect(store.deleteExpired(cut)).toBe(700);
+  store.close();
+});

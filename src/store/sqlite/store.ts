@@ -213,21 +213,23 @@ export class SqliteStore implements Store {
     return (this.db.prepare('SELECT * FROM observations WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as Row[]).map(rowToObservation);
   }
   listContextObservations(projectId: string, limit: number): ContextObservation[] {
-    const sel = 'SELECT o.*, s.branch AS branch FROM observations o LEFT JOIN sessions s ON s.id = o.session_id WHERE o.project_id = ?';
+    const sel = 'SELECT o.*, s.branch AS branch, s.cwd AS session_cwd FROM observations o LEFT JOIN sessions s ON s.id = o.session_id WHERE o.project_id = ?';
     const rows = this.db.prepare(`${sel} ORDER BY o.created_at DESC, o.rowid DESC LIMIT ?`).all(projectId, limit) as Row[];
     const seen = new Set(rows.map((r) => r.id));
     for (const r of this.db.prepare(`${sel} AND o.pinned = 1 LIMIT 200`).all(projectId) as Row[]) if (!seen.has(r.id)) rows.push(r);
-    return rows.map((r) => ({ ...rowToObservation(r), branch: r.branch ?? null }));
+    return rows.map((r) => ({ ...rowToObservation(r), branch: r.branch ?? null, sessionCwd: r.session_cwd || null }));
   }
   setPinned(id: string, pinned: boolean): boolean { return this.db.prepare('UPDATE observations SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id).changes > 0; }
-  deleteExpired(cutoffs: Partial<Record<ObservationType, string>>): number {
+  deleteExpired(cutoffs: Partial<Record<ObservationType, string>>, maxChunks = 10): number {
     const pick = this.db.prepare(`SELECT o.id FROM observations o JOIN projects p ON p.id = o.project_id
       WHERE o.type = ? AND o.pinned = 0 AND COALESCE(o.last_seen_at, o.created_at) < ? AND (o.synced_at IS NOT NULL OR p.hub_url IS NULL) LIMIT 500`);
     const del = this.db.prepare('DELETE FROM observations WHERE id = ?');
     const delVec = this.dims ? this.db.prepare('DELETE FROM vec_observations WHERE id = ?') : null;
     let n = 0;
     for (const [type, before] of Object.entries(cutoffs)) {
-      for (;;) {   // chunks of 500, one transaction each, so a large first run does not hold the write lock for long
+      // Chunks of 500, one transaction each, at most maxChunks per call: a large backlog is spread over several ticks
+      // instead of blocking the daemon at start.
+      for (; maxChunks > 0; maxChunks--) {
         const ids = (pick.all(type, before) as Row[]).map((r) => r.id as string);
         if (!ids.length) break;
         this.db.transaction(() => { for (const id of ids) { delVec?.run(id); del.run(id); } })();
@@ -277,7 +279,7 @@ export class SqliteStore implements Store {
   listMissingEmbedding(limit: number, model?: string, exclude: Iterable<string> = []): Observation[] {
     const ex = [...exclude].slice(0, 1000);   // shortcut: only rows that failed 3 times land here; past 1000 the rest are simply retried
     const not = ex.length ? ` AND id NOT IN (${ex.map(() => '?').join(',')})` : '';
-    // Two indexed queries instead of one `IS NOT ?` scan: NULL first (partial index), then rows of another model.
+    // Two indexed queries instead of one `IS NOT ?` scan: NULL rows first, then rows of another model (both use observations_missing_embedding).
     const rows = this.db.prepare(`SELECT * FROM observations WHERE embedding_model IS NULL${not} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(...ex, limit) as Row[];
     if (model !== undefined && rows.length < limit) rows.push(...this.db.prepare(`SELECT * FROM observations WHERE (embedding_model < ? OR embedding_model > ?)${not} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(model, model, ...ex, limit - rows.length) as Row[]);
     return rows.map(rowToObservation);

@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { Observation, ObservationType, Summary } from '../store/types.js';
 import { shortId } from '../shared/ids.js';
 
-type Row = Observation & { branch?: string | null; pinned?: boolean };
+type Row = Observation & { branch?: string | null; sessionCwd?: string | null; pinned?: boolean };
 export interface ContextInput {
   projectName: string; observationCount: number; sessionCount: number; lastActivity: string | null; summaries: Summary[]; observations: Row[]; budgetTokens: number; now?: Date;
   /** Ranking hints: the local user, the session's working directory and git branch. */
@@ -18,9 +18,10 @@ export function contextScore(o: Row, input: Pick<ContextInput, 'me' | 'cwd' | 'b
   const age = Math.max(0, (now - Date.parse(o.createdAt)) / 864e5) || 0;
   const own = o.origin === 'local' || (input.me !== undefined && o.userId === input.me);
   const cwd = input.cwd ? path.resolve(input.cwd) + path.sep : null;
-  // Absolute paths must lie under cwd; relative ones are taken as relative to it (what the agent usually prints).
+  // Relative paths resolve against the cwd of the row's own session, so a row from another subdirectory gets no boost.
   // Only local rows: a pulled row's file list is whatever its pusher chose, so it must not buy a place in context.
-  const underCwd = !!cwd && o.origin === 'local' && [...o.filesModified, ...o.filesRead].some((f) => (path.isAbsolute(f) ? path.resolve(f).startsWith(cwd) : !f.startsWith('..')));
+  const abs = (f: string) => (path.isAbsolute(f) ? path.resolve(f) : o.sessionCwd ? path.resolve(o.sessionCwd, f) : null);
+  const underCwd = !!cwd && o.origin === 'local' && [...o.filesModified, ...o.filesRead].some((f) => abs(f)?.startsWith(cwd) === true);
   return Math.exp(-age / HALF_LIFE_DAYS) * (TYPE_WEIGHT[o.type] ?? 1) * (own ? 1.5 : 1) * (underCwd ? 1.3 : 1) * (o.pinned ? 3 : 1)
     * (1 + 0.1 * Math.min(Math.max((o.seenCount ?? 1) - 1, 0), 5)) * (input.branch && o.branch === input.branch ? 1.2 : 1);
 }

@@ -9,6 +9,7 @@ import { SqliteStore, DatabaseNewerThanBinary } from '../../src/store/sqlite/sto
 import { VERSION } from '../../src/shared/version.js';
 import { daemonCommand } from '../../src/cli/commands/daemon.js';
 import { doctorCommand } from '../../src/cli/commands/doctor.js';
+import { daemonUnavailableMessage } from '../../src/cli/daemon-unavailable.js';
 import { createDaemonContext, startDaemon } from '../../src/daemon/server.js';
 
 describe('ensureDaemon', () => {
@@ -84,6 +85,8 @@ describe('daemon version', () => {
     await doctorCommand([], { stdout: (x) => out.push(x), stderr: () => {} }, { home, env, ping: false, cwd: home });
     expect(out.join('')).toMatch(/FAIL database: .*schema version 999/);
     expect(readFileSync(path.join(home, 'logs', 'daemon.log'), 'utf8')).toContain('cannot open the database');
+    expect(daemonUnavailableMessage(home)).toMatch(/schema version 999/);   // what search, embed, link, sync, daemon start print
+    expect(daemonUnavailableMessage(mkdtempSync(path.join(tmpdir(), 'mh-')))).toContain('daemon unavailable');
   });
 });
 

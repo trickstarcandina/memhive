@@ -3,7 +3,7 @@ export interface Project { id: string; key: string; name: string; hubUrl: string
 export interface Session { id: string; projectId: string; userId: string; host: string; hostSessionId: string; cwd: string; startedAt: string; endedAt: string | null; syncedAt: string | null; origin?: 'local' | 'hub'; branch?: string | null }   // origin defaults to 'local'; pulled sessions are 'hub'; branch is local only
 export interface Prompt { id: string; sessionId: string; text: string; createdAt: string }
 export interface Observation { id: string; projectId: string; sessionId: string; userId: string; type: ObservationType; title: string; subtitle: string; facts: string[]; narrative: string; concepts: string[]; filesRead: string[]; filesModified: string[]; createdAt: string; embeddingModel: string | null; origin: 'local' | 'hub'; syncedAt: string | null; seenCount?: number; lastSeenAt?: string | null; pinned?: boolean }   // seen*, pinned: local only
-export type ContextObservation = Observation & { branch: string | null };
+export type ContextObservation = Observation & { branch: string | null; sessionCwd: string | null };
 export interface Summary { id: string; projectId: string; sessionId: string; userId: string; request: string; learned: string; completed: string; nextSteps: string; createdAt: string; origin: 'local' | 'hub'; syncedAt: string | null }
 export interface SearchFilters { projectId: string; type?: ObservationType; userId?: string; since?: string; limit: number }
 export interface SearchHit { id: string; score: number }
@@ -40,7 +40,7 @@ export interface Store {
    * Deletes unpinned rows of each type last seen before its cutoff, only where nothing is lost for the team: rows
    * already synced, or rows of projects with no hub. Returns the count.
    */
-  deleteExpired(cutoffs: Partial<Record<ObservationType, string>>): number;
+  deleteExpired(cutoffs: Partial<Record<ObservationType, string>>, maxChunks?: number): number;   // at most maxChunks x 500 rows per call
   hasObservations(ids: string[]): Set<string>;             // the ids that exist
   hasSummaries(ids: string[]): Set<string>;
   transaction<T>(fn: () => T): T;                          // nests (savepoint); a throw rolls back only its own level

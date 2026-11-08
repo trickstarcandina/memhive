@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, symlinkSync, existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { detectHosts, installClaudeCode, installCodex, uninstallCodex, type RunFn } from '../../src/install/hosts.js';
@@ -59,4 +59,12 @@ it('installCodex keeps a backup of config.toml, replaces it atomically and keeps
   uninstallCodex(home, ok);
   expect(readFileSync(`${cfg}.memhive-bak`, 'utf8')).toBe('model = "x"\n');   // the first backup is never overwritten
   expect(readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+});
+it('installCodex keeps a symlinked config.toml a symlink and edits its target', () => {
+  const home = mkdtempSync(path.join(tmpdir(), 'cx-')); const dots = mkdtempSync(path.join(tmpdir(), 'cx-dots-'));
+  const target = path.join(dots, 'config.toml'); writeFileSync(target, 'model = "x"\n');
+  symlinkSync(target, path.join(home, 'config.toml'));
+  expect(installCodex('/m', home, ok).ok).toBe(true);
+  expect(lstatSync(path.join(home, 'config.toml')).isSymbolicLink()).toBe(true);
+  expect(readFileSync(target, 'utf8')).toContain('hooks = true');
 });
