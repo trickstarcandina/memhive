@@ -4,7 +4,7 @@ import { HubConfigInfoSchema, MeResultSchema, PullResultSchema, PushResultSchema
 // Hub-supplied text reaches the terminal (`memhive sync`) and the logs: no control characters (terminal escapes), bounded length.
 export const safeHubText = (v: unknown): string => String(v).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, 300);
 
-export class HubError extends Error { constructor(message: string, public readonly status: number, public readonly code: string) { super(message); this.name = 'HubError'; } }
+export class HubError extends Error { constructor(message: string, public readonly status: number, public readonly code: string, public readonly retryAfterMs?: number) { super(message); this.name = 'HubError'; } }
 
 // Older hubs omit version, protocol and body_limit; the engine treats a missing protocol as "older hub", not as an error.
 export const ClientHubConfigSchema = HubConfigInfoSchema.partial({ version: true, protocol: true, body_limit: true });
@@ -23,7 +23,10 @@ export class HubClient {
       const res = await this.fetchImpl(this.hubUrl + path, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.key}` }, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl.signal });
       const text = await res.text(); let json: any; let parsed = true;
       try { json = text ? JSON.parse(text) : {}; } catch { json = {}; parsed = false; }
-      if (!res.ok) throw new HubError(json?.error?.message != null ? safeHubText(json.error.message) : `hub ${res.status}`, res.status, json?.error?.code != null ? safeHubText(json.error.code).slice(0, 64) : 'http_error');
+      if (!res.ok) {
+        const ra = Number(res.headers.get('retry-after'));   // seconds form only; the engine caps it
+        throw new HubError(json?.error?.message != null ? safeHubText(json.error.message) : `hub ${res.status}`, res.status, json?.error?.code != null ? safeHubText(json.error.code).slice(0, 64) : 'http_error', Number.isFinite(ra) && ra > 0 ? ra * 1000 : undefined);
+      }
       // A 2xx that is not the hub's JSON (captive portal, HTML error page, a proxy) must not be read as an empty page.
       const r = parsed ? schema.safeParse(json) : null;
       if (!r?.success) throw new HubError(`hub sent an unexpected response for ${path.split('?')[0]}`, res.status, 'bad_response');

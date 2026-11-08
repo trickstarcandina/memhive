@@ -6,6 +6,9 @@ export interface Observation { id: string; projectId: string; sessionId: string;
 export interface Summary { id: string; projectId: string; sessionId: string; userId: string; request: string; learned: string; completed: string; nextSteps: string; createdAt: string; origin: 'local' | 'hub'; syncedAt: string | null }
 export interface SearchFilters { projectId: string; type?: ObservationType; userId?: string; since?: string; limit: number }
 export interface SearchHit { id: string; score: number }
+/** Per-project sync bookkeeping; times are epoch ms. */
+export interface SyncState { projectId: string; pullCursor: number; hubEpoch: string | null; backoffUntil: number | null; backoffMs: number | null; strikes: number; lastError: string | null; lastPushAt: number | null; lastPullAt: number | null }
+export type SyncStatePatch = Partial<Pick<SyncState, 'backoffUntil' | 'backoffMs' | 'strikes' | 'lastError' | 'lastPushAt' | 'lastPullAt'>>;
 export interface Store {
   migrate(): void;
   close(): void;
@@ -39,7 +42,10 @@ export interface Store {
   setPullCursor(projectId: string, cursor: number): void;
   getHubEpoch(projectId: string): string | null;   // last hub epoch seen in a pull; null = none yet
   setHubEpoch(projectId: string, epoch: string): void;
-  resetProjectSync(projectId: string): void;   // relink: local-origin rows are unsynced again (pulled rows stay), pull restarts from 0, epoch forgotten
+  getSyncState(projectId: string): SyncState;   // defaults when the project has no row yet
+  updateSyncState(projectId: string, patch: SyncStatePatch): void;
+  listSyncStates(): SyncState[];
+  resetProjectSync(projectId: string): void;   // relink: local-origin rows are unsynced again (pulled rows stay), pull restarts from 0, epoch and backoff forgotten
   countObservations(projectId: string): number;
   countSessions(projectId: string): number;
   lastActivity(projectId: string): string | null;         // max(observations.created_at)

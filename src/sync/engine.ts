@@ -40,7 +40,20 @@ export class SyncEngine implements SyncHooks {
   private timers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
   private hubCfg = new Map<string, { cfg: HubConfigInfo; at: number }>();
-  private backoff = new Map<string, { until: number; delayMs: number; strikes: number }>();   // project id -> next push allowed after 5xx/429/404/bare 4xx
+  // Project id -> next push allowed after 5xx/429/404/bare 4xx/network failure. Kept in sync_state so a restart honors it.
+  private backoff = {
+    get: (id: string): { until: number; delayMs: number; strikes: number } | undefined => {
+      const s = this.deps.store.getSyncState(id);
+      return s.backoffUntil === null && s.backoffMs === null && s.strikes === 0 ? undefined : { until: s.backoffUntil ?? 0, delayMs: s.backoffMs ?? BACKOFF_START_MS, strikes: s.strikes };
+    },
+    set: (id: string, b: { until: number; delayMs: number; strikes: number }) => this.deps.store.updateSyncState(id, { backoffUntil: b.until, backoffMs: b.delayMs, strikes: b.strikes }),
+    delete: (id: string) => { if (this.backoff.get(id)) this.deps.store.updateSyncState(id, { backoffUntil: null, backoffMs: null, strikes: 0 }); },
+  };
+  private ladder(prev: { delayMs: number } | undefined, e: unknown): number {
+    const next = (prev?.delayMs ?? BACKOFF_START_MS / 2) * 2;
+    // A hub's retry-after (auth throttle, 429) is honored, within the ladder's cap.
+    return Math.min(Math.max(next, e instanceof HubError ? e.retryAfterMs ?? 0 : 0), BACKOFF_MAX_MS);
+  }
   private badPulled = new Set<string>();
   constructor(private deps: { store: Store; home: string; logger: Logger; fetchImpl?: typeof fetch; embedDims: number | null; embedModel?: string | null }, opts: { debounceMs?: number } = {}) { this.debounceMs = opts.debounceMs ?? 5000; }
 
@@ -55,9 +68,14 @@ export class SyncEngine implements SyncHooks {
     if (project.hubUrl && c.hubs[project.hubUrl]) { c.hubs[project.hubUrl].authFailed = true; saveCredentials(this.deps.home, c); }
     this.deps.logger.error('hub rejected API key; run `memhive login` again', { hub: project.hubUrl });
   }
-  private lastError = new Map<string, string>();   // project id -> last failure, shown by `memhive sync`
+  private lastError = new Map<string, string>();   // project id -> last failure in this process, returned by syncNow
+  /** Records a failure for `memhive sync` and sync_state.last_error (redacted, no control chars, bounded). */
+  private noteError(projectId: string, msg: string): void {
+    const clean = redactSecrets(msg).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, 500);
+    this.lastError.set(projectId, clean); this.deps.store.updateSyncState(projectId, { lastError: clean });
+  }
   private failed(project: Project, what: string, e: unknown): void {
-    this.lastError.set(project.id, `${what}: ${e instanceof Error ? e.message : String(e)}`);
+    this.noteError(project.id, `${what}: ${e instanceof Error ? e.message : String(e)}`);
     if (e instanceof HubError && e.status === 401) this.markAuthFailed(project);
     else this.deps.logger.warn(`${what} failed, will retry on next trigger`, { hub: project.hubUrl, error: e instanceof Error ? e.message : String(e) });
   }
@@ -77,7 +95,7 @@ export class SyncEngine implements SyncHooks {
     const p = (await this.hubConfig(client, project.hubUrl!))?.protocol;
     if (p === undefined || p <= HUB_PROTOCOL) return null;
     const msg = `hub_protocol: the hub speaks sync protocol ${p}, this memhive speaks ${HUB_PROTOCOL}; upgrade memhive`;
-    this.lastError.set(project.id, msg);
+    this.noteError(project.id, msg);
     this.deps.logger.warn('sync refused: hub protocol is newer than this client', { hub: project.hubUrl, protocol: p });
     return msg;
   }
@@ -158,7 +176,6 @@ export class SyncEngine implements SyncHooks {
           // Policy: 408/429/5xx back off with rows kept, forever. 404 and a bare 4xx (no hub error body: proxy, WAF, wrong path, old hub)
           // also back off, but after MAX_STRIKES in a row a bare 4xx goes row by row and gives up the one row still refused (warn log),
           // while a 404 keeps its rows unsynced, logs an error and waits at the longest backoff.
-          // shortcut: backoff is per daemon process and resets on restart, persist it if hubs stay down for hours
           const prev = this.backoff.get(project.id);
           const status = e instanceof HubError ? e.status : 0;
           const bounded = !transient(e);
@@ -167,9 +184,9 @@ export class SyncEngine implements SyncHooks {
             if (taken > 1) { cap = 1; isolating = true; this.backoff.set(project.id, { until: 0, delayMs: prev?.delayMs ?? BACKOFF_START_MS, strikes }); continue; }
             this.backoff.delete(project.id); result = this.giveUp(project, body, e as HubError);
           } else {
-            const delayMs = status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
+            const delayMs = status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : this.ladder(prev, e);
             this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes });
-            this.lastError.set(project.id, `push: ${e instanceof Error ? e.message : String(e)}`);
+            this.noteError(project.id, `push: ${e instanceof Error ? e.message : String(e)}`);
             if (status === 404 && strikes === MAX_STRIKES) logger.error('push blocked: hub keeps answering 404 (wrong hub URL or old hub?); rows stay queued', { hub: project.hubUrl });
             else logger.warn('push failed, backing off', { hub: project.hubUrl, status, retryInMs: delayMs, error: e instanceof Error ? e.message : String(e) });
             return round === 0 ? null : total;
@@ -178,6 +195,7 @@ export class SyncEngine implements SyncHooks {
       }
       // While isolating, a passing row keeps the strike count so the refused row is given up when it comes up.
       if (!isolating) this.backoff.delete(project.id);
+      store.updateSyncState(project.id, { lastPushAt: Date.now() });
       // Rejected rows are marked synced too (retrying the same invalid row would loop forever), except size refusals on clipped fields.
       const now = new Date().toISOString();
       const kept = new Set(result.rejected.filter((r) => r.reason === 'invalid_row' && r.field && CLIPPED.has(r.field)).map((r) => r.id));
@@ -196,7 +214,7 @@ export class SyncEngine implements SyncHooks {
   }
 
   /** Projects whose push has failed MAX_STRIKES times in a row with a 404 or a bare 4xx (shown by doctor). */
-  blockedProjects(): string[] { return [...this.backoff].filter(([, b]) => b.strikes >= MAX_STRIKES).map(([id]) => id); }
+  blockedProjects(): string[] { return this.deps.store.listSyncStates().filter((s) => s.strikes >= MAX_STRIKES).map((s) => s.projectId); }
 
   /** The hub itself refused the body (a 4xx with a hub error body, other than 401/404, or one row over the size limit): every row in it is reported rejected so it is marked synced, not resent forever. */
   private giveUp(project: Project, body: PushBody, e: HubError): PushResult {
@@ -231,7 +249,7 @@ export class SyncEngine implements SyncHooks {
       try { page = await client.pull(project.key, since, 500, Math.max(500, deadline - Date.now())); }
       catch (e) {
         this.failed(project, 'pull', e);
-        if (transient(e)) { const prev = this.backoff.get(project.id); const delayMs = Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS); this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes: prev?.strikes ?? 0 }); }
+        if (transient(e)) { const prev = this.backoff.get(project.id); const delayMs = this.ladder(prev, e); this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes: prev?.strikes ?? 0 }); }
         break;
       }
       // A cursor past the hub's last seq, or a new hub epoch (project id), means the hub lost its data (restored or recreated):
@@ -280,6 +298,7 @@ export class SyncEngine implements SyncHooks {
       const known = new Set(store.listRecentSummaries(project.id, 10_000).map((x) => x.id));
       for (const s of summaries) if (!known.has(s.id) && store.getSession(s.sessionId) && apply(s.id, () => store.insertSummaries([{ ...s, projectId: project.id, origin: 'hub', syncedAt: now }]))) applied++;
       if (page.next_seq > since) { since = page.next_seq; store.setPullCursor(project.id, since); }
+      store.updateSyncState(project.id, { lastPullAt: Date.now() });
       if (!page.has_more || Date.now() > deadline) break;
     }
     return applied;

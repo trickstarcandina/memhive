@@ -41,4 +41,13 @@ export const SQLITE_MIGRATIONS: string[] = [
   `
   ALTER TABLE sync_state ADD COLUMN hub_epoch TEXT;
   `,
+  // 4: push/pull backoff and last outcome survive a daemon restart (epoch ms; backoff_ms is the current step of the ladder).
+  `
+  ALTER TABLE sync_state ADD COLUMN backoff_until INTEGER;
+  ALTER TABLE sync_state ADD COLUMN backoff_ms INTEGER;
+  ALTER TABLE sync_state ADD COLUMN strikes INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sync_state ADD COLUMN last_error TEXT;
+  ALTER TABLE sync_state ADD COLUMN last_push_at INTEGER;
+  ALTER TABLE sync_state ADD COLUMN last_pull_at INTEGER;
+  `,
 ];

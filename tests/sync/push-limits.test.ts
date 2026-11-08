@@ -209,6 +209,38 @@ describe('push failure handling', () => {
   });
 });
 
+describe('persisted backoff', () => {
+  it('a restarted engine (same store) makes no request until backoff_until', async () => {
+    const t = await setup({ dims: null, fetchImpl: (inner) => async (url, init) => String(url).endsWith('/v1/sync/push') ? new Response(JSON.stringify({ error: { code: 'down', message: 'secret ghp_' + 'Q'.repeat(30) + ' \u001b[2J' } }), { status: 503, headers: { 'retry-after': '120' } }) : inner(url, init) });
+    addObs(t, 1, null);
+    const t0 = Date.now();
+    expect(await t.engine.push(t.project)).toBeNull();
+    expect(t.pushes()).toBe(1);
+    const st = t.store.getSyncState(t.project.id);
+    expect(st.backoffUntil).toBeGreaterThanOrEqual(t0 + 120_000);   // retry-after beats the 30 s first step
+    expect(st.lastError).toContain('<redacted>'); expect(st.lastError).not.toContain('\u001b'); expect(st.lastError!.length).toBeLessThanOrEqual(500);
+    // new engine instance on the same store: still backing off
+    const again = new SyncEngine({ store: t.store, home: (t.engine as any).deps.home, logger: silent, embedDims: null, fetchImpl: (t.engine as any).deps.fetchImpl });
+    closers.push(() => again.close());
+    expect(await again.push(t.project)).toBeNull();
+    expect(t.pushes()).toBe(1);
+    vi.spyOn(Date, 'now').mockReturnValue(st.backoffUntil! + 1);
+    expect(await again.push(t.project)).toBeNull();
+    expect(t.pushes()).toBe(2);
+  });
+  it('success clears backoff and records last push and pull times', async () => {
+    const t = await setup({ dims: null });
+    t.store.updateSyncState(t.project.id, { backoffUntil: 1, backoffMs: 60_000, strikes: 2 });
+    addObs(t, 1, null);
+    await t.engine.syncNow(t.project);
+    const st = t.store.getSyncState(t.project.id);
+    expect(st).toMatchObject({ backoffUntil: null, backoffMs: null, strikes: 0 });
+    expect(st.lastPushAt).toBeGreaterThan(0); expect(st.lastPullAt).toBeGreaterThan(0);
+    t.store.resetProjectSync(t.project.id);
+    expect(t.store.getSyncState(t.project.id)).toMatchObject({ pullCursor: 0, hubEpoch: null, strikes: 0 });
+  });
+});
+
 describe('pull robustness', () => {
   it('a cursor past the hub max_seq (hub reset) restarts the pull and re-queues local rows for push', async () => {
     const t = await setup({ dims: null });
