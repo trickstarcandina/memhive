@@ -82,6 +82,7 @@ After upgrading, re-run `memhive install`.
 - Dedupe compares only against local rows, so a pushed row cannot suppress the user's own observations.
 - A hub request URL that cannot be parsed gets 400 instead of crashing the hub.
 - A 413 reply is no longer lost on macOS and Windows: the server reads and drops the rest of the upload (up to 16 MB more) before it answers, so the client reads the 413 and halves its batch.
+- Documented the Windows and Node 22 install workaround (`--ignore-scripts`), and CI installs that way.
 - Exclude globs and project keys work with Windows paths, and a directory outside any repo gets the same key through a symlink (macOS `/var`) as through its real path.
 
 ### Security

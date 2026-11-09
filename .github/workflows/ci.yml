@@ -34,10 +34,12 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      # --ignore-scripts: better-sqlite3 ships prebuilt binaries, but npm 10 (Node 22) still runs node-gyp for it, which
+      # fails on Windows runners without a toolchain it knows. esbuild's script only validates its binary.
       # On failure, put the tail of npm's own log in the annotations (job logs need admin rights to download).
       - name: npm ci
         run: |
-          npm ci || {
+          npm ci --ignore-scripts || {
             f=$(grep -l 'argv "ci"' $(ls -t "$(npm config get cache)"/_logs/*.log) | head -1)
             echo "::error::npm ci failed: $(grep -v ' silly \| http fetch ' "$f" | tail -n 40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
             exit 1
@@ -56,7 +58,7 @@ jobs:
         run: |
           npm pack
           node scripts/check-pack.mjs memhive-*.tgz
-          npm install -g --prefix "$RUNNER_TEMP/p" ./memhive-*.tgz
+          npm install -g --ignore-scripts --prefix "$RUNNER_TEMP/p" ./memhive-*.tgz
           if [ "$RUNNER_OS" = Windows ]; then bin="$RUNNER_TEMP/p/memhive.cmd"; else bin="$RUNNER_TEMP/p/bin/memhive"; fi
           # A throwaway home: the smoke run must never see the runner's real config.
           export MEMHIVE_HOME="$RUNNER_TEMP/h" HOME="$RUNNER_TEMP/h"

@@ -358,6 +358,7 @@ Your data stays in `~/.memhive`: the memory database (`memhive.db`), logs, `sett
 
 ## Troubleshooting
 
+- `npm install -g memhive` fails with `node-gyp` / "Could not find any Visual Studio" errors (Windows, Node 22, npm 10): the SQLite binding ships prebuilt, but npm 10 tries to compile it anyway. Install with `npm install -g memhive --ignore-scripts`.
 - Run `memhive doctor` first. It checks settings, credentials, plugin paths, the daemon and sync; see [Doctor](#doctor).
 - Logs are in `~/.memhive/logs/` (`hook.log`, `daemon.log`, and others). Set `MEMHIVE_DEBUG=1` for more detail.
 - If session context is missing, check that `memhive daemon status` reports the daemon running. Hooks start it automatically on the next session.
