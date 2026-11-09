@@ -80,7 +80,7 @@ describe('projectKeyFor', () => {
     const r = projectKeyFor(path.join(dir, 'sub', 'deep'));
     expect(r.key).toBe('github.com/a/mono/svc');
     expect(r.branch).toBeNull(); // no commit yet: HEAD does not resolve, the top level still does
-    expect(realpathSync(r.top)).toBe(realpathSync(dir));
+    expect(realpathSync.native(r.top)).toBe(realpathSync.native(dir));
   });
 });
 

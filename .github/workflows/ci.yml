@@ -34,7 +34,14 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      # On failure, put the tail of npm's own log in the annotations (job logs need admin rights to download).
+      - name: npm ci
+        run: |
+          npm ci || {
+            f=$(ls -t "$(npm config get cache)"/_logs/*.log | head -1)
+            echo "::error::npm ci failed: $(tail -n 30 "$f" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+            exit 1
+          }
       - run: npm run lint
         if: matrix.os == 'ubuntu-latest'
       - run: npm run typecheck
