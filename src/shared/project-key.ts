@@ -56,7 +56,7 @@ export function projectKeyFor(cwd: string, deps: ProjectKeyDeps = defaultDeps): 
   // and its target give one key.
   const real = (p: string) => {
     try {
-      return realpathSync(p);
+      return realpathSync.native(p); // native: expands Windows 8.3 names (RUNNER~1) like git does
     } catch {
       return path.resolve(p);
     }

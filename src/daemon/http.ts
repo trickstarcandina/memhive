@@ -7,17 +7,23 @@ export type Handler = (
   headers: IncomingMessage['headers']
 ) => Promise<{ status: number; body: unknown }>;
 
+// Past the limit the upload is still read (and dropped) up to this much more, so the 413 goes out after the client has
+// finished sending: macOS and Windows reset a connection that is answered mid-upload, and the client never sees the 413.
+const DRAIN_EXTRA = 16 * 1024 * 1024;
+
 export function readBody(req: IncomingMessage, limit = 2 * 1024 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let over = false;
     req.on('data', (c: Buffer) => {
       size += c.length;
       if (size > limit) {
-        if (size - c.length <= limit) reject(new Error('body too large'));
+        over = true;
+        if (size > limit + DRAIN_EXTRA) reject(new Error('body too large'));
       } else chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => (over ? reject(new Error('body too large')) : resolve(Buffer.concat(chunks).toString('utf8'))));
     req.on('error', reject);
   });
 }
