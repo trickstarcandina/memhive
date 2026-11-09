@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -50,6 +50,16 @@ describe('projectKeyFor', () => {
     });
     expect(projectKeyFor('/r', deps({ disabled: true })).disabled).toBe(true);
   });
+  it('a symlinked directory outside any repo gives the same key as its target', () => {
+    const real = mkdtempSync(path.join(tmpdir(), 'mh-pk-'));
+    const link = `${real}-link`;
+    try {
+      symlinkSync(real, link, 'dir');
+    } catch {
+      return; // no symlink right (Windows without developer mode)
+    }
+    expect(projectKeyFor(link).key).toBe(projectKeyFor(real).key);
+  });
   it('.memhive.json cannot point the repo at another project key', () => {
     const r = projectKeyFor('/r', {
       gitRemote: () => 'git@github.com:evil/repo.git',
@@ -78,6 +88,8 @@ describe('opt-out helpers', () => {
   it('glob: * stays in a segment, ** crosses them, the rest is literal', () => {
     expect(globMatch('github.com/acme/*', 'github.com/acme/app')).toBe(true);
     expect(globMatch('github.com/acme/*', 'github.com/acme/app/x')).toBe(false);
+    // Windows paths against a pattern written with `/`
+    expect(globMatch('C:\\Users\\me/**', 'C:\\Users\\me\\a\\b')).toBe(true);
     expect(globMatch('github.com/**', 'github.com/acme/app/x')).toBe(true);
     expect(globMatch('a.b', 'aXb')).toBe(false);
     expect(globMatch('exact/key', 'exact/key')).toBe(true);

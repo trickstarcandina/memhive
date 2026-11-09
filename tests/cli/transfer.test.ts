@@ -3,6 +3,7 @@ import {
   chmodSync,
   lstatSync,
   mkdirSync,
+  realpathSync,
   readdirSync,
   mkdtempSync,
   readFileSync,
@@ -101,7 +102,8 @@ describe('backup', () => {
     let r = io();
     expect(await backupCommand(['snap.db'], r.io, { home: a.home, cwd: dir })).toBe(0);
     const file = path.join(dir, 'snap.db');
-    expect(r.out()).toContain(`backup written to ${file}`);
+    // the daemon reports the real path (macOS: /private/var/...)
+    expect(r.out()).toContain(`backup written to ${path.join(realpathSync(dir), 'snap.db')}`);
     expectMode(file, 0o600);
     const db = new Database(file, { readonly: true });
     expect((db.prepare('SELECT COUNT(*) c FROM observations').get() as { c: number }).c).toBe(2);

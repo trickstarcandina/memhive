@@ -81,6 +81,8 @@ After upgrading, re-run `memhive install`.
 - Facts and subtitles such as `---` can no longer render as Markdown thematic breaks.
 - Dedupe compares only against local rows, so a pushed row cannot suppress the user's own observations.
 - A hub request URL that cannot be parsed gets 400 instead of crashing the hub.
+- A 413 reply is no longer lost on macOS and Windows: the server keeps discarding the upload for up to 2 s before it closes the socket, so the client reads the 413 and halves its batch.
+- Exclude globs and project keys work with Windows paths, and a directory outside any repo gets the same key through a symlink (macOS `/var`) as through its real path.
 
 ### Security
 

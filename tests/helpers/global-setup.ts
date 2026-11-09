@@ -1,5 +1,5 @@
-import { chmodSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -22,7 +22,10 @@ export default function setup(): () => Promise<void> {
   // Project keys come from `git -C <cwd>`: stop git at the run dir and ignore the machine's git config, so a temp dir
   // inside some repo, or a global safe.directory, cannot change the keys tests see. Fixture repos inside still work.
   process.env.GIT_CEILING_DIRECTORIES = dir;
-  process.env.GIT_CONFIG_GLOBAL = devNull;
+  // An empty file, not the null device: git for Windows does not accept `\\.\nul` and then fails every command.
+  const emptyConfig = join(dir, 'empty.gitconfig');
+  writeFileSync(emptyConfig, '');
+  process.env.GIT_CONFIG_GLOBAL = emptyConfig;
   process.env.GIT_CONFIG_NOSYSTEM = '1';
   return async () => {
     for (const [k, v] of Object.entries(saved)) {

@@ -68,7 +68,13 @@ export function createJsonServer(
         : { 'content-type': 'application/json' }
     );
     res.end(JSON.stringify(payload ?? {}), () => {
-      if (status === 413) req.destroy();
+      if (status !== 413) return;
+      // Destroying the socket while the client is still uploading makes macOS and Windows reset the connection before
+      // the client reads the 413, so it never learns to send less. The data listener keeps discarding the rest of the
+      // body; cut the connection after a short grace period instead.
+      const t = setTimeout(() => req.destroy(), 2000);
+      t.unref();
+      req.once('close', () => clearTimeout(t));
     });
   });
 }

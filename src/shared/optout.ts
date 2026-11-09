@@ -10,8 +10,11 @@ export const envDisabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
   TRUTHY.includes((env.MEMHIVE_DISABLED ?? '').trim().toLowerCase());
 
 /** `*` matches inside one `/` segment, `**` across segments; everything else is literal. */
-export function globMatch(pattern: string, s: string): boolean {
+export function globMatch(pattern: string, subject: string): boolean {
+  // Windows paths use `\`; patterns are written with `/`, so compare both with `/`.
+  const s = subject.replace(/\\/g, '/');
   const re = pattern
+    .replace(/\\/g, '/')
     .split(/(\*\*|\*)/)
     .map((p) => (p === '**' ? '.*' : p === '*' ? '[^/]*' : p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')))
     .join('');

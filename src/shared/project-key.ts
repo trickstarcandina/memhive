@@ -52,21 +52,23 @@ const defaultDeps: ProjectKeyDeps = {
 };
 
 export function projectKeyFor(cwd: string, deps: ProjectKeyDeps = defaultDeps): ProjectInfo {
-  const remote = deps.gitRemote(cwd);
-  const remoteKey = remote ? normalizeRemote(remote) : null;
-  const { top: gitTop, branch } = deps.gitRevParse(cwd);
-  const top = gitTop ?? cwd;
-  const natural = remoteKey ?? `path:${createHash('sha256').update(path.resolve(top)).digest('hex').slice(0, 16)}`;
-  // Nearest `.memhive.json` from cwd up to the repo root, so each monorepo package can carry its own.
-  const read = deps.readRepoConfig ?? readRepoConfig;
-  let repo: RepoConfig = {};
+  // git prints the real path; without a repo, hash the real path too so a symlinked cwd (macOS /var -> /private/var)
+  // and its target give one key.
   const real = (p: string) => {
     try {
       return realpathSync(p);
     } catch {
       return path.resolve(p);
     }
-  }; // git prints the real path
+  };
+  const remote = deps.gitRemote(cwd);
+  const remoteKey = remote ? normalizeRemote(remote) : null;
+  const { top: gitTop, branch } = deps.gitRevParse(cwd);
+  const top = gitTop ?? cwd;
+  const natural = remoteKey ?? `path:${createHash('sha256').update(real(top)).digest('hex').slice(0, 16)}`;
+  // Nearest `.memhive.json` from cwd up to the repo root, so each monorepo package can carry its own.
+  const read = deps.readRepoConfig ?? readRepoConfig;
+  let repo: RepoConfig = {};
   for (let d = real(cwd), stop = real(top); ; d = path.dirname(d)) {
     repo = read(d);
     if (repo.disabled || repo.project || d === stop || d === path.dirname(d) || !d.startsWith(stop)) break;
