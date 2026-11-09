@@ -38,8 +38,8 @@ jobs:
       - name: npm ci
         run: |
           npm ci || {
-            f=$(ls -t "$(npm config get cache)"/_logs/*.log | head -1)
-            echo "::error::npm ci failed: $(tail -n 30 "$f" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+            f=$(grep -l 'argv "ci"' $(ls -t "$(npm config get cache)"/_logs/*.log) | head -1)
+            echo "::error::npm ci failed: $(grep -v ' silly \| http fetch ' "$f" | tail -n 40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
             exit 1
           }
       - run: npm run lint
