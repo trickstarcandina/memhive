@@ -75,6 +75,14 @@ memhive doctor
 memhive search "auth middleware"
 ```
 
+### Agent skill
+
+The `mem-search` skill is also listed on [skills.sh](https://skills.sh). It teaches an agent to search memhive's memory, so memhive must be installed first.
+
+```sh
+npx skills add trickstarcandina/memhive --skill mem-search
+```
+
 ### First session checklist
 
 1. Work through one session in a git repo and end it normally. The observer writes observations while you work and a summary at stop.
