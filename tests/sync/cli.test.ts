@@ -181,6 +181,24 @@ describe('login / link / sync / unlink', () => {
       await d.close().catch(() => {});
     }
   });
+  it('a push that was skipped is not blamed on the login', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const cwd = mkdtempSync(path.join(tmpdir(), 'mh-cwd-'));
+    await loginCommand([hubUrl], cap().io, { home, readKey: async () => key });
+    const ctx = createDaemonContext(home, env);
+    const d = await startDaemon(ctx, { port: 0 });
+    try {
+      expect(await linkCommand([hubUrl], cap().io, { home, cwd })).toBe(0);
+      const error = 'hub_protocol: the hub speaks sync protocol 3, this memhive speaks 2; upgrade memhive';
+      ctx.sync!.syncNow = async () => ({ pushed: null, pulled: 0, error });
+      const c = cap();
+      expect(await syncCommand([], c.io, { home, cwd })).toBe(1);
+      expect(c.o.out).toBe('push skipped; pulled 0 rows\n');
+      expect(c.o.err).toBe(`memhive sync: ${error}\n`);
+    } finally {
+      await d.close().catch(() => {});
+    }
+  });
   it('a push that failed is reported as failed, not as a missing login', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const cwd = mkdtempSync(path.join(tmpdir(), 'mh-cwd-'));

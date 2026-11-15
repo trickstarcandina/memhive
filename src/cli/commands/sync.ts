@@ -38,7 +38,7 @@ export async function syncCommand(
         ? `pushed ${r.pushed.accepted.observations} observations, ${r.pushed.accepted.summaries} summaries (${r.pushed.rejected.length} rejected); pulled ${r.pulled} rows\n`
         : r.error?.includes('push: ')
           ? `push failed; pulled ${r.pulled} rows\n`
-          : `push skipped (not logged in or key rejected); pulled ${r.pulled} rows\n`
+          : `push skipped; pulled ${r.pulled} rows\n` // the reason is the error below: no key, or a hub with a newer protocol
     );
     if (r.error) {
       io.stderr(`memhive sync: ${r.error}\n`);
