@@ -250,9 +250,10 @@ export async function handleHubRoute(
     let used = Buffer.byteLength(JSON.stringify(result)) + 64;
     let taken = 0;
     let full = false;
+    const sent = new Set<string>(); // a row is logged again when its vector comes later: it goes once per page
     for (let i = 0; i < Math.min(entries.length, limit) && !full; i += PULL_CHUNK) {
       const chunk = entries.slice(i, Math.min(i + PULL_CHUNK, limit));
-      const ids = (t: string) => chunk.filter((e) => e.table === t).map((e) => e.rowId);
+      const ids = (t: string) => [...new Set(chunk.filter((e) => e.table === t).map((e) => e.rowId))];
       // A key can hold several rows: tombstones are keyed by (tbl, id) and the log names only the id, so one entry relays
       // each table's tombstone for that id (a repeat is harmless, applying a tombstone is idempotent).
       const rows = new Map<string, object[]>();
@@ -266,7 +267,8 @@ export async function handleHubRoute(
       for (const x of await store.getTombstones(project.id, ids('tombstone')))
         put('tombstone:' + x.id, { id: x.id, tbl: x.tbl, deleted_at: x.deletedAt });
       for (const e of chunk) {
-        const list = rows.get(`${e.table}:${e.rowId}`) ?? [];
+        const key = `${e.table}:${e.rowId}`;
+        const list = sent.has(key) ? [] : (rows.get(key) ?? []);
         const n = list.reduce((a, row) => a + Buffer.byteLength(JSON.stringify(row)) + 1, 0);
         if (list.length && taken > 0 && used + n > cfg.bodyLimit) {
           full = true;
@@ -274,6 +276,7 @@ export async function handleHubRoute(
         }
         (result[e.table === 'tombstone' ? 'tombstones' : e.table] as object[]).push(...list);
         used += n;
+        sent.add(key);
         taken++;
         result.next_seq = e.seq;
       }
