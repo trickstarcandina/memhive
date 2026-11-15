@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,68 @@ describe('ensureDaemon', () => {
       })
     ).toBeNull();
     expect(spawned).toBe(1);
+  });
+});
+
+describe('a slow daemon is not a dead daemon', () => {
+  const env = { MEMHIVE_LLM_PROVIDER: 'openai-compat', MEMHIVE_LLM_BASE_URL: deadUrl, MEMHIVE_LLM_MODEL: 'x' };
+  // A live `memhive daemon run` that holds daemon.lock but does not answer in time (stalled event loop, loaded machine).
+  const stalled = (home: string) => {
+    const p = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'memhive', 'daemon', 'run'], {
+      env: { ...process.env, MEMHIVE_HOME: home },
+      stdio: 'ignore',
+    });
+    writeFileSync(path.join(home, 'daemon.lock'), String(p.pid));
+    writeDaemonInfo(home, { port: 1, pid: p.pid!, token: 't', startedAt: '2020-01-01T00:00:00Z', version: VERSION });
+    return p;
+  };
+  it('a hook that cannot wait keeps daemon.json, spawns nothing and still gets the daemon to try', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const p = stalled(home);
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      let spawned = 0;
+      expect((await ensureDaemon(home, { wait: false, spawn: () => spawned++ }))!.pid).toBe(p.pid);
+      expect(spawned).toBe(0);
+      expect(readDaemonInfo(home)!.pid).toBe(p.pid); // removing it would orphan the daemon: no new one can take its lock
+    } finally {
+      p.kill('SIGKILL');
+    }
+  });
+  it('a caller that waits gives it longer, then gives up without touching daemon.json', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const p = stalled(home);
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      let spawned = 0;
+      expect(await ensureDaemon(home, { wait: true, waitMs: 300, spawn: () => spawned++ })).toBeNull();
+      expect(spawned).toBe(0);
+      expect(readDaemonInfo(home)!.pid).toBe(p.pid);
+    } finally {
+      p.kill('SIGKILL');
+    }
+  });
+  it('a caller that waits starts a successor once a daemon that was shutting down lets go', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const p = stalled(home);
+    await new Promise((r) => setTimeout(r, 100));
+    setTimeout(() => p.kill('SIGKILL'), 150);
+    let spawned = 0;
+    await ensureDaemon(home, { wait: true, waitMs: 1000, spawn: () => spawned++ });
+    expect(spawned).toBe(1);
+    expect(readDaemonInfo(home)).toBeNull();
+  });
+  it('a running daemon writes daemon.json again when something removed it', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const h = await startDaemon(createDaemonContext(home, env), { port: 0, infoCheckMs: 30 });
+    try {
+      rmSync(path.join(home, 'daemon.json'));
+      await new Promise((r) => setTimeout(r, 150));
+      expect(readDaemonInfo(home)).toMatchObject({ port: h.info.port, token: h.info.token });
+    } finally {
+      await h.close();
+    }
+    expect(readDaemonInfo(home)).toBeNull(); // and close still removes it
   });
 });
 

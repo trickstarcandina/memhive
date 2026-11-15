@@ -247,7 +247,7 @@ async function acquireLock(home: string, lockWaitMs: number): Promise<string> {
 
 export async function startDaemon(
   ctx: DaemonContext,
-  opts: { port?: number; idleMs?: number; lockWaitMs?: number } = {}
+  opts: { port?: number; idleMs?: number; lockWaitMs?: number; infoCheckMs?: number } = {}
 ): Promise<{ info: DaemonInfo; close(): Promise<void> }> {
   const lock = await acquireLock(ctx.home, opts.lockWaitMs ?? 15_000);
   const token = randomBytes(24).toString('base64url');
@@ -305,6 +305,20 @@ export async function startDaemon(
   touch();
   ctx.logger.info('daemon started', { port: info.port });
 
+  // A client that judged this daemon dead (memhive <= 0.2.0 did after one slow health check) removes daemon.json while
+  // the daemon lives on, unreachable. Put it back, unless a successor already owns the lock.
+  const infoTimer = setInterval(() => {
+    try {
+      if (!closing && !readDaemonInfo(ctx.home) && Number(readFileSync(lock, 'utf8')) === process.pid) {
+        writeDaemonInfo(ctx.home, info);
+        ctx.logger.warn('daemon.json was missing; written again');
+      }
+    } catch {
+      /* lock gone: a successor is taking over */
+    }
+  }, opts.infoCheckMs ?? 5000);
+  infoTimer.unref?.();
+
   const tick = () => {
     runMaintenance(ctx);
     void ctx.observer.backfill();
@@ -317,6 +331,7 @@ export async function startDaemon(
     (closing ??= (async () => {
       if (idleTimer) clearTimeout(idleTimer);
       clearInterval(embedTimer);
+      clearInterval(infoTimer);
       await new Promise<void>((r) => server.close(() => r())); // no new events past this point
       server.closeAllConnections?.();
       try {

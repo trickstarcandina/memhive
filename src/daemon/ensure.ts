@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { readDaemonInfo, removeDaemonInfo, type DaemonInfo } from './info.js';
+import { isOurDaemon, procKnows, readDaemonInfo, removeDaemonInfo, type DaemonInfo } from './info.js';
 import { DaemonClient } from './client.js';
 import { VERSION } from '../shared/version.js';
 
@@ -72,7 +72,23 @@ export async function ensureDaemon(
   const info = readDaemonInfo(home);
   if (info) {
     const client = new DaemonClient(info, opts.fetchImpl);
-    if (await client.health()) {
+    let healthy = await client.health();
+    // A daemon that is alive and still holds daemon.lock is slow (busy event loop, loaded machine), not dead. Removing
+    // its daemon.json would orphan it: no new daemon can take the lock, so every later hook would find nothing.
+    // Same test as acquireLock: /proc must not show the pid reused by another program.
+    const holding = () => pidAlive(info.pid) && lockHolder(home) === info.pid;
+    if (!healthy && holding() && (isOurDaemon(home, info.pid) || !procKnows(info.pid))) {
+      if (!opts.wait) return info; // alive, so worth one delivery attempt; the caller's own timeout bounds it
+      // It may also be shutting down (HTTP closed, store still open): once it lets go, the stale path below starts ours.
+      const deadline = Date.now() + (opts.waitMs ?? 2000);
+      while (Date.now() < deadline && holding()) {
+        healthy = await client.health(500);
+        if (healthy) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      if (!healthy && holding()) return null;
+    }
+    if (healthy) {
       const mine = opts.version ?? VERSION;
       if (!olderThan(info.version, mine)) {
         // A newer daemon serves an older caller as it is (the schema guard protects the database); restarting it would
@@ -89,9 +105,9 @@ export async function ensureDaemon(
       // only asks; the next hook finds daemon.json gone and spawns.
       await client.request('POST', '/v1/shutdown', undefined, 1000).catch(() => {});
       if (!opts.wait) return null;
-      // Its close() may wait up to 10 s for observer work; the new daemon must not start while it still holds the store.
+      // Its close() may wait up to 10 s for observer work; the new daemon must not start while it still holds the store
+      // (the lock goes only after its store is closed).
       const deadline = Date.now() + (opts.exitWaitMs ?? 15_000);
-      const holding = () => pidAlive(info.pid) && lockHolder(home) === info.pid; // the lock goes only after its store is closed
       while (Date.now() < deadline && holding()) await new Promise((r) => setTimeout(r, 50));
       if (holding()) {
         opts.warn?.(`memhive: the old daemon (pid ${info.pid}) did not exit; not starting a second one`);
