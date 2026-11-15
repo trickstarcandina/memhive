@@ -41,7 +41,7 @@ export function isOurDaemon(home: string, pid: number): boolean {
   return (
     args.includes('daemon') &&
     args.includes('run') &&
-    args.some((a) => a.includes('memhive')) &&
+    args.slice(1).some((a) => a.includes('memhive')) && // the script, not the interpreter: node may live under a path with that name
     env.includes(`MEMHIVE_HOME=${home}`)
   );
 }
