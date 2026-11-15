@@ -1,6 +1,8 @@
 import type { Readable } from 'node:stream';
 
-export const STDIN_LIMIT = 2 * 1024 * 1024;
+// Room for a large Read or Write result: the adapter cuts every field to 16 000 characters, so what reaches the daemon
+// stays small. Past this the event is dropped.
+export const STDIN_LIMIT = 16 * 1024 * 1024;
 const STDIN_TIMEOUT_MS = 3000;
 
 // Reads at most `limit + 1` bytes (the extra byte tells the caller the input was over the limit); the rest is

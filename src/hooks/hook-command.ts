@@ -46,7 +46,7 @@ export async function runHook(args: string[], deps: Partial<HookDeps> = {}): Pro
       log.warn('empty stdin', { host, hostEvent });
       return 0;
     }
-    // Accepted deviation from spec 5: an event over 2 MB is dropped, not trimmed (the cut JSON cannot be parsed).
+    // Accepted deviation from spec 5: an event over the limit is dropped, not trimmed (the cut JSON cannot be parsed).
     if (Buffer.byteLength(raw) > STDIN_LIMIT) {
       log.warn('stdin too large', { host, hostEvent, bytes: Buffer.byteLength(raw) });
       return 0;

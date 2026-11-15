@@ -26,6 +26,34 @@ describe('runHook', () => {
     expect(JSON.parse(out.join('')).hookSpecificOutput.additionalContext).toContain('memhive ·');
     await h.close();
   });
+  // A big Read or Write result is a few MB of JSON; each field is cut to 16 000 characters before it leaves the hook.
+  it('an event of several MB is delivered with its fields cut down, not dropped', async () => {
+    const home = mkHome();
+    const sent: Array<{ tool: { name: string } }> = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return new Response('{}', { status: 202 });
+    }) as unknown as typeof fetch;
+    expect(
+      await runHook(['claude-code', 'PostToolUse'], {
+        home,
+        fetchImpl,
+        ensureDaemon: async () => ({ port: 1, pid: 1, token: 't', startedAt: '' }),
+        readStdin: async () =>
+          JSON.stringify({
+            session_id: 's1',
+            cwd: home,
+            hook_event_name: 'PostToolUse',
+            tool_name: 'Read',
+            tool_input: { file_path: 'big.log' },
+            tool_response: { content: 'A'.repeat(3 * 1024 * 1024) },
+          }),
+      })
+    ).toBe(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].tool.name).toBe('Read');
+    expect(JSON.stringify(sent[0]).length).toBeLessThan(40_000);
+  });
   it('exits 0 and logs on invalid JSON, empty stdin, unknown host, missing daemon', async () => {
     const home = mkHome();
     const out: string[] = [];
@@ -77,7 +105,7 @@ describe('runHook', () => {
       cwd: home,
       hook_event_name: 'PostToolUse',
       tool_name: 'x',
-      tool_input: 'a'.repeat(3 * 1024 * 1024),
+      tool_input: 'a'.repeat(STDIN_LIMIT + 1),
     });
     expect(await runHook(['claude-code', 'PostToolUse'], { ...base, readStdin: async () => big })).toBe(0);
     expect(await runHook(['claude-code', 'PostToolUse'], { ...base, readStdin: async () => ' \n\t ' })).toBe(0);

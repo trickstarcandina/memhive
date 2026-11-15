@@ -36,8 +36,8 @@ describe('readStdin', () => {
     s.end();
     expect(await p).toBe('abcdef');
   });
-  it('default limit is 2 MiB', async () => {
-    expect(STDIN_LIMIT).toBe(2 * 1024 * 1024);
+  it('default limit is 16 MiB', async () => {
+    expect(STDIN_LIMIT).toBe(16 * 1024 * 1024);
     const s = fakeStdin();
     const p = readStdin();
     s.end(Buffer.alloc(STDIN_LIMIT + 1000, 'x'));
