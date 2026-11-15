@@ -8,6 +8,27 @@ After upgrading, re-run `memhive install`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A daemon that answered one health check too slowly (a busy event loop, a loaded machine, a large `memhive import`) was treated as dead: the hook removed `daemon.json` while the daemon lived on holding its lock, so no new daemon could start and nothing was recorded until `memhive daemon stop`. A live daemon that holds the lock is now left alone, and a running daemon writes `daemon.json` again if it goes missing.
+- `--since` (CLI and MCP) accepted anything: `1w` and `1.5h` matched every row, other text matched none, and a huge number failed with "internal error". It now takes `30m`, `12h`, `7d`, `2w` or a date, and anything else is a usage error (`400 bad_since` from the daemon).
+- Sync against a rate-limited hub: the hub's `429` now carries `retry-after` and the client waits that long instead of doubling its backoff up to 10 minutes. `memhive sync` reports "push failed" with the push and the pull error, not "not logged in or key rejected". Summaries go out with the first batch instead of after the whole backlog of observations.
+- Observations no longer keep HTML entities (`&lt;`, `&gt;`, `&amp;`) that a model copied from the escaped prompt.
+- `memhive search` / `recent` with a `--project` key that is not in memory says so and exits 1 instead of printing an empty list.
+- `memhive embed --missing --rebuild` is refused; the flags contradict each other.
+- `memhive uninstall` skips a host that has no config directory on this machine.
+- `memhive import` no longer claims "nothing is pushed" without the caveat: a later `memhive link` to another hub pushes your own rows, like any row recorded here.
+
+### Changed
+
+- The observer tries a failed call once more (network error, 5xx, or an answer that is not JSON) before it drops the batch.
+- Hook events up to 16 MB are accepted (was 2 MB) and cut down field by field; larger ones are still dropped.
+- `memhive doctor`: the provider ping passes on any answer and allows 256 tokens, so a reasoning model or a chatty one no longer fails it.
+
+### Added
+
+- `embed.maxDistance` (`MEMHIVE_EMBED_MAX_DISTANCE`): leave vector hits farther than this out of search results. Off by default.
+
 ## [0.2.0] - 2026-11-09
 
 ### Upgrading

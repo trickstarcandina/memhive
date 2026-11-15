@@ -50,7 +50,8 @@ flowchart LR
    characters per field). Tool payloads are never written to disk.
 4. **Observer.** The buffer is flushed after 8 tool events, 5 s of idle, or stop. One LLM call turns
    the batch into typed observations (input and output are cut to 4 000 characters each in the
-   prompt). The reply is parsed and validated; a failed call drops the batch. On stop the observer
+   prompt). The reply is parsed and validated; a call that fails on the network, with a 5xx or
+   with an unparseable reply is tried once more, then the batch is dropped. On stop the observer
    also writes a summary of the turn.
 5. **Store.** Observations and summaries are redacted again and inserted into SQLite. With embeddings
    configured, vectors are computed and stored next to them (`memhive embed --missing` backfills).
@@ -82,7 +83,7 @@ the body is read. Responses are JSON; errors are `{ "error": { "code": "...", "m
 | `GET /v1/sync/pull` | Download rows of one project after a cursor. |
 | `GET /v1/search` | Hub-side full-text search: `project_key`, `q`, `type`, `user`, `since`, `limit` (1-100). |
 
-Limits: 60 requests per minute per key (`429 rate_limited`), request body up to
+Limits: 60 requests per minute per key (`429 rate_limited` with `retry-after`), request body up to
 `MEMHIVE_HUB_BODY_LIMIT` bytes, 2 MB by default (`413 too_large`).
 
 ### Push
@@ -147,8 +148,8 @@ for an older hub (or one whose config is unknown) they stay queued, with one war
 **Client batching** (`src/sync/engine.ts`). Up to 200 rows per table per request and 20 rounds per
 push call, filled up to 75 % of the hub's `body_limit`. On 413 the batch is halved, and a single row
 too large with its vector is resent without it. A row still too large is skipped by this process
-after 5 refusals and given up after 20 across restarts. 408, 429 and 5xx back off (30 s doubling to 10 min)
-and keep the rows. 404 and a bare 4xx (no hub error body: a proxy, a WAF, a wrong path, an old hub)
+after 5 refusals and given up after 20 across restarts. 408, 429 and 5xx back off (30 s doubling to 10 min,
+or exactly the hub's `retry-after` when it sends one) and keep the rows. 404 and a bare 4xx (no hub error body: a proxy, a WAF, a wrong path, an old hub)
 back off on the same ladder; after 5 such failures in a row a bare 4xx is retried row by row and only
 the row still refused is given up, while a 404 keeps every row
 queued at the longest backoff and logs an error. The backoff step survives a restart (`sync_state`).
