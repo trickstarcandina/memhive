@@ -62,6 +62,25 @@ describe('doctor checks', () => {
       status: 'fail',
     });
   });
+  it('the provider ping passes on any answer and leaves a reasoning model room to finish', async () => {
+    const home = mkHome();
+    let maxTokens = 0;
+    const s = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        maxTokens = JSON.parse(body).max_tokens;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: 'Pong.' } }] })); // no "ok" in it
+      });
+    });
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
+    closers.push(() => new Promise((r) => s.close(r)));
+    const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/v1`;
+    const r = await doctor(home, { env: { ...env, MEMHIVE_LLM_BASE_URL: url } }, []);
+    expect(r.out).toContain('ok   provider ping: Pong.');
+    expect(maxTokens).toBeGreaterThanOrEqual(256);
+  });
   it('checks the node and bundle paths in every rendered plugin file', async () => {
     const home = mkHome();
     const t = mkHome();

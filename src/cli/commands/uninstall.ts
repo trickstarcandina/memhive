@@ -7,7 +7,7 @@ import type { CliIo } from '../index.js';
 import { parseArgs } from '../args.js';
 import { isOwnEntry, resolvePaths } from '../../shared/paths.js';
 import { codexHooksByMemhive, updateState } from '../../shared/optout.js';
-import { uninstallClaudeCode, uninstallCodex, defaultRun, type RunFn } from '../../install/hosts.js';
+import { detectHosts, uninstallClaudeCode, uninstallCodex, defaultRun, type RunFn } from '../../install/hosts.js';
 import { daemonCommand } from './daemon.js';
 
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -22,9 +22,12 @@ export async function uninstallCommand(
   const run = opts.run ?? defaultRun;
   const { flags } = parseArgs(args, 'uninstall');
   await daemonCommand(['stop'], io, { home });
-  for (const l of uninstallClaudeCode(run)) io.stdout(`  claude-code: ${l}\n`);
-  for (const l of uninstallCodex(env.CODEX_HOME ?? path.join(homedir(), '.codex'), run, codexHooksByMemhive(home)))
-    io.stdout(`  codex: ${l}\n`);
+  // A host with no config dir was never installed into: its CLI would only print a failure.
+  const hosts = detectHosts(env);
+  if (hosts.claudeCode) for (const l of uninstallClaudeCode(run)) io.stdout(`  claude-code: ${l}\n`);
+  if (hosts.codex)
+    for (const l of uninstallCodex(env.CODEX_HOME ?? path.join(homedir(), '.codex'), run, codexHooksByMemhive(home)))
+      io.stdout(`  codex: ${l}\n`);
   rmSync(resolvePaths(home).marketplace, { recursive: true, force: true }); // rendered plugin files only, never memory
   if (existsSync(home)) updateState(home, { codexHooksByMemhive: undefined });
   if (!flags.purge) {

@@ -157,8 +157,10 @@ export async function doctorCommand(
   if (opts.ping !== false && !flags['no-ping']) {
     if (provider) {
       try {
-        const t = await provider.complete({ system: 'Reply with the JSON {"ok":true}', user: 'ping', maxTokens: 20 });
-        add(t.includes('ok') ? 'ok' : 'fail', 'provider-ping', `provider ping: ${t.slice(0, 40).replace(/\n/g, ' ')}`);
+        // Any answer proves the endpoint, key and model work (an empty one throws). The wording is the model's own
+        // business, and a reasoning model spends tokens before it answers, so the budget is not tight.
+        const t = await provider.complete({ system: 'Reply with the JSON {"ok":true}', user: 'ping', maxTokens: 256 });
+        add('ok', 'provider-ping', `provider ping: ${t.slice(0, 40).replace(/\n/g, ' ')}`);
       } catch (e) {
         add('fail', 'provider-ping', `provider ping failed: ${e instanceof Error ? e.message : e}`);
       }

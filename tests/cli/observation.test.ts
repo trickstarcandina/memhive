@@ -103,6 +103,13 @@ describe('search flags', () => {
     await searchCommand(['--type', 'decision', '--json'], r.io, { home, cwd });
     expect(ids(r.text())).toEqual([old.id]);
     r = io();
+    expect(await searchCommand(['zebra', '--project', 'github.com/no/such'], r.io, { home, cwd })).toBe(1);
+    expect(r.errText()).toContain('no project "github.com/no/such"'); // a typo in the key is not an empty memory
+    expect(r.text()).toBe('');
+    r = io();
+    expect(await searchCommand(['--since', 'banana'], r.io, { home, cwd })).toBe(2); // a usage error, not an empty list
+    expect(r.errText()).toContain('--since');
+    r = io();
     expect(await searchCommand(['--type', 'nope'], r.io, { home, cwd })).toBe(2);
     r = io();
     expect(await searchCommand(['q', '--offset', '-1'], r.io, { home, cwd })).toBe(2);

@@ -139,6 +139,7 @@ describe('export and import', () => {
     r = io();
     expect(await importCommand([out, '--project', KEY], r.io, { home: b.home })).toBe(0);
     expect(r.out()).toContain(`imported into ${KEY}: 1 sessions, 2 observations, 1 summaries; 0 skipped`);
+    expect(r.out()).toContain('`memhive link` to another hub pushes your own rows'); // "nothing is pushed" was only true until then
     const p = cb.store.getProjectByKey(KEY)!;
     const [x] = cb.store.getObservations([o1.id]);
     expect(x).toMatchObject({

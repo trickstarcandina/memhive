@@ -193,7 +193,7 @@ export async function importCommand(
     if (flags.json) printJson(io, { project: projectKey, imported: total, skipped });
     else
       io.stdout(
-        `imported into ${projectKey}: ${total.sessions} sessions, ${total.observations} observations, ${total.summaries} summaries; ${skipped} skipped (already here, forgotten, or without their session)${flags.sync ? '' : '; marked synced, so nothing is pushed'}\n`
+        `imported into ${projectKey}: ${total.sessions} sessions, ${total.observations} observations, ${total.summaries} summaries; ${skipped} skipped (already here, forgotten, or without their session)${flags.sync ? '' : '; marked synced, so nothing is pushed now (a later `memhive link` to another hub pushes your own rows, like any local row)'}\n`
       );
     return 0;
   } catch (e) {

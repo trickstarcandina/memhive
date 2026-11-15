@@ -120,6 +120,7 @@ describe('embed command', () => {
     expect(r.out.join('')).toBe('embedded 0 observations\n');
     const again = io();
     expect(await embedCommand(['--rebuild'], again.io, { home })).toBe(0);
+    expect(await embedCommand(['--missing', '--rebuild'], io().io, { home })).toBe(2); // they contradict each other
     expect(again.out.join('')).toContain('Dropping every stored vector');
     expect(again.out.join('')).toContain('embedded 3 observations');
     await h.close();

@@ -54,7 +54,8 @@ export const COMMANDS: Record<string, CommandSpec> = {
   import: spec(
     `usage: memhive import <file.jsonl> [--project key] [--sync] [--json]   (rows from memhive export, into the current project or --project)
   rows are cleaned like pulled ones; ids already here or forgotten are skipped; rows are marked synced unless --sync
-  (then they are imported as your own rows and a linked project pushes them)
+  (then they are imported as your own rows and a linked project pushes them); a later memhive link to another hub
+  pushes your own rows either way
   --json  {"project", "imported": {"sessions", "observations", "summaries"}, "skipped"}
 `,
     ['project'],

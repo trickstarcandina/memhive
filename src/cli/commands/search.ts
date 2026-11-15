@@ -5,6 +5,7 @@ import { resolvePaths } from '../../shared/paths.js';
 import { ensureDaemon } from '../../daemon/ensure.js';
 import { daemonUnavailableMessage } from '../daemon-unavailable.js';
 import { DaemonClient, DaemonError } from '../../daemon/client.js';
+import { parseSince } from '../../shared/since.js';
 import { formatIndex } from '../../mcp/format.js';
 import { OBSERVATION_TYPES, type Observation, type ObservationType, type SearchResult } from '../../store/types.js';
 
@@ -72,6 +73,10 @@ export async function searchCommand(
     io.stderr(`memhive ${cmd}: --type must be one of ${OBSERVATION_TYPES.join(', ')}\n`);
     return 2;
   }
+  if (typeof flags.since === 'string' && parseSince(flags.since) === null) {
+    io.stderr(`memhive ${cmd}: --since must be a duration like 7d, 12h, 30m, 2w, or a date\n`);
+    return 2;
+  }
   if (flags['all-projects'] && typeof flags.project === 'string') {
     io.stderr(`memhive ${cmd}: use --project or --all-projects, not both\n`);
     return 2;
@@ -87,7 +92,15 @@ export async function searchCommand(
   }
   for (const k of ['type', 'user', 'since']) if (typeof flags[k] === 'string') q.set(k, flags[k] as string);
   try {
-    const r = await client.request<{ results?: SearchResult[]; observations: Observation[] }>('GET', `/v1/search?${q}`);
+    const r = await client.request<{
+      results?: SearchResult[];
+      observations: Observation[];
+      unknownProject?: boolean;
+    }>('GET', `/v1/search?${q}`);
+    if (r.unknownProject && typeof flags.project === 'string') {
+      io.stderr(`memhive ${cmd}: no project "${flags.project}" in memory (memhive stats lists the keys)\n`);
+      return 1;
+    }
     const results = r.results ?? r.observations.map((o) => ({ ...o, kind: 'observation' as const }));
     if (flags.json) printJson(io, { results });
     else io.stdout(formatIndex(results) + '\n');

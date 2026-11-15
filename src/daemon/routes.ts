@@ -21,18 +21,11 @@ import { matchesAny } from '../shared/optout.js';
 import { embeddingText } from '../observer/observer.js';
 import { normalizeHubUrl } from '../sync/credentials.js';
 import { redactSecrets, stripPrivate } from '../hooks/sanitize.js';
+import { parseSince } from '../shared/since.js';
 
 const ok = (body: unknown, status = 200) => ({ status, body });
 const EXCLUDED_MSG = 'memhive does not record this project (excludeProjects or .memhive.json); nothing was saved';
 const err = (status: number, code: string, message: string) => ({ status, body: { error: { code, message } } });
-
-function parseSince(v: string | null): string | undefined {
-  if (!v) return undefined;
-  const m = v.match(/^(\d+)([dhm])$/);
-  if (!m) return v;
-  const ms = Number(m[1]) * (m[2] === 'd' ? 864e5 : m[2] === 'h' ? 36e5 : 6e4);
-  return new Date(Date.now() - ms).toISOString();
-}
 
 const clamp = (v: string | null, dflt: number) => Math.min(Math.max(Number(v ?? dflt) || 0, 0), 50);
 
@@ -336,17 +329,20 @@ export async function handleRoute(
     const key = q.get('project_key');
     if (!all && !key) return err(400, 'missing_project', 'project_key required');
     const project = all ? null : store.getProjectByKey(key!);
-    if (!all && !project) return ok({ results: [], observations: [] });
+    if (!all && !project) return ok({ results: [], observations: [], unknownProject: true }); // the CLI says so for --project
     const type = q.get('type');
     if (type && !OBSERVATION_TYPES.includes(type as ObservationType))
       return err(400, 'bad_type', `type must be one of ${OBSERVATION_TYPES.join(', ')}`);
+    const since = q.get('since') ? parseSince(q.get('since')!) : undefined;
+    if (since === null) return err(400, 'bad_since', 'since must be a duration like 7d, 12h, 30m, 2w, or a date');
     const f: SearchFilters = {
       projectId: project?.id,
       type: (type as ObservationType) ?? undefined,
       userId: q.get('user') ?? undefined,
-      since: parseSince(q.get('since')),
+      since,
       limit: Math.min(Math.max(Number(q.get('limit') ?? 20) || 20, 1), 100),
       offset: Math.min(Math.max(Number(q.get('offset') ?? 0) || 0, 0), 10_000),
+      maxDistance: ctx.settings.embed?.maxDistance,
     };
     const text = (q.get('q') ?? '').trim();
     // No query: the newest observations under the filters (recent, or "everything since 2d").

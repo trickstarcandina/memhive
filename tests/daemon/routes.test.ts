@@ -62,9 +62,24 @@ describe('daemon route matrix', () => {
         .filter((t) => !t.startsWith('line'))
     ).toEqual(titles);
   });
-  it('a since that is not a duration is passed through as a date, not an error', async () => {
-    for (const since of ['garbage', '2026-01-01T00:00:00.000Z', '7x', '-1d'])
-      expect((await route('GET', `/v1/search?project_key=${KEY}&since=${encodeURIComponent(since)}`)).status).toBe(200);
+  it('since takes weeks and dates too', async () => {
+    const titles = async (since: string) =>
+      (
+        (await route('GET', `/v1/search?project_key=${KEY}&since=${encodeURIComponent(since)}&limit=100`)).body as {
+          observations: Array<{ title: string }>;
+        }
+      ).observations
+        .map((o) => o.title)
+        .filter((t) => !t.startsWith('line'));
+    expect(await titles('1w')).toEqual(['ten minutes', 'five hours', 'three days']);
+    expect(await titles(new Date(Date.now() - 36e5).toISOString())).toEqual(['ten minutes']);
+    expect(await titles('2020-01-01')).toHaveLength(await titles('9999d').then((t) => t.length)); // a bare date is a date
+  });
+  // Compared as text, such a value used to match every row ("1w" < "2026-…") or none ("garbage"), silently.
+  it.each(['garbage', '7x', '-1d', '1.5h', '99999999999999999999d'])('since=%s -> 400 bad_since', async (since) => {
+    const r = await route('GET', `/v1/search?project_key=${KEY}&since=${encodeURIComponent(since)}`);
+    expect(r.status).toBe(400);
+    expect((r.body as { error: { code: string } }).error.code).toBe('bad_since');
   });
 
   it.each([

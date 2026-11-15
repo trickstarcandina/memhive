@@ -57,6 +57,24 @@ describe('install', () => {
     expect(JSON.parse(saved).contextTokens).toBe(2000);
   });
 
+  it('a second install keeps embed.maxDistance, which it has no prompt for', async () => {
+    const f = fixture();
+    mkdirSync(f.home, { recursive: true });
+    writeFileSync(
+      path.join(f.home, 'settings.json'),
+      JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'm', dims: 4, maxDistance: 0.9 } })
+    );
+    expect(
+      await installCommand(['--yes', '--host', 'claude-code', '--provider', 'anthropic', '--no-ping'], io().io, {
+        home: f.home,
+        env: f.env,
+        run,
+        root: f.root,
+      })
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(path.join(f.home, 'settings.json'), 'utf8')).embed.maxDistance).toBe(0.9);
+  });
+
   it('hints when only ANTHROPIC_API_KEY is set: the daemon does not read it', async () => {
     const f = fixture();
     const r = io();
@@ -148,6 +166,22 @@ describe('uninstall', () => {
     expect(await uninstallCommand([], r.io, { home: f.home, env: f.env, run })).toBe(0);
     expect(existsSync(path.join(f.home, 'marketplace'))).toBe(false);
     expect(existsSync(path.join(f.home, 'settings.json'))).toBe(true);
+  });
+
+  it('leaves a host that is not on this machine alone', async () => {
+    const f = fixture(); // neither config dir exists yet
+    mkdirSync(f.env.CLAUDE_CONFIG_DIR);
+    const calls: string[] = [];
+    const r = io();
+    const { uninstallCommand } = await import('../../src/cli/commands/uninstall.js');
+    const spy: RunFn = (cmd, args) => {
+      calls.push(`${cmd} ${args.join(' ')}`);
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    expect(await uninstallCommand([], r.io, { home: f.home, env: f.env, run: spy })).toBe(0);
+    expect(calls.some((c) => c.startsWith('claude '))).toBe(true);
+    expect(calls.filter((c) => c.startsWith('codex '))).toEqual([]);
+    expect(r.out.join('')).not.toContain('codex:');
   });
 
   it('prints what stays and how to delete it', async () => {
