@@ -87,6 +87,38 @@ export function hubStoreContract(
       expect(got[0].embedding).toBeNull();
     });
 
+    it.skipIf(opts.dims === null)("a later push fills the owner's missing vector, and only that", async () => {
+      const p = await s.getOrCreateProject('k', 'n');
+      const a = hsess(p.id);
+      await s.upsertSessions([a]);
+      const o = hobs({ projectId: p.id, sessionId: a.id });
+      const full = hobs({ projectId: p.id, sessionId: a.id, embedding: [1, 0, 0, 0], embeddingModel: 'm' });
+      await s.insertObservations([o, full]);
+      const late = { ...o, embedding: [0, 1, 0, 0], embeddingModel: 'm' };
+      expect(await s.insertObservations([{ ...late, userId: 'mallory' }])).toEqual([]); // not the owner
+      expect((await s.getObservations([o.id]))[0].embedding).toBeNull();
+      expect(await s.insertObservations([late, late])).toEqual([o.id]);
+      const got = (await s.getObservations([o.id]))[0];
+      expect(got.embedding).toEqual([0, 1, 0, 0]);
+      expect(got.embeddingModel).toBe('m');
+      expect(got.title).toBe('T');
+      // logged again, so teammates who hold the row without a vector receive it
+      expect((await s.listSyncLog(p.id, 0, 10)).map((e) => e.rowId)).toEqual([a.id, o.id, full.id, o.id]);
+      // a vector already there stays, with or without a new one
+      expect(
+        await s.insertObservations([
+          { ...full, embedding: [0, 0, 0, 1] },
+          { ...late, embedding: null },
+        ])
+      ).toEqual([]);
+      expect((await s.getObservations([full.id]))[0].embedding).toEqual([1, 0, 0, 0]);
+      expect((await s.getObservations([o.id]))[0].embedding).toEqual([0, 1, 0, 0]);
+      // the same id twice in one body: the copy with the vector is not lost
+      const twice = hobs({ projectId: p.id, sessionId: a.id });
+      await s.insertObservations([twice, { ...twice, embedding: [0, 0, 1, 0], embeddingModel: 'm' }]);
+      expect((await s.getObservations([twice.id]))[0].embedding).toEqual([0, 0, 1, 0]);
+    });
+
     it('summaries', async () => {
       const p = await s.getOrCreateProject('k', 'n');
       const a = hsess(p.id);

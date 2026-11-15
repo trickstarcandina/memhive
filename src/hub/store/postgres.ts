@@ -323,7 +323,12 @@ export class PostgresHubStore implements HubStore {
     for (const o of rows) if (o.embedding && !o.embedding.every(Number.isFinite)) throw new HubInvalidVector(o.id);
     const dims = this.opts.dims;
     const rejected = rows.filter((o) => dims !== null && o.embedding && o.embedding.length !== dims);
-    const ok = rows.filter((o) => !rejected.includes(o));
+    // ON CONFLICT DO UPDATE cannot touch a row twice in one statement: one copy of an id is written, the first one, or
+    // the first one that has a vector.
+    const byId = new Map<string, HubObservation>();
+    for (const o of rows)
+      if (!rejected.includes(o) && (!byId.has(o.id) || (!byId.get(o.id)!.embedding && o.embedding))) byId.set(o.id, o);
+    const ok = [...byId.values()];
     const inserted = !ok.length
       ? []
       : await this.tx(
@@ -332,6 +337,7 @@ export class PostgresHubStore implements HubStore {
             const col = <K extends keyof HubObservation>(k: K) => ok.map((o) => o[k]);
             const json = (k: 'facts' | 'concepts' | 'filesRead' | 'filesModified') =>
               ok.map((o) => JSON.stringify(o[k]));
+            // An existing row is left as it is, except that its owner may add the vector it was pushed without (embedded later).
             // vectors travel as text and are cast per row: pgvector parses '[1,2]', real[] parses '{1,2}'
             const vecs = ok.map((o) =>
               o.embedding ? (dims ? `[${o.embedding.join(',')}]` : `{${o.embedding.join(',')}}`) : null
@@ -341,7 +347,10 @@ export class PostgresHubStore implements HubStore {
         SELECT id, project_id, session_id, user_id, type, title, subtitle, facts::jsonb, narrative, concepts::jsonb, files_read::jsonb, files_modified::jsonb, created_at, embedding_model, embedding::${dims ? 'vector' : 'real[]'}
         FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[], $13::timestamptz[], $14::text[], $15::text[])
           AS t(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding)
-        ON CONFLICT (id) DO NOTHING RETURNING id`,
+        ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding, embedding_model = EXCLUDED.embedding_model
+          WHERE observations.embedding IS NULL AND EXCLUDED.embedding IS NOT NULL
+            AND observations.user_id = EXCLUDED.user_id AND observations.project_id = EXCLUDED.project_id
+        RETURNING id`,
               [
                 col('id'),
                 col('projectId'),

@@ -232,6 +232,10 @@ export interface Store {
   quarantine(projectId: string, rows: QuarantineRow[]): void; // keeps the newest 1000 per project
   listQuarantine(projectId: string, limit: number): QuarantineRow[];
   markSynced(table: 'sessions' | 'observations' | 'summaries', ids: string[], at: string): void;
+  /** Observations just marked synced that the hub got without a vector. */
+  markPushedBare(ids: string[]): void;
+  /** Queues the rows of `ids` that the hub holds without a vector for the next push; returns their project ids. */
+  requeueBare(ids: string[]): string[];
   getPullCursor(projectId: string): number;
   setPullCursor(projectId: string, cursor: number): void;
   getHubEpoch(projectId: string): string | null; // last hub epoch seen in a pull; null = none yet

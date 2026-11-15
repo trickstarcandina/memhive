@@ -455,6 +455,26 @@ describe('hub isolated servers', () => {
     expect(one.next_seq).toBeGreaterThan(since);
     await h.close();
   });
+  it('a row logged twice (its vector came later) is sent once in a pull page', async () => {
+    const { h, key } = await open({});
+    const req = (path: string, body?: unknown) =>
+      fetch(`http://127.0.0.1:${h.port}${path}`, {
+        method: body ? 'POST' : 'GET',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    const sid = newId();
+    const o = { ...hobs({ projectId: 'x', sessionId: sid, title: 'late' }), embedding: null, embeddingModel: null };
+    const push = (observations: unknown[], sessions: unknown[] = []) =>
+      req('/v1/sync/push', { projectKey: 'k/late', projectName: 'l', sessions, observations, summaries: [] });
+    expect((await push([o], [hsess('x', { id: sid })])).status).toBe(200);
+    expect((await push([{ ...o, embedding: [1, 0, 0, 0], embeddingModel: 'bge-m3' }])).status).toBe(200);
+    const page: any = await (await req('/v1/sync/pull?project_key=k%2Flate&since=0')).json();
+    expect(page.observations.map((x: any) => [x.id, x.embedding])).toEqual([[o.id, [1, 0, 0, 0]]]);
+    expect(page.next_seq).toBe(page.max_seq); // the second log entry is passed, not left for another page
+    expect(page.has_more).toBe(false);
+    await h.close();
+  });
   it('pull vectors=0 omits embeddings', async () => {
     const { h, key } = await open({});
     const req = (path: string, body?: unknown) =>

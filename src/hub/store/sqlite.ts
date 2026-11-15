@@ -245,8 +245,11 @@ export class SqliteHubStore implements HubStore {
     return changed;
   }
   async insertObservations(rows: HubObservation[]): Promise<string[]> {
+    // An existing row is left as it is, except that its owner may add the vector it was pushed without (embedded later).
+    const LATE_VECTOR =
+      'embedding = excluded.embedding, embedding_model = excluded.embedding_model WHERE observations.embedding IS NULL AND excluded.embedding IS NOT NULL AND observations.user_id = excluded.user_id AND observations.project_id = excluded.project_id';
     const stmt = this.db.prepare(
-      `INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`
+      `INSERT INTO observations(id, project_id, session_id, user_id, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, created_at, embedding_model, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET ${LATE_VECTOR}`
     );
     const inserted: string[] = [];
     const rejected: HubObservation[] = [];

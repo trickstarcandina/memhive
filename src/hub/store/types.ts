@@ -78,7 +78,7 @@ export interface HubStore {
   getOrCreateProject(key: string, name: string): Promise<Project>;
   getProjectByKey(key: string): Promise<Project | null>;
   upsertSessions(rows: Session[]): Promise<string[]>; // ids inserted or updated
-  insertObservations(rows: HubObservation[]): Promise<string[]>; // ids newly inserted (existing ignored)
+  insertObservations(rows: HubObservation[]): Promise<string[]>; // ids written: new rows, and the owner's existing rows that got their missing vector
   insertSummaries(rows: Summary[]): Promise<string[]>;
   listSyncLog(projectId: string, sinceSeq: number, limit: number): Promise<SyncLogEntry[]>;
   maxSeq(projectId: string): Promise<number>;

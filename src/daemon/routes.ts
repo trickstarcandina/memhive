@@ -257,6 +257,7 @@ export async function handleRoute(
       }
     });
     if (syncedAt === null && project.hubUrl) ctx.sync?.schedulePush(project.id);
+    if (done.observations) void ctx.observer.backfill(); // imported rows have no vector; the next 10-minute tick is a long wait
     return ok({ project: project.key, imported: done, skipped });
   }
 

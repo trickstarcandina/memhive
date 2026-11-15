@@ -306,6 +306,83 @@ describe.each(hubStores('rt'))('$name', ({ open }) => {
       await e.close();
       a.engine.close();
     });
+    it('a vector made after the push reaches the hub, and a teammate who already pulled the row', async () => {
+      const a = client('alice', keys.alice, 2);
+      const b = client('bob', keys.bob, 2);
+      const s = sess(a.project.id, { userId: 'alice' });
+      a.store.upsertSession(s);
+      const o = obs({ projectId: a.project.id, sessionId: s.id, userId: 'alice', title: 'late vector' });
+      a.store.insertObservations([o]);
+      await a.engine.push(a.project);
+      await b.engine.pull(b.project, 3000);
+      expect((await hs.getObservations([o.id]))[0].embedding).toBeNull();
+      expect(b.store.getObservationEmbeddings([o.id]).size).toBe(0);
+      // the backfill embeds the row on A
+      a.store.setObservationEmbedding(o.id, [0, 1], 'm');
+      a.engine.vectorsAdded([o.id]);
+      expect(a.store.listUnsynced('observations', a.project.id, 10).map((x) => x.id)).toEqual([o.id]);
+      await a.engine.push(a.project);
+      expect((await hs.getObservations([o.id]))[0].embedding).toEqual([0, 1]);
+      expect(await b.engine.pull(b.project, 3000)).toBe(0); // a vector for a row already held is not a pulled row
+      expect(b.store.getObservationEmbeddings([o.id]).get(o.id)).toEqual([0, 1]);
+      expect(b.store.getObservations([o.id])[0].embeddingModel).toBe('m');
+      // a row that went with its vector is not sent again (embed --rebuild), and a teammate's row never is
+      a.engine.vectorsAdded([o.id]);
+      b.engine.vectorsAdded([o.id]);
+      expect(a.store.listUnsynced('observations', a.project.id, 10)).toHaveLength(0);
+      expect(b.store.listUnsynced('observations', b.project.id, 10)).toHaveLength(0);
+      // the hub's vector is never replaced
+      a.store.markPushedBare([o.id]);
+      a.store.setObservationEmbedding(o.id, [1, 0], 'm');
+      a.engine.vectorsAdded([o.id]);
+      await a.engine.push(a.project);
+      expect((await hs.getObservations([o.id]))[0].embedding).toEqual([0, 1]);
+      a.engine.close();
+      b.engine.close();
+    });
+    it('a row marked synced without a push (import) stays off the hub when it gets its vector', async () => {
+      const a = client('alice', keys.alice, 2);
+      const s = sess(a.project.id, { userId: 'alice', syncedAt: '2026-01-01T00:00:00.000Z' });
+      a.store.upsertSession(s);
+      a.store.markSynced('sessions', [s.id], '2026-01-01T00:00:00.000Z');
+      const o = obs({
+        projectId: a.project.id,
+        sessionId: s.id,
+        userId: 'alice',
+        syncedAt: '2026-01-01T00:00:00.000Z',
+      });
+      a.store.insertObservations([o]);
+      a.store.setObservationEmbedding(o.id, [0, 1], 'm');
+      a.engine.vectorsAdded([o.id]);
+      expect(a.store.listUnsynced('observations', a.project.id, 10)).toHaveLength(0);
+      a.engine.close();
+    });
+    it('a vector stored while the push was on its way goes in the next round', async () => {
+      const a = client('alice', keys.alice, 2);
+      const s = sess(a.project.id, { userId: 'alice' });
+      a.store.upsertSession(s);
+      const o = obs({ projectId: a.project.id, sessionId: s.id, userId: 'alice', title: 'in flight' });
+      a.store.insertObservations([o]);
+      let answered = 0;
+      const fetchImpl = (async (url: string, init?: RequestInit) => {
+        const r = await fetch(url, init);
+        if (String(url).includes('/push') && !answered++) a.store.setObservationEmbedding(o.id, [0, 1], 'm'); // the backfill
+        return r;
+      }) as unknown as typeof fetch;
+      const e = new SyncEngine({
+        store: a.store,
+        home: a.home,
+        logger: silent,
+        embedDims: 2,
+        embedModel: 'm',
+        fetchImpl,
+      });
+      await e.push(a.project);
+      expect((await hs.getObservations([o.id]))[0].embedding).toEqual([0, 1]);
+      expect(a.store.listUnsynced('observations', a.project.id, 10)).toHaveLength(0);
+      await e.close();
+      a.engine.close();
+    });
     it('401 marks authFailed and stops pushing; unlinked project is ignored', async () => {
       const bad = client('eve', 'mh_' + 'A'.repeat(43), 2);
       const s = sess(bad.project.id);

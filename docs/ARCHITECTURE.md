@@ -123,6 +123,9 @@ Limits: 60 requests per minute per key (`429 rate_limited` with `retry-after`), 
 - Ids are lowercased on the wire, so string comparisons (ownership, tombstones) are exact.
 - A vector is accepted only when `embeddingModel` equals the hub's `MEMHIVE_EMBED_MODEL` and its length
   equals `MEMHIVE_EMBED_DIMS`. The client resends a mismatched row once without its vector.
+- A row that exists is left as it is, with one exception: its owner may push it again with a vector when the hub
+  holds none (the row was embedded after its first push). The hub stores the vector and logs the row again, so
+  clients that hold it without a vector receive it. A stored vector is never replaced.
 
 **Ownership.** A session belongs to the user and project that first pushed it. A later push of the
 same session id by another user or into another project is rejected as `not_owner`; the owner can
@@ -150,9 +153,16 @@ push call, filled up to 75 % of the hub's `body_limit`. On 413 the batch is halv
 too large with its vector is resent without it. A row still too large is skipped by this process
 after 5 refusals and given up after 20 across restarts. 408, 429 and 5xx back off (30 s doubling to 10 min,
 or exactly the hub's `retry-after` when it sends one) and keep the rows. 404 and a bare 4xx (no hub error body: a proxy, a WAF, a wrong path, an old hub)
-back off on the same ladder; after 5 such failures in a row a bare 4xx is retried row by row and only
+back off on the same ladder; after 5 such failures in a row (a 408, 429 or 5xx in between starts the count again) a bare 4xx is retried row by row and only
 the row still refused is given up, while a 404 keeps every row
 queued at the longest backoff and logs an error. The backoff step survives a restart (`sync_state`).
+A push that backs off sets a timer and continues by itself when the wait ends; one that used its 20 rounds with
+rows left continues 30 seconds later, which keeps a backlog under the hub's rate limit and leaves room for pulls.
+No new observation or `memhive sync` is needed. A push blocked by a persistent 404 is the exception: it waits for
+the next trigger.
+An observation that went to the hub without a vector is flagged (`observations.pushed_bare`). When the backfill
+embeds it, the row is queued again so the hub gets the vector. Rows that went with their vector, and rows an
+import marked synced, are not queued again.
 Rows the hub rejects are marked synced and never retried. 401 marks the hub key failed until the next
 `memhive login`.
 
@@ -176,6 +186,7 @@ GET /v1/sync/pull?project_key=github.com/acme/app&since=<seq>&limit=<1..1000, de
 
 `cwd` is always `""` (0.1 clients require the field). A page also stops at the hub's body limit, so
 `has_more` can be true with fewer rows than `limit`; the first row always goes, so the cursor moves.
+A row that was logged more than once (its vector came after the row) is in a page once, with its current content.
 
 Every accepted row appends an entry to the hub's `sync_log` with a per-hub sequence number (`seq`).
 A pull returns the rows logged after `since`, in seq order. The client stores `next_seq` as its cursor
