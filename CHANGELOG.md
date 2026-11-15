@@ -8,14 +8,23 @@ After upgrading, re-run `memhive install`.
 
 ## [Unreleased]
 
+### Upgrading
+
+- The local database moves to schema 13. A 0.2.0 binary refuses a database this version has opened, so going back needs a backup made before the upgrade (`memhive backup`).
+- Rows that 0.2.0 pushed without a vector (an import, an embedder that was down) are not known to this version, so their vectors are not sent by themselves. `memhive unlink` followed by `memhive link <url>` pushes your own rows again and the hub fills the missing vectors.
+- Hub operators: upgrade the hub to get late vectors. A 0.2.0 hub ignores a row it already holds, and a 0.2.0 client keeps working with the new hub.
+
 ### Fixed
 
 - A daemon that answered one health check too slowly (a busy event loop, a loaded machine, a large `memhive import`) was treated as dead: the hook removed `daemon.json` while the daemon lived on holding its lock, so no new daemon could start and nothing was recorded until `memhive daemon stop`. A live daemon that holds the lock is now left alone, and a running daemon writes `daemon.json` again if it goes missing.
 - `--since` (CLI and MCP) accepted anything: `1w` and `1.5h` matched every row, other text matched none, and a huge number failed with "internal error". It now takes `30m`, `12h`, `7d`, `2w` or a date, and anything else is a usage error (`400 bad_since` from the daemon).
 - Sync against a rate-limited hub: the hub's `429` now carries `retry-after` and the client waits that long instead of doubling its backoff up to 10 minutes. `memhive sync` reports "push failed" with the push and the pull error, not "not logged in or key rejected". Summaries go out with the first batch instead of after the whole backlog of observations.
-- A push backlog no longer waits for the next session or `memhive sync`: the daemon pushes again by itself when a backoff or the hub's `retry-after` ends, and continues 30 seconds later when one call (20 requests) did not send every row.
+- A push backlog no longer waits for the next session or `memhive sync`: the daemon pushes again by itself when a backoff or the hub's `retry-after` ends, and continues 30 seconds later when one call (20 requests) did not send every row. A hub that answers 5xx after a run of 404s is retried too; before, a new observation in that wait cancelled the retry.
 - `memhive sync` exits 1 with the reason on every run when the hub rejected the key or there is no login; before, only the run that got the 401 failed and the next one printed "push skipped" and exited 0.
 - A vector made after its row was pushed (an import, an embedder that was down) now reaches the hub: the row is pushed again, the hub fills the missing vector of the owner's row (nothing else in the row changes) and relays it, and teammates who hold the row without a vector take it on their next pull instead of embedding the row themselves.
+- `memhive sync` printed "push skipped (not logged in or key rejected)" for a hub with a newer protocol too. It prints "push skipped" and the reason.
+- Hub: a pull page held a row up to four times when the row was logged twice (its vector came later). It holds it once.
+- The check that a pid is a memhive daemon (the daemon lock, `memhive daemon stop`) looks at the script path only; a `node` installed under a path that contains "memhive" made every `daemon run` process with this `MEMHIVE_HOME` pass.
 - The daemon's embedding backfill ran once and never again when that first run found nothing to embed, which is the usual case at daemon start: rows left without a vector stayed that way until the daemon restarted or `memhive embed` was run.
 - `memhive import` starts the embedding backfill right away; imported rows waited up to 10 minutes for it.
 - Observations no longer keep HTML entities (`&lt;`, `&gt;`, `&amp;`) that a model copied from the escaped prompt.

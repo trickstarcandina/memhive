@@ -153,7 +153,7 @@ push call, filled up to 75 % of the hub's `body_limit`. On 413 the batch is halv
 too large with its vector is resent without it. A row still too large is skipped by this process
 after 5 refusals and given up after 20 across restarts. 408, 429 and 5xx back off (30 s doubling to 10 min,
 or exactly the hub's `retry-after` when it sends one) and keep the rows. 404 and a bare 4xx (no hub error body: a proxy, a WAF, a wrong path, an old hub)
-back off on the same ladder; after 5 such failures in a row a bare 4xx is retried row by row and only
+back off on the same ladder; after 5 such failures in a row (a 408, 429 or 5xx in between starts the count again) a bare 4xx is retried row by row and only
 the row still refused is given up, while a 404 keeps every row
 queued at the longest backoff and logs an error. The backoff step survives a restart (`sync_state`).
 A push that backs off sets a timer and continues by itself when the wait ends; one that used its 20 rounds with
@@ -186,6 +186,7 @@ GET /v1/sync/pull?project_key=github.com/acme/app&since=<seq>&limit=<1..1000, de
 
 `cwd` is always `""` (0.1 clients require the field). A page also stops at the hub's body limit, so
 `has_more` can be true with fewer rows than `limit`; the first row always goes, so the cursor moves.
+A row that was logged more than once (its vector came after the row) is in a page once, with its current content.
 
 Every accepted row appends an entry to the hub's `sync_log` with a per-hub sequence number (`seq`).
 A pull returns the rows logged after `since`, in seq order. The client stores `next_seq` as its cursor
