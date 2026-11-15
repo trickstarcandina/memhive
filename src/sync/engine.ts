@@ -130,9 +130,10 @@ export class SyncEngine implements SyncHooks {
     },
   };
   private ladder(prev: { delayMs: number } | undefined, e: unknown): number {
-    const next = (prev?.delayMs ?? BACKOFF_START_MS / 2) * 2;
-    // A hub's retry-after (auth throttle, 429) is honored, within the ladder's cap.
-    return Math.min(Math.max(next, e instanceof HubError ? (e.retryAfterMs ?? 0) : 0), BACKOFF_MAX_MS);
+    // A hub's retry-after (rate limit, auth throttle) is used as it is, within the cap: the hub knows when its window
+    // ends, and the doubling ladder would stall a large first push for minutes after each full window.
+    if (e instanceof HubError && e.retryAfterMs) return Math.min(e.retryAfterMs, BACKOFF_MAX_MS);
+    return Math.min((prev?.delayMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS);
   }
   private badPulled = new Set<string>(); // ids already logged as quarantined
   private skipPush = new Set<string>(); // row ids a hub refused SKIP_AFTER times for size: not listed again in this process
@@ -365,8 +366,9 @@ export class SyncEngine implements SyncHooks {
         }
         return out;
       };
-      const hubObs = fit(observations.map((o) => toHub(clipObs(o))));
+      // Summaries first: few and small, and behind a backlog of observations they would wait for every round of it.
       const sums = fit(summaries);
+      const hubObs = fit(observations.map((o) => toHub(clipObs(o))));
       const body: PushBody = {
         projectKey: project.key,
         projectName: project.name,
@@ -843,8 +845,10 @@ export class SyncEngine implements SyncHooks {
   async syncNow(project: Project): Promise<{ pushed: PushResult | null; pulled: number; error?: string }> {
     this.lastError.delete(project.id);
     const pushed = await this.push(project, { force: true });
+    const pushError = this.lastError.get(project.id);
+    this.lastError.delete(project.id);
     const pulled = await this.pull(project, 10000);
-    const error = this.lastError.get(project.id);
+    const error = [pushError, this.lastError.get(project.id)].filter(Boolean).join('; ');
     return error ? { pushed, pulled, error } : { pushed, pulled };
   }
   async close(): Promise<void> {

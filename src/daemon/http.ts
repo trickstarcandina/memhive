@@ -5,7 +5,7 @@ export type Handler = (
   url: URL,
   body: unknown,
   headers: IncomingMessage['headers']
-) => Promise<{ status: number; body: unknown }>;
+) => Promise<{ status: number; body: unknown; headers?: Record<string, string> }>;
 
 // Past the limit the upload is still read (and dropped) up to this much more, so the 413 goes out after the client has
 // finished sending: macOS and Windows reset a connection that is answered mid-upload, and the client never sees the 413.
@@ -37,6 +37,7 @@ export function createJsonServer(
   return createServer(async (req, res) => {
     let status = 500;
     let payload: unknown = { error: { code: 'internal', message: 'internal error' } };
+    let extra: Record<string, string> | undefined;
     try {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (!(await authorize(url, req.headers))) {
@@ -57,7 +58,7 @@ export function createJsonServer(
           return;
         }
       }
-      ({ status, body: payload } = await handler(req.method ?? 'GET', url, body, req.headers));
+      ({ status, body: payload, headers: extra } = await handler(req.method ?? 'GET', url, body, req.headers));
     } catch (e) {
       status = e instanceof Error && e.message === 'body too large' ? 413 : 500;
       payload = {
@@ -71,7 +72,7 @@ export function createJsonServer(
       status,
       status === 413
         ? { 'content-type': 'application/json', connection: 'close' }
-        : { 'content-type': 'application/json' }
+        : { 'content-type': 'application/json', ...extra }
     );
     res.end(JSON.stringify(payload ?? {}), () => {
       if (status !== 413) return;

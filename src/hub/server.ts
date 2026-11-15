@@ -111,7 +111,11 @@ export async function startHub(
       if (url.pathname === '/healthz') return { status: 200, body: { ok: true, version: VERSION } };
       const auth = authed.get(headers)!;
       if (!limiter.allow(auth.keyId))
-        return { status: 429, body: { error: { code: 'rate_limited', message: '60 requests per minute per key' } } };
+        return {
+          status: 429,
+          body: { error: { code: 'rate_limited', message: '60 requests per minute per key' } },
+          headers: { 'retry-after': String(limiter.retryAfter(auth.keyId)) },
+        };
       try {
         return await handleHubRoute(store, cfg, auth, method, url, body);
       } catch (e) {

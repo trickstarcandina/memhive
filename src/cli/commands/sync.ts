@@ -36,7 +36,9 @@ export async function syncCommand(
     io.stdout(
       r.pushed
         ? `pushed ${r.pushed.accepted.observations} observations, ${r.pushed.accepted.summaries} summaries (${r.pushed.rejected.length} rejected); pulled ${r.pulled} rows\n`
-        : `push skipped (not logged in or key rejected); pulled ${r.pulled} rows\n`
+        : r.error?.includes('push: ')
+          ? `push failed; pulled ${r.pulled} rows\n`
+          : `push skipped (not logged in or key rejected); pulled ${r.pulled} rows\n`
     );
     if (r.error) {
       io.stderr(`memhive sync: ${r.error}\n`);

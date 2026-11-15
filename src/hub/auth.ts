@@ -22,6 +22,11 @@ export class RateLimiter {
     b.count++;
     return true;
   }
+  /** Seconds until the key's window ends (at least 1), for retry-after. */
+  retryAfter(key: string, now = Date.now()): number {
+    const b = this.buckets.get(key);
+    return b ? Math.max(1, Math.ceil((b.start + this.windowMs - now) / 1000)) : 1;
+  }
 }
 /** Insertion-ordered map trimmed to max entries: the oldest go first. */
 export const remember = <V>(m: Map<string, V>, k: string, v: V, max: number): void => {

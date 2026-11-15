@@ -363,3 +363,71 @@ describe('review follow-ups', () => {
     }
   });
 });
+
+describe('rate limits and batch order', () => {
+  const accept = (b: any) =>
+    json({
+      accepted: { sessions: b.sessions.length, observations: b.observations.length, summaries: b.summaries.length },
+      rejected: [],
+    });
+  it("a hub's retry-after is used as it is, even after the ladder has grown", async () => {
+    let hint: string | null = null;
+    const t = setup({
+      push: () =>
+        new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }), {
+          status: 429,
+          headers: hint ? { 'retry-after': hint } : {},
+        }),
+    });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    for (let i = 0; i < 4; i++) await t.engine.push(t.project, { force: true });
+    expect(t.store.getSyncState(t.project.id).backoffMs).toBe(240_000);
+    hint = '20'; // the hub knows when its window ends; waiting 8 minutes instead would stall a large first push
+    await t.engine.push(t.project, { force: true });
+    expect(t.store.getSyncState(t.project.id).backoffMs).toBe(20_000);
+  });
+  it('summaries go out with the first batch, not behind a backlog of observations', async () => {
+    const bodies: any[] = [];
+    const t = setup({
+      push: (_n, b) => {
+        bodies.push(b);
+        return accept(b);
+      },
+    });
+    const s = sess(t.project.id, { userId: 'alice' });
+    t.store.upsertSession(s);
+    t.store.insertObservations(
+      Array.from({ length: 250 }, () => obs({ projectId: t.project.id, sessionId: s.id, userId: 'alice' }))
+    );
+    t.store.insertSummaries([
+      {
+        id: '01a1daf8-41d4-71d7-bd85-d9e0b4ad706e',
+        projectId: t.project.id,
+        sessionId: s.id,
+        userId: 'alice',
+        request: 'r',
+        learned: 'l',
+        completed: 'c',
+        nextSteps: 'n',
+        createdAt: new Date().toISOString(),
+        origin: 'local',
+        syncedAt: null,
+      },
+    ]);
+    await t.engine.push(t.project);
+    expect(bodies[0].summaries).toHaveLength(1);
+    expect(bodies[0].observations).toHaveLength(198); // the batch cap (200, with the session) still holds
+    expect(bodies.flatMap((b) => b.observations)).toHaveLength(250);
+  });
+  it('syncNow reports a failed push and a failed pull, not only the last one', async () => {
+    const t = setup({
+      push: () => json({ error: { code: 'rate_limited', message: 'push says no' } }, 429),
+      pull: () => json({ error: { code: 'rate_limited', message: 'pull says no' } }, 429),
+    });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    const r = await t.engine.syncNow(t.project);
+    expect(r.pushed).toBeNull();
+    expect(r.error).toContain('push: push says no');
+    expect(r.error).toContain('pull: pull says no');
+  });
+});

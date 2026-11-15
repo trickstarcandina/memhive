@@ -558,6 +558,22 @@ describe('hub isolated servers', () => {
     expect(statuses.at(-1)).toBe(429);
     await h.close();
   });
+  it('the per-key rate limit says when to come back', async () => {
+    const st = new SqliteHubStore(':memory:', { dims: null });
+    await st.migrate();
+    await st.createUser('u');
+    const k = generateApiKey();
+    await st.createApiKey('u', 'l', k.hash);
+    const h = await startHub(st, { port: 0, embeddingModel: null, embeddingDims: null, bodyLimit: 2_000_000 }, silent);
+    const me = () => fetch(`http://127.0.0.1:${h.port}/v1/me`, { headers: { authorization: `Bearer ${k.raw}` } });
+    for (let i = 0; i < 60; i++) expect((await me()).status).toBe(200);
+    const r = await me();
+    expect(r.status).toBe(429);
+    const wait = Number(r.headers.get('retry-after'));
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThanOrEqual(60);
+    await h.close();
+  });
   it('an unparsable request URL gets 400 and the hub stays up', async () => {
     const st = new SqliteHubStore(':memory:', { dims: null });
     await st.migrate();
