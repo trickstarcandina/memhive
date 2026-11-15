@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import {
   chmodSync,
   lstatSync,
@@ -137,7 +137,9 @@ describe('export and import', () => {
     expect(lines[2]).not.toHaveProperty('projectId');
 
     r = io();
+    const backfill = vi.spyOn(cb.observer, 'backfill');
     expect(await importCommand([out, '--project', KEY], r.io, { home: b.home })).toBe(0);
+    expect(backfill).toHaveBeenCalled(); // imported rows carry no vector: embedded now, not at the next 10-minute tick
     expect(r.out()).toContain(`imported into ${KEY}: 1 sessions, 2 observations, 1 summaries; 0 skipped`);
     expect(r.out()).toContain('`memhive link` to another hub pushes your own rows'); // "nothing is pushed" was only true until then
     const p = cb.store.getProjectByKey(KEY)!;

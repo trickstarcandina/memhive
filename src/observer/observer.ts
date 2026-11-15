@@ -274,6 +274,8 @@ export class Observer {
 
   /** Plan 2 sets this to trigger sync after new rows. */
   onStored: ((projectId: string) => void) | null = null;
+  /** Ids of rows that got their vector after they were stored (backfill, `memhive embed`). */
+  onEmbedded: ((ids: string[]) => void) | null = null;
 
   async flushAll(): Promise<void> {
     await Promise.allSettled([...this.sessions.values()].map((s) => this.flush(s)));
@@ -403,6 +405,11 @@ export class Observer {
         const vecs = await embedder.embed(batch.map(embeddingText));
         store.setObservationEmbeddings(batch.map((o, k) => ({ id: o.id, vec: vecs[k], model: embedder.model })));
         for (const o of batch) this.embedFailures.delete(o.id);
+        try {
+          this.onEmbedded?.(batch.map((o) => o.id));
+        } catch (e) {
+          logger.warn('sync hook failed after embedding', { error: String(e) }); // the vectors are stored: not an embedding failure
+        }
         done += batch.length;
         return true;
       } catch (e) {
@@ -459,6 +466,7 @@ export class Observer {
   }
 
   private backfilling: Promise<void> | null = null;
+  private again = false; // backfill() was called while a run was going
   /**
    * Embeds missing rows back to back, at most one batch per `minIntervalMs`, until none are left or a batch fails
    * (an unreachable embedder then waits for the next trigger instead of being hammered).
@@ -467,15 +475,17 @@ export class Observer {
     if (!this.deps.embedder) return Promise.resolve();
     const batch = opts.batch ?? 64;
     const gap = opts.minIntervalMs ?? 1000;
+    if (this.backfilling) this.again = true; // a run on its last batch would end without the rows added since it listed them
     // biome-ignore lint/suspicious/noAssignInExpressions: lazy init with ??= is intended
     return (this.backfilling ??= (async () => {
       try {
         while (!this.closed) {
+          this.again = false;
           const t0 = Date.now();
           const rows = this.missing(batch);
           if (rows.length === 0) return;
           const r = await this.embed(rows);
-          if (r.failed || rows.length < batch) return;
+          if (r.failed || (rows.length < batch && !this.again)) return;
           const wait = gap - (Date.now() - t0);
           if (wait > 0)
             await new Promise((res) => {
@@ -485,10 +495,12 @@ export class Observer {
         }
       } catch (e) {
         this.deps.logger.warn('embedding backfill stopped', { error: String(e) });
-      } finally {
-        this.backfilling = null;
       }
-    })());
+      // Cleared in a later microtask, never inside the body: a run that finds nothing ends before the assignment above
+      // is done, and a `finally` there left the finished run in place, so no backfill ran again in this daemon.
+    })().finally(() => {
+      this.backfilling = null;
+    }));
   }
   private closed = false;
 

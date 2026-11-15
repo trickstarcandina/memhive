@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SqliteStore } from '../../src/store/sqlite/store.js';
 import { Observer, type SessionCtx } from '../../src/observer/observer.js';
 import { ProviderError, type LlmProvider } from '../../src/providers/types.js';
-import { sess } from '../store/store-contract.js';
+import { obs, sess } from '../store/store-contract.js';
+import type { Observation } from '../../src/store/types.js';
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 const obsJson = (n: number) =>
@@ -216,6 +217,63 @@ describe('Observer', () => {
     o.onTool(c, tool(1));
     await vi.advanceTimersByTimeAsync(50);
     expect(complete).toHaveBeenCalledTimes(0); // only 1 fresh event, below flushCount, idle (100 s) not reached
+  });
+
+  it('a backfill that found nothing does not block the next one', async () => {
+    const embedder = { model: 'm', dims: 2, embed: vi.fn(async (t: string[]) => t.map(() => [1, 0])) };
+    const { store, ctx, observer } = setup({ complete: vi.fn() }, embedder);
+    await observer.backfill(); // the daemon's first tick: nothing to embed yet
+    store.insertObservations([obs({ projectId: ctx.projectId, sessionId: ctx.sessionId })]);
+    await observer.backfill();
+    expect(store.listMissingEmbedding(10)).toHaveLength(0);
+  });
+
+  it('the backfill reports the rows it embedded', async () => {
+    const embedder = { model: 'm', dims: 2, embed: vi.fn(async (t: string[]) => t.map(() => [1, 0])) };
+    const { store, ctx, observer } = setup({ complete: vi.fn() }, embedder);
+    const row = (p: Partial<Observation>) => obs({ projectId: ctx.projectId, sessionId: ctx.sessionId, ...p });
+    const pushed = row({ syncedAt: '2026-01-01T00:00:00.000Z' });
+    const queued = row({});
+    const theirs = row({ userId: 'bob', origin: 'hub', syncedAt: '2026-01-01T00:00:00.000Z' });
+    store.insertObservations([pushed, queued, theirs]);
+    const seen: string[] = [];
+    observer.onEmbedded = (ids) => seen.push(...ids);
+    await observer.backfill();
+    expect(store.listMissingEmbedding(10)).toHaveLength(0);
+    expect(seen.sort()).toEqual([pushed.id, queued.id, theirs.id].sort()); // the sync engine picks the ones to push again
+  });
+
+  it('a sync hook that throws is not an embedding failure', async () => {
+    const embedder = { model: 'm', dims: 2, embed: vi.fn(async (t: string[]) => t.map(() => [1, 0])) };
+    const { store, ctx, observer } = setup({ complete: vi.fn() }, embedder);
+    const row = () => obs({ projectId: ctx.projectId, sessionId: ctx.sessionId });
+    store.insertObservations([row(), row()]);
+    observer.onEmbedded = () => {
+      throw new Error('store closed');
+    };
+    await observer.backfill();
+    expect(store.listMissingEmbedding(10)).toHaveLength(0);
+    expect(embedder.embed).toHaveBeenCalledTimes(1); // not embedded again row by row
+  });
+
+  it('rows added while the last batch is out are embedded by the same run', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const embed = vi.fn(async (t: string[]) => {
+      if (embed.mock.calls.length === 1) await gate;
+      return t.map(() => [1, 0]);
+    });
+    const { store, ctx, observer } = setup({ complete: vi.fn() }, { model: 'm', dims: 2, embed });
+    const row = () => obs({ projectId: ctx.projectId, sessionId: ctx.sessionId });
+    store.insertObservations([row()]);
+    const run = observer.backfill({ minIntervalMs: 0 });
+    store.insertObservations([row()]); // an import, while the run waits for the embedder
+    void observer.backfill();
+    release();
+    await run;
+    expect(store.listMissingEmbedding(10)).toHaveLength(0);
   });
 
   it('embeds stored observations, and leaves embedding_model null when embedder fails', async () => {
