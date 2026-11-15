@@ -76,11 +76,14 @@ describe('daemon route matrix', () => {
     expect(await titles('2020-01-01')).toHaveLength(await titles('9999d').then((t) => t.length)); // a bare date is a date
   });
   // Compared as text, such a value used to match every row ("1w" < "2026-…") or none ("garbage"), silently.
-  it.each(['garbage', '7x', '-1d', '1.5h', '99999999999999999999d'])('since=%s -> 400 bad_since', async (since) => {
-    const r = await route('GET', `/v1/search?project_key=${KEY}&since=${encodeURIComponent(since)}`);
-    expect(r.status).toBe(400);
-    expect((r.body as { error: { code: string } }).error.code).toBe('bad_since');
-  });
+  it.each(['garbage', '7x', '-1d', '1.5h', '99999999999999999999d', '7', 'week 2'])(
+    'since=%s -> 400 bad_since',
+    async (since) => {
+      const r = await route('GET', `/v1/search?project_key=${KEY}&since=${encodeURIComponent(since)}`);
+      expect(r.status).toBe(400);
+      expect((r.body as { error: { code: string } }).error.code).toBe('bad_since');
+    }
+  );
 
   it.each([
     ['5', '5', 11],
