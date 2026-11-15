@@ -59,6 +59,14 @@ describe('pull edge cases', () => {
     await t.engine.pull(t.project, 2000);
     expect(t.pulls).toEqual([7]);
   });
+  it('a row the hub lists twice in one page counts once', async () => {
+    const s = hubSess();
+    const o = hubObs(s.id);
+    const t = setup({
+      pull: () => ({ sessions: [s], observations: [o, o], summaries: [], next_seq: 3, has_more: false, max_seq: 3 }),
+    });
+    expect(await t.engine.pull(t.project, 2000)).toBe(2);
+  });
   it('failure on page 2 keeps page 1 progress', async () => {
     const s = hubSess();
     const o = hubObs(s.id);
@@ -429,5 +437,95 @@ describe('rate limits and batch order', () => {
     expect(r.pushed).toBeNull();
     expect(r.error).toContain('push: push says no');
     expect(r.error).toContain('pull: pull says no');
+  });
+});
+
+describe('a backlog continues by itself', () => {
+  const accept = (b: any) =>
+    json({
+      accepted: { sessions: b.sessions.length, observations: b.observations.length, summaries: b.summaries.length },
+      rejected: [],
+    });
+  const limited = () =>
+    new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }), {
+      status: 429,
+      headers: { 'retry-after': '20' },
+    });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  it('pushes again when the backoff ends, without a new trigger', async () => {
+    vi.useFakeTimers();
+    let open = false;
+    const t = setup({ push: (_n, b) => (open ? accept(b) : limited()) });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    expect(await t.engine.push(t.project)).toBeNull();
+    open = true;
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(t.pushes()).toBe(1); // still inside the hub's window
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(t.store.listUnsynced('sessions', t.project.id, 5)).toHaveLength(0);
+    await t.engine.close();
+  });
+  it('a trigger during the backoff does not lose the retry', async () => {
+    vi.useFakeTimers();
+    let open = false;
+    const t = setup({ push: (_n, b) => (open ? accept(b) : limited()) });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    await t.engine.push(t.project);
+    open = true;
+    t.engine.schedulePush(t.project.id); // a new observation: its debounced push is turned away by the backoff
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(t.pushes()).toBe(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(t.store.listUnsynced('sessions', t.project.id, 5)).toHaveLength(0);
+    await t.engine.close();
+  });
+  it('more rows than one call sends keep going in the background', async () => {
+    vi.useFakeTimers();
+    const t = setup({ push: (_n, b) => accept(b) });
+    const s = sess(t.project.id, { userId: 'alice' });
+    t.store.upsertSession(s);
+    t.store.insertObservations(
+      Array.from({ length: 4100 }, () => obs({ projectId: t.project.id, sessionId: s.id, userId: 'alice' }))
+    );
+    await t.engine.push(t.project);
+    expect(t.store.listUnsynced('observations', t.project.id, 5000).length).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(t.pushes()).toBe(20); // paced under the hub's 60 requests a minute, not at the debounce
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(t.store.listUnsynced('observations', t.project.id, 5000)).toHaveLength(0);
+    await t.engine.close();
+  });
+  it('a hub that keeps answering 404 is left alone once the push is blocked', async () => {
+    vi.useFakeTimers();
+    const t = setup({ push: () => json({ error: { code: 'not_found', message: 'no' } }, 404) });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    for (let i = 0; i < 5; i++) await t.engine.push(t.project, { force: true });
+    const sent = t.pushes();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(t.pushes()).toBe(sent); // a wrong hub URL is not asked again every 10 minutes for as long as the daemon lives
+    await t.engine.close();
+  });
+  it('a hub that stays down is retried on the ladder, not in a tight loop', async () => {
+    vi.useFakeTimers();
+    const t = setup({ push: () => json({ error: { code: 'down', message: 'no' } }, 503) });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    await t.engine.push(t.project);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(t.pushes()).toBeLessThanOrEqual(6); // 30 s, 1, 2, 4, 8 min
+    await t.engine.close();
+  });
+});
+
+describe('sync with no usable key', () => {
+  it('syncNow reports a rejected key and a missing login as errors', async () => {
+    const t = setup({});
+    saveCredentials(t.home, { hubs: { [hubUrl]: { key: 'mh_' + 'A'.repeat(43), user: 'alice', authFailed: true } } });
+    const rejected = await t.engine.syncNow(t.project);
+    expect(rejected.pushed).toBeNull();
+    expect(rejected.error).toBe(`the hub rejected the key (memhive login ${hubUrl})`);
+    saveCredentials(t.home, { hubs: {} });
+    expect((await t.engine.syncNow(t.project)).error).toBe(`not logged in to the hub (memhive login ${hubUrl})`);
   });
 });

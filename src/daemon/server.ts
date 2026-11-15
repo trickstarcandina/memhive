@@ -101,6 +101,7 @@ export function createDaemonContext(home: string, env: NodeJS.ProcessEnv = proce
     embedModel: settings.embed?.model ?? null,
   });
   observer.onStored = (projectId) => sync.schedulePush(projectId);
+  observer.onEmbedded = (ids) => sync.vectorsAdded(ids);
   const paused = pauseReader(home);
   const disabled = envDisabled(env);
   const excluded = (info: ProjectInfo) => info.disabled || matchesAny(settings.excludeProjects, info.key, info.top);

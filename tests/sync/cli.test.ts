@@ -164,6 +164,23 @@ describe('login / link / sync / unlink', () => {
       await d.close().catch(() => {});
     }
   });
+  it('a key the hub rejected fails every sync, not only the one that found out', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    const cwd = mkdtempSync(path.join(tmpdir(), 'mh-cwd-'));
+    await loginCommand([hubUrl], cap().io, { home, readKey: async () => key });
+    const d = await startDaemon(createDaemonContext(home, env), { port: 0 });
+    try {
+      expect(await linkCommand([hubUrl], cap().io, { home, cwd })).toBe(0);
+      saveCredentials(home, { hubs: { [hubUrl]: { key, user: 'alice', authFailed: true } } });
+      for (let i = 0; i < 2; i++) {
+        const c = cap();
+        expect(await syncCommand([], c.io, { home, cwd })).toBe(1);
+        expect(c.o.err).toBe(`memhive sync: the hub rejected the key (memhive login ${hubUrl})\n`);
+      }
+    } finally {
+      await d.close().catch(() => {});
+    }
+  });
   it('a push that failed is reported as failed, not as a missing login', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     const cwd = mkdtempSync(path.join(tmpdir(), 'mh-cwd-'));

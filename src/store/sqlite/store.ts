@@ -1031,7 +1031,25 @@ export class SqliteStore implements Store {
   }
   markSynced(table: 'sessions' | 'observations' | 'summaries', ids: string[], at: string): void {
     if (ids.length === 0) return;
-    this.db.prepare(`UPDATE ${table} SET synced_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`).run(at, ...ids);
+    const bare = table === 'observations' ? ', pushed_bare = 0' : ''; // markPushedBare sets it for the rows it is true of
+    this.db
+      .prepare(`UPDATE ${table} SET synced_at = ?${bare} WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .run(at, ...ids);
+  }
+  markPushedBare(ids: string[]): void {
+    if (ids.length === 0) return;
+    this.db
+      .prepare(`UPDATE observations SET pushed_bare = 1 WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .run(...ids);
+  }
+  requeueBare(ids: string[]): string[] {
+    if (ids.length === 0) return [];
+    const rows = this.db
+      .prepare(
+        `UPDATE observations SET synced_at = NULL WHERE pushed_bare = 1 AND synced_at IS NOT NULL AND id IN (${ids.map(() => '?').join(',')}) RETURNING project_id`
+      )
+      .all(...ids) as Row[];
+    return [...new Set(rows.map((r) => String(r.project_id)))];
   }
   getPullCursor(projectId: string): number {
     const r = this.db.prepare('SELECT pull_cursor FROM sync_state WHERE project_id = ?').get(projectId) as

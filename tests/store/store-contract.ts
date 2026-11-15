@@ -220,6 +220,22 @@ export function storeContract(name: string, open: () => Store): void {
       expect(s.getHubEpoch(p.id)).toBeNull();
     });
 
+    it('rows pushed without a vector are queued again, and only those', () => {
+      const p = s.getOrCreateProject('k', 'n');
+      const a = sess(p.id);
+      s.upsertSession(a);
+      const row = () => obs({ projectId: p.id, sessionId: a.id });
+      const [bare, full, imported] = [row(), row(), row()];
+      s.insertObservations([bare, full, { ...imported, syncedAt: '2026-01-01T00:00:00Z' }]);
+      s.markSynced('observations', [bare.id, full.id], '2026-01-01T00:00:00Z');
+      s.markPushedBare([bare.id]);
+      expect(s.requeueBare([bare.id, full.id, imported.id])).toEqual([p.id]);
+      expect(s.listUnsynced('observations', p.id, 10).map((x) => x.id)).toEqual([bare.id]);
+      expect(s.requeueBare([bare.id])).toEqual([]); // already queued
+      s.markSynced('observations', [bare.id], '2026-01-02T00:00:00Z'); // pushed again, this time with its vector
+      expect(s.requeueBare([bare.id])).toEqual([]);
+    });
+
     it('relink reset: only local-origin rows become unsynced, pulled sessions are never pushed, cursor is 0', () => {
       const p = s.getOrCreateProject('k', 'n');
       const mine = sess(p.id);

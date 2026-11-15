@@ -23,6 +23,8 @@ import { loadCredentials, saveCredentials } from './credentials.js';
 
 const BATCH = 200;
 const MAX_ROUNDS = 20; // bounds one push() call (hub allows 60 requests/min/key)
+const RETRY_MARGIN_MS = 50; // a retry timer fires this long after the backoff ends, never a moment before
+const CONTINUE_MS = 30_000; // pause between two calls of a backlog: 20 requests per 30 s leaves a third of the hub's limit to pulls
 const MAX_BODY_BYTES = 1.5 * 1024 * 1024; // hub default limit is 2 MB; used when the hub does not report body_limit
 // A hub's body_limit is believed up to this much: a hostile hub must not lift the response cap (4x, so 32 MB) without bound.
 const MAX_HUB_BODY_LIMIT = 8 * 1024 * 1024;
@@ -245,16 +247,34 @@ export class SyncEngine implements SyncHooks {
       }));
   }
 
-  schedulePush(projectId: string): void {
+  /** One timer per project: the debounce after new rows, or the wait until a backoff ends (pushOnce asks for that one). */
+  schedulePush(projectId: string, delayMs = this.debounceMs): void {
+    if (this.closed) return;
     const t = this.timers.get(projectId);
     if (t) clearTimeout(t);
     const timer = setTimeout(() => {
       this.timers.delete(projectId);
-      const p = this.deps.store.getProject(projectId);
-      if (p) void this.push(p).catch(() => {});
-    }, this.debounceMs);
+      try {
+        const p = this.deps.store.getProject(projectId);
+        if (p) void this.push(p).catch(() => {});
+      } catch {
+        /* store closed: the daemon is shutting down */
+      }
+    }, delayMs);
     timer.unref?.();
     this.timers.set(projectId, timer);
+  }
+  private closed = false;
+
+  /**
+   * Rows that just got their vector. Those the hub holds without one (pushed before they were embedded: an import, an
+   * embedder that was down) are queued again. The hub only fills a missing vector of the owner's row; nothing else in
+   * the row changes there.
+   */
+  vectorsAdded(ids: string[]): void {
+    // A backfill reports a batch every second: restarting the debounce each time would hold every push back until it ends.
+    for (const projectId of this.deps.store.requeueBare(ids))
+      if (!this.timers.has(projectId)) this.schedulePush(projectId);
   }
 
   /** Sends one body; rows the hub rejects for its embedder are re-sent once without a vector. */
@@ -300,14 +320,19 @@ export class SyncEngine implements SyncHooks {
   private async pushOnce(project: Project, opts: { force?: boolean }): Promise<PushResult | null> {
     const total: PushResult = { accepted: { sessions: 0, observations: 0, summaries: 0 }, rejected: [] };
     const off = this.backoff.get(project.id);
-    if (off && !opts.force && Date.now() < off.until) return null;
+    if (off && !opts.force && Date.now() < off.until) {
+      // This push is the retry once the wait is over. A blocked project (404) waits for a trigger after it instead.
+      if (off.strikes < MAX_STRIKES) this.schedulePush(project.id, off.until - Date.now() + RETRY_MARGIN_MS);
+      return null;
+    }
     let cap = BATCH; // rows per body; halved on 413 for the rest of this call
     let isolating = false; // sending row by row to find a row a bare 4xx keeps refusing
     {
       const c = this.clientFor(project);
       if (c && (await this.protocolError(c, project))) return null;
     }
-    for (let round = 0; round < MAX_ROUNDS; round++) {
+    let round = 0;
+    for (; round < MAX_ROUNDS; round++) {
       const client = this.clientFor(project);
       if (!client) return round === 0 ? null : total;
       const { store, logger } = this.deps;
@@ -341,15 +366,13 @@ export class SyncEngine implements SyncHooks {
         return total;
       }
       const vecs = store.getObservationEmbeddings(observations.map((o) => o.id));
+      const fits = (v: number[] | undefined, model: string | null): v is number[] =>
+        !!v &&
+        (!cfg || (cfg.embedding_model !== null && cfg.embedding_model === model && cfg.embedding_dims === v.length));
       const toHub = (o: Observation): HubObservation => {
         const v = vecs.get(o.id);
-        const fits =
-          v &&
-          (!cfg ||
-            (cfg.embedding_model !== null &&
-              cfg.embedding_model === o.embeddingModel &&
-              cfg.embedding_dims === v.length));
-        return { ...o, embedding: fits ? v! : null, embeddingModel: fits ? o.embeddingModel : null };
+        const ok = fits(v, o.embeddingModel);
+        return { ...o, embedding: ok ? v : null, embeddingModel: ok ? o.embeddingModel : null };
       };
       // Fill the body up to the byte budget; the first row always goes, so an oversized row reaches the 413 path below.
       const budget = cfg?.body_limit ? Math.floor(Math.min(cfg.body_limit, MAX_HUB_BODY_LIMIT) * 0.75) : MAX_BODY_BYTES;
@@ -420,8 +443,12 @@ export class SyncEngine implements SyncHooks {
             refused = true;
             result = this.giveUp(project, body, e as HubError);
           } else {
-            const delayMs = status === 404 && strikes >= MAX_STRIKES ? BACKOFF_MAX_MS : this.ladder(prev, e);
+            const blocked = status === 404 && strikes >= MAX_STRIKES;
+            const delayMs = blocked ? BACKOFF_MAX_MS : this.ladder(prev, e);
             this.backoff.set(project.id, { until: Date.now() + delayMs, delayMs, strikes });
+            // Rows stay queued, and nothing else may trigger a push before the next session: come back when the wait is
+            // over. Not for a blocked project: a wrong hub URL would be asked every 10 minutes for as long as the daemon lives.
+            if (!blocked) this.schedulePush(project.id, delayMs + RETRY_MARGIN_MS);
             this.noteError(project.id, `push: ${e instanceof Error ? e.message : String(e)}`);
             if (status === 404 && strikes === MAX_STRIKES)
               logger.error('push blocked: hub keeps answering 404 (wrong hub URL or old hub?); rows stay queued', {
@@ -488,9 +515,21 @@ export class SyncEngine implements SyncHooks {
           };
         }
       }
-      const done = (ids: string[]) => ids.filter((id) => !kept.has(id));
+      // Rows that went without a vector are remembered, so the vector follows when the backfill makes it (vectorsAdded).
+      // One that got its vector while this request was on its way stays queued: the next round sends it.
+      const bare = hubObs.filter((o) => !o.embedding).map((o) => o.id);
+      const nowVecs = store.getObservationEmbeddings(bare);
+      const late = new Set(
+        store
+          .getObservations(bare)
+          .filter((o) => fits(nowVecs.get(o.id), o.embeddingModel))
+          .map((o) => o.id)
+      );
+      const refusedIds = new Set(result.rejected.map((r) => r.id));
+      const done = (ids: string[]) => ids.filter((id) => !kept.has(id) && !late.has(id));
       store.markSynced('sessions', done(sessions.map((s) => s.id)), now);
       store.markSynced('observations', done(hubObs.map((o) => o.id)), now);
+      store.markPushedBare(done(bare).filter((id) => !refusedIds.has(id))); // a rejected row is not on the hub
       store.markSynced('summaries', done(sums.map((s) => s.id)), now);
       // A tombstone the hub refused (not_owner) is not retried either. One sent in a body the hub turned down whole was never
       // looked at: it stays queued and goes alone next round. A tombstone-only body that is turned down is given up, so this is bounded.
@@ -523,6 +562,7 @@ export class SyncEngine implements SyncHooks {
       total.rejected.push(...result.rejected);
       if (kept.size >= sessions.length + hubObs.length + sums.length + tombstones.length) break; // only queued-again rows left: the next round would resend them
     }
+    if (round === MAX_ROUNDS) this.schedulePush(project.id, CONTINUE_MS); // more rows than one call sends: the rest follows in the background
     return total;
   }
 
@@ -737,7 +777,25 @@ export class SyncEngine implements SyncHooks {
           }
           const haveObs = store.hasObservations(observations.map(({ row }) => row.id));
           const haveSums = store.hasSummaries(summaries.map(({ row }) => row.id));
+          const usable = (o: { embedding?: number[] | null; embeddingModel?: string | null }) =>
+            !!o.embedding && !!embedDims && o.embedding.length === embedDims && o.embeddingModel === embedModel;
+          // A row held without a vector comes again when its owner's vector reached the hub later (embedded after the push).
+          const held = new Map(
+            store
+              .getObservations(
+                observations.filter(({ row }) => haveObs.has(row.id) && usable(row)).map(({ row }) => row.id)
+              )
+              .map((x) => [x.id, x])
+          );
           for (const { row: o, raw } of observations) {
+            const cur = held.get(o.id);
+            if (cur && cur.origin === 'hub' && cur.projectId === project.id && cur.embeddingModel !== embedModel) {
+              try {
+                store.setObservationEmbedding(o.id, o.embedding!, o.embeddingModel!); // not counted: no row was pulled
+              } catch (e) {
+                logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) });
+              }
+            }
             if (haveObs.has(o.id) || dead.o.has(o.id)) continue;
             if (store.getSession(o.sessionId)?.projectId !== project.id) {
               hold('observations', raw, 'unknown session'); // or another project's: timeline and context would mix projects
@@ -763,15 +821,10 @@ export class SyncEngine implements SyncHooks {
             };
             if (!apply('observations', raw, () => store.insertObservations([row]))) continue;
             pageApplied++;
-            if (
-              o.embedding &&
-              embedDims &&
-              o.embedding.length === embedDims &&
-              o.embeddingModel &&
-              o.embeddingModel === embedModel
-            ) {
+            haveObs.add(o.id); // the hub lists a row twice when its vector came later: the second copy is not another row
+            if (usable(o)) {
               try {
-                store.setObservationEmbedding(o.id, o.embedding, o.embeddingModel);
+                store.setObservationEmbedding(o.id, o.embedding!, o.embeddingModel!);
               } catch (e) {
                 logger.warn('pulled vector rejected locally', { id: o.id, error: String(e) });
               }
@@ -843,6 +896,15 @@ export class SyncEngine implements SyncHooks {
   }
 
   async syncNow(project: Project): Promise<{ pushed: PushResult | null; pulled: number; error?: string }> {
+    // No usable key is an error on every call, not only on the one where the hub answered 401.
+    if (!this.clientFor(project)) {
+      const rejected = loadCredentials(this.deps.home).hubs[project.hubUrl ?? '']?.authFailed;
+      return {
+        pushed: null,
+        pulled: 0,
+        error: `${rejected ? 'the hub rejected the key' : 'not logged in to the hub'} (memhive login ${project.hubUrl})`,
+      };
+    }
     this.lastError.delete(project.id);
     const pushed = await this.push(project, { force: true });
     const pushError = this.lastError.get(project.id);
@@ -852,6 +914,7 @@ export class SyncEngine implements SyncHooks {
     return error ? { pushed, pulled, error } : { pushed, pulled };
   }
   async close(): Promise<void> {
+    this.closed = true;
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     let t: NodeJS.Timeout | undefined;

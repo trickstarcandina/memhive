@@ -103,4 +103,9 @@ export const SQLITE_MIGRATIONS: string[] = [
   `
   ALTER TABLE tombstones ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
   `,
+  // 13: own rows the hub got without a vector (pushed before they were embedded). Only these are pushed again when the
+  // vector exists: not rows marked synced by an import, not rows that went with their vector.
+  `
+  ALTER TABLE observations ADD COLUMN pushed_bare INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
