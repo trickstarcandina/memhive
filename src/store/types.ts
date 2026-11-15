@@ -76,6 +76,7 @@ export interface SearchFilters {
   since?: string;
   limit: number;
   offset?: number;
+  maxDistance?: number; // vector search only: neighbours farther than this are left out
 }
 export interface SearchHit {
   id: string;

@@ -254,6 +254,20 @@ export function storeContract(name: string, open: () => Store): void {
       const hits = s.searchObservationsVector([1, 0, 0, 0], { projectId: p.id, limit: 5 });
       expect(hits[0].id).toBe(o.id);
     });
+    it('maxDistance drops vector neighbours that are too far to be a match', () => {
+      const p = s.getOrCreateProject('k', 'n');
+      const a = sess(p.id);
+      s.upsertSession(a);
+      const near = obs({ projectId: p.id, sessionId: a.id });
+      const far = obs({ projectId: p.id, sessionId: a.id });
+      s.insertObservations([near, far]);
+      s.setObservationEmbedding(near.id, [1, 0, 0, 0], 'test-4');
+      s.setObservationEmbedding(far.id, [0, 1, 0, 0], 'test-4'); // distance 1.41 from the query
+      const q = (maxDistance?: number) =>
+        s.searchObservationsVector([1, 0, 0, 0], { projectId: p.id, limit: 5, maxDistance }).map((h) => h.id);
+      expect(q()).toEqual([near.id, far.id]); // k-NN alone returns the nearest rows however far they are
+      expect(q(0.5)).toEqual([near.id]);
+    });
 
     describe('search filters and isolation', () => {
       const setup = () => {

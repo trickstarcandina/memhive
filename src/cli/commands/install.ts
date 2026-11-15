@@ -144,6 +144,7 @@ export async function installCommand(
       model,
       dims,
       apiKey: await askKey('Embedding API key', current.embed?.apiKey),
+      maxDistance: current.embed?.maxDistance,
     };
   }
   rl?.close();

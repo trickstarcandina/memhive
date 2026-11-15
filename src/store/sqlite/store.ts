@@ -850,7 +850,10 @@ export class SqliteStore implements Store {
     // a selective filter, widen k (x4) until the limit fills, the partition runs out, or k reaches the cap. Simpler than
     // pre-filtering ids into the vec0 query, and exact up to the cap.
     for (let k = Math.max(f.limit * 4, 50); ; k = Math.min(k * 4, VEC_K_CAP)) {
-      const candidates = (all ? knn.all(buf, k) : knn.all(buf, f.projectId, k)) as Row[];
+      const found = (all ? knn.all(buf, k) : knn.all(buf, f.projectId, k)) as Row[];
+      // k-NN returns the nearest rows however far they are; past the cutoff (ordered by distance) nothing closer follows.
+      const max = f.maxDistance;
+      const candidates = max === undefined ? found : found.filter((c) => c.distance <= max);
       if (candidates.length === 0) return [];
       const ids = candidates.map((c) => c.id);
       const keep = new Set<string>();
@@ -863,7 +866,7 @@ export class SqliteStore implements Store {
           keep.add(r.id);
       }
       const hits = candidates.filter((c) => keep.has(c.id));
-      if (hits.length >= f.limit || candidates.length < k || k >= VEC_K_CAP)
+      if (hits.length >= f.limit || found.length < k || candidates.length < found.length || k >= VEC_K_CAP)
         return hits.slice(0, f.limit).map((c) => ({ id: c.id, score: 1 / (1 + c.distance) }));
     }
   }

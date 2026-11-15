@@ -56,6 +56,19 @@ describe('settings', () => {
     expect(s.embed).toEqual({ baseUrl: 'http://e/v1', apiKey: undefined, model: 'bge-m3', dims: 1024 });
     expect(s.contextTokens).toBe(500);
   });
+  it('embed.maxDistance: file or MEMHIVE_EMBED_MAX_DISTANCE, a positive number; anything else is off', () => {
+    const env = { MEMHIVE_EMBED_BASE_URL: 'http://e/v1', MEMHIVE_EMBED_MODEL: 'm', MEMHIVE_EMBED_DIMS: '4' };
+    const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
+    expect(loadSettings(home, env).embed!.maxDistance).toBeUndefined();
+    expect(loadSettings(home, { ...env, MEMHIVE_EMBED_MAX_DISTANCE: '0.8' }).embed!.maxDistance).toBe(0.8);
+    expect(loadSettings(home, { ...env, MEMHIVE_EMBED_MAX_DISTANCE: 'near' }).embed!.maxDistance).toBeUndefined();
+    writeFileSync(
+      path.join(home, 'settings.json'),
+      JSON.stringify({ embed: { baseUrl: 'http://e/v1', model: 'm', dims: 4, maxDistance: 1.1 } })
+    );
+    expect(loadSettings(home, {}).embed!.maxDistance).toBe(1.1);
+    expect(loadSettings(home, { MEMHIVE_EMBED_MAX_DISTANCE: '0' }).embed!.maxDistance).toBe(1.1);
+  });
   it('ignores non-object sections in the file', () => {
     const home = mkdtempSync(path.join(tmpdir(), 'mh-'));
     writeFileSync(path.join(home, 'settings.json'), '{"llm":"x","embed":[1]}');
