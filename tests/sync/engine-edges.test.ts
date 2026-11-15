@@ -507,6 +507,23 @@ describe('a backlog continues by itself', () => {
     expect(t.pushes()).toBe(sent); // a wrong hub URL is not asked again every 10 minutes for as long as the daemon lives
     await t.engine.close();
   });
+  it('a 503 after the 404s is retried by itself, also when a trigger lands in the wait', async () => {
+    vi.useFakeTimers();
+    let mode: 'gone' | 'down' | 'ok' = 'gone';
+    const t = setup({
+      push: (_n, b) =>
+        mode === 'ok' ? accept(b) : json({ error: { code: mode, message: 'no' } }, mode === 'gone' ? 404 : 503),
+    });
+    t.store.upsertSession(sess(t.project.id, { userId: 'alice' }));
+    for (let i = 0; i < 5; i++) await t.engine.push(t.project, { force: true }); // blocked
+    mode = 'down';
+    await t.engine.push(t.project, { force: true }); // the hub is there again, but down: this one is retried
+    mode = 'ok';
+    t.engine.schedulePush(t.project.id); // a new observation: its debounced push replaces the retry timer
+    await vi.advanceTimersByTimeAsync(11 * 60_000);
+    expect(t.store.listUnsynced('sessions', t.project.id, 5)).toHaveLength(0);
+    await t.engine.close();
+  });
   it('a hub that stays down is retried on the ladder, not in a tight loop', async () => {
     vi.useFakeTimers();
     const t = setup({ push: () => json({ error: { code: 'down', message: 'no' } }, 503) });

@@ -431,7 +431,7 @@ export class SyncEngine implements SyncHooks {
           const prev = this.backoff.get(project.id);
           const status = e instanceof HubError ? e.status : 0;
           const bounded = !transient(e);
-          const strikes = (prev?.strikes ?? 0) + (bounded ? 1 : 0);
+          const strikes = bounded ? (prev?.strikes ?? 0) + 1 : 0; // "in a row": a 5xx means the hub is there, so its 404s start over
           if (bounded && status !== 404 && strikes >= MAX_STRIKES) {
             if (taken > 1) {
               cap = 1;
