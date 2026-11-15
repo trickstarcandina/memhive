@@ -31,3 +31,24 @@ it('parses summary', () => {
   });
   expect(parseSummary('{}')).toBeNull();
 });
+// The prompt escapes & < > in recorded data; a model that copies from it would otherwise store the entities.
+it('turns entities copied from the prompt back into text', () => {
+  const [o] = parseObservations(
+    JSON.stringify({
+      observations: [
+        {
+          type: 'bugfix',
+          title: 'Expiry check uses &lt;= not &lt;',
+          facts: ['key was &lt;redacted&gt;', 'a &amp;&amp; b', 'literal &amp;lt; stays an entity'],
+          narrative: 'x &gt; y',
+          files_modified: ['src/a&amp;b.ts'],
+        },
+      ],
+    })
+  )!;
+  expect(o.title).toBe('Expiry check uses <= not <');
+  expect(o.facts).toEqual(['key was <redacted>', 'a && b', 'literal &lt; stays an entity']);
+  expect(o.narrative).toBe('x > y');
+  expect(o.filesModified).toEqual(['src/a&b.ts']);
+  expect(parseSummary('{"request":"fix &lt;T&gt; &amp; co"}')!.request).toBe('fix <T> & co');
+});

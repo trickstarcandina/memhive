@@ -27,12 +27,15 @@ function extractJson(text: string): unknown | undefined {
   const end = candidate.lastIndexOf('}');
   return start >= 0 && end > start ? safeJsonParse(candidate.slice(start, end + 1)) : undefined;
 }
-const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+// The prompt escapes & < > in recorded data (prompts.ts); a model that copies from it hands the entities back.
+const unesc = (s: string): string =>
+  s.replace(/&(lt|gt|amp);/g, (_, e: 'lt' | 'gt' | 'amp') => ({ lt: '<', gt: '>', amp: '&' })[e]);
+const str = (v: unknown, max: number) => (typeof v === 'string' ? unesc(v).trim().slice(0, max) : '');
 const strs = (v: unknown) =>
   Array.isArray(v)
     ? v
         .filter((x) => typeof x === 'string')
-        .map((x) => x.trim())
+        .map((x) => unesc(x).trim())
         .filter(Boolean)
         .slice(0, 20)
     : [];

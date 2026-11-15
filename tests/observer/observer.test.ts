@@ -49,6 +49,8 @@ describe('Observer', () => {
       .fn()
       .mockResolvedValueOnce(obsJson(2))
       .mockResolvedValueOnce('not json')
+      .mockResolvedValueOnce('not json') // the one retry fails the same way
+      .mockRejectedValueOnce(new ProviderError('down', 'transport'))
       .mockRejectedValueOnce(new ProviderError('down', 'transport'))
       .mockResolvedValueOnce(obsJson(1));
     const { ctx, observer } = setup({ complete });
@@ -56,7 +58,28 @@ describe('Observer', () => {
       for (let i = 0; i < 8; i++) observer.onTool(ctx, tool(round * 8 + i));
       await vi.runAllTimersAsync();
     }
-    expect(observer.counters).toMatchObject({ calls: 4, failures: 1, unparseable: 1, stored: 2, duplicates: 1 }); // the last "obs 0" repeats the first
+    expect(observer.counters).toMatchObject({ calls: 6, failures: 1, unparseable: 1, stored: 2, duplicates: 1 }); // the last "obs 0" repeats the first
+  });
+  it.each([
+    ['a transport failure', () => Promise.reject(new ProviderError('llm 502', 'transport'))],
+    ['an answer that is not JSON', () => Promise.resolve('Sure! Here are the observations:')],
+  ])('%s gets one more try before the batch is dropped', async (_name, first) => {
+    const complete = vi.fn().mockImplementationOnce(first).mockResolvedValueOnce(obsJson(1));
+    const { store, ctx, observer } = setup({ complete });
+    for (let i = 0; i < 8; i++) observer.onTool(ctx, tool(i));
+    await vi.runAllTimersAsync();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(store.listSessionObservations(ctx.sessionId, 10)).toHaveLength(1);
+    expect(observer.counters).toMatchObject({ calls: 2, failures: 0, unparseable: 0, stored: 1 });
+  });
+  it('a rejected key or an exhausted quota is not retried', async () => {
+    for (const kind of ['auth', 'quota'] as const) {
+      const complete = vi.fn().mockRejectedValue(new ProviderError('no', kind));
+      const { ctx, observer } = setup({ complete });
+      for (let i = 0; i < 8; i++) observer.onTool(ctx, tool(i));
+      await vi.runAllTimersAsync();
+      expect(complete).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('flushes on idle', async () => {
@@ -88,9 +111,10 @@ describe('Observer', () => {
     expect(store.listRecentSummaries(ctx.projectId, 1)).toHaveLength(0);
   });
 
-  it('drops the batch on provider error, no retry, next batch still runs', async () => {
+  it('drops the batch when the one retry fails too, next batch still runs', async () => {
     const complete = vi
       .fn()
+      .mockRejectedValueOnce(new ProviderError('boom', 'transport'))
       .mockRejectedValueOnce(new ProviderError('boom', 'transport'))
       .mockResolvedValueOnce(obsJson(1));
     const { store, ctx, observer } = setup({ complete });
@@ -99,7 +123,7 @@ describe('Observer', () => {
     expect(store.countObservations(ctx.projectId)).toBe(0);
     observer.onTool(ctx, tool(1));
     await vi.runAllTimersAsync();
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(3);
     expect(store.countObservations(ctx.projectId)).toBe(1);
   });
 

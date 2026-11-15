@@ -20,8 +20,16 @@ export interface ObserverOptions {
   maxAgeMs: number;
   maxEvents: number;
   maxTokens: number;
+  retryMs: number; // pause before the one retry of an observation call
 }
-const DEFAULTS: ObserverOptions = { flushCount: 8, idleMs: 5000, maxAgeMs: 300000, maxEvents: 128, maxTokens: 2048 };
+const DEFAULTS: ObserverOptions = {
+  flushCount: 8,
+  idleMs: 5000,
+  maxAgeMs: 300000,
+  maxEvents: 128,
+  maxTokens: 2048,
+  retryMs: 1000,
+};
 
 interface SessionState {
   buffer: SessionBuffer;
@@ -301,19 +309,23 @@ export class Observer {
     const ctx = s.ctx;
     const prompt = store.latestPrompt(ctx.sessionId)?.text ?? null;
     const recentTitles = store.listSessionObservations(ctx.sessionId, 10).map((o) => o.title);
-    let text: string;
-    this.counters.calls++;
-    try {
-      text = await provider.complete({
-        system: OBSERVER_SYSTEM,
-        user: buildObservationPrompt({ projectName: ctx.projectName, prompt, recentTitles, events }),
-        maxTokens: this.opts.maxTokens,
-      });
-    } catch (e) {
-      this.handleProviderError(e, 'observation');
-      return;
+    const user = buildObservationPrompt({ projectName: ctx.projectName, prompt, recentTitles, events });
+    let drafts: ObservationDraft[] | null = null;
+    // The events live only in this batch, so a failure that usually passes on a second call (a dropped connection, a
+    // 5xx, an answer that is not JSON) gets one more try. A rejected key or an exhausted quota would only fail again.
+    for (let attempt = 0; attempt < 2 && drafts === null; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, this.opts.retryMs));
+      this.counters.calls++;
+      try {
+        drafts = parseObservations(
+          await provider.complete({ system: OBSERVER_SYSTEM, user, maxTokens: this.opts.maxTokens })
+        );
+      } catch (e) {
+        if (attempt === 0 && e instanceof ProviderError && e.kind === 'transport') continue;
+        this.handleProviderError(e, 'observation');
+        return;
+      }
     }
-    const drafts = parseObservations(text);
     if (drafts === null) {
       this.counters.unparseable++;
       logger.warn('observer output unparseable, batch dropped', { sessionId: ctx.sessionId, events: events.length });
